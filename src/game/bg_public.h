@@ -36,7 +36,7 @@ If you have questions concerning this license or the applicable additional terms
 // because games can change separately from the main system version, we need a
 // second version that must match between game and cgame
 
-#define GAME_VERSION        "baseq3-1"
+#define GAME_VERSION        "rtcw-cod1-state44"
 
 #define DEFAULT_GRAVITY     800
 #define GIB_HEALTH          -40
@@ -55,7 +55,6 @@ If you have questions concerning this license or the applicable additional terms
 // RF, zombie getup
 #define TIMER_RESPAWN   ( 38 * ( 1000 / 15 ) + 100 )
 
-#define LIGHTNING_RANGE     600
 #define TESLA_RANGE         800
 #define TESLA_SUPERSOLDIER_RANGE    2000
 // JPW NERVE -- make flamethrower range variable with single/multiplayer -- actual routine is in bg_pmove.c
@@ -192,6 +191,55 @@ typedef enum {
 //#define CS_MAX				(CS_DLIGHTS+MAX_DLIGHT_CONFIGSTRINGS)			//----(SA)
 #define CS_MAX              ( CS_TAGCONNECTS + MAX_TAGCONNECTS )
 
+/* R108 free retained configstring range; all existing slots are preserved.
+ * Index zero is unused, matching native shader slots 1..127. */
+#define CS_COD1_SHADERS 1519
+#define MAX_COD1_SHADERS 128
+#if CS_COD1_SHADERS < CS_MAX || CS_COD1_SHADERS + MAX_COD1_SHADERS > MAX_CONFIGSTRINGS
+#error CoD1 shader configstring range overlaps or overflows
+#endif
+
+/* R109 CoD mission records have their own retained configstrings. Retail
+ * 15..30 overlaps RTCW metadata, shader state and fog in this executable. */
+#define CS_COD1_OBJECTIVES (CS_COD1_SHADERS + MAX_COD1_SHADERS)
+#define MAX_COD1_OBJECTIVES 16
+#if CS_COD1_OBJECTIVES < CS_COD1_SHADERS + MAX_COD1_SHADERS || CS_COD1_OBJECTIVES + MAX_COD1_OBJECTIVES > MAX_CONFIGSTRINGS
+#error CoD1 objective configstring range overlaps or overflows
+#endif
+
+/* R114 paired script-effects scene marker. Only this metadata slot is
+ * reserved here; no loadfx/playfx index namespace is admitted by this stage. */
+#define CS_COD1_SCRIPT_EFFECTS (CS_COD1_OBJECTIVES + MAX_COD1_OBJECTIVES)
+#if CS_COD1_SCRIPT_EFFECTS < CS_COD1_OBJECTIVES + MAX_COD1_OBJECTIVES || CS_COD1_SCRIPT_EFFECTS >= MAX_CONFIGSTRINGS
+#error CoD1 script-effects metadata configstring overlaps or overflows
+#endif
+
+/* R115 separate map-owned script FX resources. Index zero is reserved.
+ * The R114 earthquake marker remains at CS_COD1_SCRIPT_EFFECTS. */
+#define CS_COD1_SCRIPT_FX_METADATA (CS_COD1_SCRIPT_EFFECTS + 1)
+#define CS_COD1_SCRIPT_FX_TABLE CS_COD1_SCRIPT_FX_METADATA
+#define MAX_COD1_SCRIPT_FX 64
+#if CS_COD1_SCRIPT_FX_METADATA <= CS_COD1_SCRIPT_EFFECTS || CS_COD1_SCRIPT_FX_TABLE + MAX_COD1_SCRIPT_FX > MAX_CONFIGSTRINGS
+#error overflow: script FX namespace
+#endif
+
+/* R129 public map-owned localized strings. The retail 0x3ef base overlaps
+ * RTCW records, so every prior index is retained and the port appends 512
+ * slots. Base is an ownership marker; native ordinals remain 1..511. The
+ * wire uses MSG_WriteShort/MSG_ReadShort, and text still shares the unchanged
+ * MAX_GAMESTATE_CHARS budget with every other configstring. */
+#define CS_COD1_LOCALIZED_STRINGS 2048
+#define MAX_COD1_LOCALIZED_STRINGS 512
+/* R225 selected script use hints. Value255 remains the generic-use marker. */
+#define CS_COD1_SCRIPT_HINTS 1792
+#define MAX_COD1_SCRIPT_HINTS 255
+#if CS_COD1_SCRIPT_HINTS <= 1748 || CS_COD1_SCRIPT_HINTS + MAX_COD1_SCRIPT_HINTS > CS_COD1_LOCALIZED_STRINGS
+#error script hint configstring namespace overflow
+#endif
+#if CS_COD1_LOCALIZED_STRINGS < 2048 || CS_COD1_LOCALIZED_STRINGS + MAX_COD1_LOCALIZED_STRINGS > MAX_CONFIGSTRINGS || MAX_CONFIGSTRINGS > 32767
+#error overflow: localized-string namespace or signed-short wire index
+#endif
+
 #if ( CS_MAX ) > MAX_CONFIGSTRINGS
 #error overflow: (CS_MAX) > MAX_CONFIGSTRINGS
 #endif
@@ -252,7 +300,9 @@ typedef enum {
 	WEAPON_FIRING,
 	WEAPON_FIRINGALT,
 	WEAPON_WAITING,     //----(SA)	added.  player allowed to switch/reload, but not fire
-	WEAPON_RELOADING    //----(SA)	added
+	WEAPON_RELOADING,
+    WEAPON_COD1_SWITCH,
+    WEAPON_COD1_RECHAMBER, WEAPON_COD1_HOLD, WEAPON_COD1_LAUNCH    //----(SA)	added
 } weaponstate_t;
 
 // pmove->pm_flags	(sent as max 16 bits in msg.c)
@@ -336,7 +386,10 @@ typedef enum {
 	STAT_DEAD_YAW,                  // look this direction when dead (FIXME: get rid of?)
 	STAT_CLIENTS_READY,             // bit mask of clients wishing to exit the intermission (FIXME: configstring?)
 	STAT_MAX_HEALTH,                // health / armor limit, changable by handicap
-	STAT_PLAYER_CLASS               // DHM - Nerve :: player class in multiplayer
+	STAT_PLAYER_CLASS,              // DHM - Nerve :: player class in multiplayer
+	STAT_COD1_RELOAD,               // existing networked stats slot 8
+    STAT_COD1_MODE, STAT_COD1_SWITCH_TARGET, STAT_COD1_ADS,
+    STAT_COD1_EDGES, STAT_COD1_ADS_REMAINDER, STAT_COD1_SPREAD, STAT_COD1_SHOT_CONE
 } statIndex_t;
 
 
@@ -591,7 +644,9 @@ typedef enum {
 
 	VERYBIGEXPLOSION,       // 31	// explosion effect for airplanes
 
-	WP_NUM_WEAPONS          // 32   NOTE: this cannot be larger than 64 for AI/player weapons!
+	WP_MP44, WP_PPSH, WP_BAR, WP_BREN, WP_M1CARBINE, // PATCH62: slots 32..36
+	WP_KAR98K, WP_ENFIELD, WP_MOSIN, WP_KAR98KSCOPE, WP_MOSINSCOPE, WP_SPRINGFIELD, WP_MK1, WP_RGD33, WP_STALINGRAD_AMMO, // PATCH64: slots 37..45
+	WP_NUM_WEAPONS          // 46   NOTE: this cannot be larger than 64 for AI/player weapons!
 
 } weapon_t;
 
@@ -625,6 +680,7 @@ extern int weapAlts[];  // defined in bg_misc.c
 #define WP_LASTSECONDARY    WP_FG42SCOPE
 
 #define WEAPS_ONE_HANDED    ( ( 1 << WP_KNIFE ) | ( 1 << WP_LUGER ) | ( 1 << WP_COLT ) | ( 1 << WP_SILENCER ) | ( 1 << WP_GRENADE_LAUNCHER ) | ( 1 << WP_GRENADE_PINEAPPLE ) )
+#define BG_IsOneHandedWeapon(w) ((unsigned int)(w)<32u && (WEAPS_ONE_HANDED & (1u << ((unsigned int)(w)&31u))))
 //----(SA)	end
 
 typedef enum {
@@ -822,6 +878,22 @@ typedef enum {
 	EV_GIVEPAGE,    //----(SA)	added
 	EV_CLOSEMENU,   //----(SA)	added
 	EV_SPAWN_SPIRIT,
+
+	EV_COD1_LAND,          // eventParm = original landing impulse (4..24)
+	EV_COD1_FALL_DAMAGE,   // eventParm = original fall damage value (1..100)
+
+	EV_COD1_EJECT_BRASS,   // BRASS_R1: registry index+1, delayed bolt ejection
+	EV_COD1_ROCKET_EXPLODE,
+	EV_COD1_ROCKET_EXPLODE_NOMARKS,
+	EV_COD1_MELEE_START,    // eventParm = WeaponDef registry index + 1
+	EV_COD1_MELEE_HIT,      // eventParm = WeaponDef registry index + 1
+	EV_COD1_STEP,           // eventParm = signed native step amount + 128
+    EV_COD1_FOOTSTEP,       // R195 eventParm: known material + run/walk/prone
+
+	EV_COD1_WEAPON_AMMO_PICKUP, // R220 eventParm = existing bg_itemlist index
+
+	EV_COD1_TURRET_SHOT,
+    EV_COD1_TURRET_IMPACT,
 
 	EV_MAX_EVENTS   // just added as an 'endcap'
 
@@ -1263,6 +1335,7 @@ gitem_t *BG_FindItemForHoldable( holdable_t pw );
 gitem_t *BG_FindItemForAmmo( int ammo );        //----(SA)	modified
 gitem_t *BG_FindItemForKey( wkey_t k, int *index );
 weapon_t BG_FindAmmoForWeapon( weapon_t weapon );
+weapon_t BG_PlayerAmmoIndex(const playerState_t *ps, weapon_t weapon);
 weapon_t BG_FindClipForWeapon( weapon_t weapon );
 
 qboolean BG_AkimboFireSequence( int weapon, int akimboClip, int coltClip );
@@ -1359,6 +1432,9 @@ typedef enum {
 
 
 // cursorhints (stored in ent->s.dmgFlags since that's only used for players at the moment)
+/* R89 isolated USE selector's marker in the existing 8-bit hint value.
+ * No hint enum or network layout changes; not the retail custom-string pool. */
+#define COD1_HINT_USE_VALUE 255
 typedef enum {
 	HINT_NONE,      // reserved
 	HINT_FORCENONE, // reserved

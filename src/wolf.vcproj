@@ -417,6 +417,46 @@
 				</FileConfiguration>
 			</File>
 			<File
+				RelativePath="qcommon\cod1_bsp.c"
+				>
+				<FileConfiguration
+					Name="Debug|Win32"
+					>
+					<Tool
+						Name="VCCLCompilerTool"
+						PreprocessorDefinitions=""
+					/>
+				</FileConfiguration>
+				<FileConfiguration
+					Name="Release|Win32"
+					>
+					<Tool
+						Name="VCCLCompilerTool"
+						PreprocessorDefinitions=""
+					/>
+				</FileConfiguration>
+			</File>
+			<File
+				RelativePath="qcommon\cod1_collision.c"
+				>
+				<FileConfiguration
+					Name="Debug|Win32"
+					>
+					<Tool
+						Name="VCCLCompilerTool"
+						PreprocessorDefinitions=""
+					/>
+				</FileConfiguration>
+				<FileConfiguration
+					Name="Release|Win32"
+					>
+					<Tool
+						Name="VCCLCompilerTool"
+						PreprocessorDefinitions=""
+					/>
+				</FileConfiguration>
+			</File>
+			<File
 				RelativePath="qcommon\cm_load.c"
 				>
 				<FileConfiguration
@@ -1346,7 +1386,14 @@
 				>
 			</File>
 		</Filter>
-	</Files>
+	<File RelativePath="qcommon\cm_v59.c" />
+<File RelativePath="qcommon\v59\v59_load.c" />
+<File RelativePath="qcommon\v59\v59_query.c" />
+<File RelativePath="qcommon\v59\v59_narrow.c" />
+<File RelativePath="qcommon\v59\v59_curve_build.c" />
+<File RelativePath="qcommon\v59\v59_polylib.c" />
+<File RelativePath="qcommon\v59\v59_math.c" />
+</Files>
 	<Globals>
 	</Globals>
 </VisualStudioProject>

@@ -585,7 +585,14 @@ vm_t *VM_Create( const char *module, int ( *systemCalls )(int *),
 VM_Free
 ==============
 */
+static void VM_BeforeFree( vm_t *vm ) {
+	void (*release)(vm_t *) = vm->beforeFree;
+	vm->beforeFree = NULL;
+	if (release) release(vm);
+}
+
 void VM_Free( vm_t *vm ) {
+	VM_BeforeFree(vm);
 
 	if ( vm->dllHandle ) {
 		Sys_UnloadDll( vm->dllHandle );
@@ -611,6 +618,7 @@ void VM_Free( vm_t *vm ) {
 void VM_Clear( void ) {
 	int i;
 	for ( i = 0; i < MAX_VM; i++ ) {
+		VM_BeforeFree(&vmTable[i]);
 		if ( vmTable[i].dllHandle ) {
 			Sys_UnloadDll( vmTable[i].dllHandle );
 		}

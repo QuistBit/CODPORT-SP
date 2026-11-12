@@ -34,6 +34,9 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "g_local.h"
+#include "g_cod1_entity_host.h"
+#include "g_cod1_player_lifetime.h"
+#include "g_cod1_item_lifecycle.h"
 
 typedef struct {
 	char oldShader[MAX_QPATH];
@@ -345,21 +348,6 @@ char    *vtos( const vec3_t v ) {
 
 	return s;
 }
-char    *vtosf( const vec3_t v ) {
-	static int index;
-	static char str[8][64];
-	char    *s;
-
-	// use an array so that multiple vtos won't collide
-	s = str[index];
-	index = ( index + 1 ) & 7;
-
-	Com_sprintf( s, 64, "(%f %f %f)", v[0], v[1], v[2] );
-
-	return s;
-}
-
-
 /*
 ===============
 G_SetMovedir
@@ -392,6 +380,7 @@ void G_InitGentity( gentity_t *e ) {
 	e->inuse = qtrue;
 	e->classname = "noclass";
 	e->s.number = e - g_entities;
+	G_Cod1EntityBorn( e );
 	e->r.ownerNum = ENTITYNUM_NONE;
 	e->headshotDamageScale = 1.0;   // RF, default value
 	e->eventTime = 0;
@@ -417,12 +406,57 @@ instead of being removed and recreated, which can cause interpolated
 angles and bad trails.
 =================
 */
+/* R132 fresh-only begin */
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+static qboolean G_Cod1RngSpawnContext(uint64_t epoch,gentity_t *entities,
+    gclient_t *clients,int count,int hostTime) {
+    return epoch && G_Cod1RngOwnerReady() && epoch==G_Cod1EntityMapEpoch() &&
+        entities==g_entities && clients==g_clients &&
+        level.gentities==entities && level.clients==clients &&
+        level.num_entities==count && count>=MAX_CLIENTS &&
+        count<=ENTITYNUM_MAX_NORMAL && level.time==hostTime;
+}
+static qboolean G_Cod1RngSpawnIdentity(gentity_t *e,uint64_t epoch,
+    gentity_t *entities,gclient_t *clients,int count,int hostTime,GscEntityRef *ref) {
+    return G_Cod1RngSpawnContext(epoch,entities,clients,count,hostTime) &&
+        G_Cod1EntityCapture(e,ref) && ref->epoch==epoch &&
+        ref->slot==(uint32_t)(e-g_entities) && G_Cod1EntitySameAllocation(ref);
+}
+static gentity_t *G_Cod1RngSpawnRefused(gentity_t *e,const GscEntityRef *ref) {
+    /* A replaced/retired allocation is never cleared through a borrowed e.
+     * Actual FreeEntity rechecks its own captured key after unlink callbacks. */
+    if(e && ref && G_Cod1EntitySameAllocation(ref))G_FreeEntity(e);
+    G_Error("R132: fresh GAME entity allocation lost its captured owner");
+    return NULL; /* actual trap_Error is nonlocal; returning stubs unsupported */
+}
+#endif
+/* R132 fresh-only end */
 gentity_t *G_Spawn( void ) {
 	int i, force;
 	gentity_t   *e;
+/* R132 fresh-only begin */
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    int cod1Fresh=G_Cod1RngOwnerPolicy()==COD1_RNG_POLICY_FRESH_SP;
+    uint64_t cod1Epoch=0;
+    gentity_t *cod1Entities=NULL;
+    gclient_t *cod1Clients=NULL;
+    int cod1Count=0,cod1HostTime=0;
+    GscEntityRef cod1Ref;
+#endif
+/* R132 fresh-only end */
 
 	e = NULL;   // shut up warning
 	i = 0;      // shut up warning
+/* R132 fresh-only begin */
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(cod1Fresh) {
+        cod1Epoch=G_Cod1EntityMapEpoch();cod1Entities=level.gentities;
+        cod1Clients=level.clients;cod1Count=level.num_entities;cod1HostTime=level.time;
+        if(!G_Cod1RngSpawnContext(cod1Epoch,cod1Entities,cod1Clients,cod1Count,cod1HostTime))
+            return G_Cod1RngSpawnRefused(NULL,NULL);
+    }
+#endif
+/* R132 fresh-only end */
 	for ( force = 0 ; force < 2 ; force++ ) {
 		// if we go through all entities and can't find one to free,
 		// override the normal minimum times before use
@@ -439,7 +473,21 @@ gentity_t *G_Spawn( void ) {
 			}
 
 			// reuse this slot
+/* R132 fresh-only begin */
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+            if(cod1Fresh && !G_Cod1RngSpawnContext(cod1Epoch,
+               cod1Entities,cod1Clients,cod1Count,cod1HostTime))
+                return G_Cod1RngSpawnRefused(NULL,NULL);
+#endif
+/* R132 fresh-only end */
 			G_InitGentity( e );
+/* R132 fresh-only begin */
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+            if(cod1Fresh && !G_Cod1RngSpawnIdentity(e,cod1Epoch,
+               cod1Entities,cod1Clients,cod1Count,cod1HostTime,&cod1Ref))
+                return G_Cod1RngSpawnRefused(NULL,NULL);
+#endif
+/* R132 fresh-only end */
 			return e;
 		}
 		if ( i != MAX_GENTITIES ) {
@@ -453,12 +501,46 @@ gentity_t *G_Spawn( void ) {
 		G_Error( "G_Spawn: no free entities" );
 	}
 
+/* R132 fresh-only begin */
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(cod1Fresh && (!G_Cod1RngSpawnContext(cod1Epoch,
+       cod1Entities,cod1Clients,cod1Count,cod1HostTime) ||
+       i!=cod1Count || i<MAX_CLIENTS || i>=ENTITYNUM_MAX_NORMAL || e!=&g_entities[i]))
+        return G_Cod1RngSpawnRefused(NULL,NULL);
+#endif
+/* R132 fresh-only end */
 	// open up a new slot
 	level.num_entities++;
+/* R132 fresh-only begin */
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(cod1Fresh) {
+        /* Coherent fresh slots have no actor lease: MapBegin reset or checked
+         * FreeEntity retirement makes Born's cleanup a pure no-trap path.
+         * Publish the new full identity before the actual Locate callback. */
+        G_InitGentity(e);
+        if(!G_Cod1RngSpawnIdentity(e,cod1Epoch,cod1Entities,cod1Clients,
+           cod1Count+1,cod1HostTime,&cod1Ref))
+            return G_Cod1RngSpawnRefused(NULL,NULL);
+    }
+#endif
+/* R132 fresh-only end */
 
 	// let the server system know that there are more entities
 	trap_LocateGameData( level.gentities, level.num_entities, sizeof( gentity_t ),
 						 &level.clients[0].ps, sizeof( level.clients[0] ) );
+/* R132 fresh-only begin */
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(cod1Fresh) {
+        /* No borrowed pointer use follows this callback until the complete
+         * original owner, allocation, arrays, count and time are rechecked. */
+        if(!G_Cod1RngSpawnContext(cod1Epoch,cod1Entities,cod1Clients,
+           cod1Count+1,cod1HostTime) || cod1Ref.epoch!=cod1Epoch ||
+           cod1Ref.slot!=(uint32_t)i || !G_Cod1EntitySameAllocation(&cod1Ref))
+            return G_Cod1RngSpawnRefused(e,&cod1Ref);
+        return e;
+    }
+#endif
+/* R132 fresh-only end */
 
 	G_InitGentity( e );
 	return e;
@@ -493,16 +575,38 @@ Marks the entity as free
 =================
 */
 void G_FreeEntity( gentity_t *ed ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	GscEntityRef cod1FreeRef;
+	int cod1HadRef = G_Cod1EntityCapture( ed, &cod1FreeRef );
+	G_Cod1PlayerLifetimeRetire( ed );
+	/* Native46200 detaches self and incoming children before spatial unlink. */
+	if(cod1HadRef&&(!G_Cod1ItemLifecyclePreparedFreeGuard(&cod1FreeRef)||!G_Cod1EntityLinksBeforeFree(&cod1FreeRef)||!G_Cod1ItemLifecyclePreparedFreeGuard(&cod1FreeRef)))return;
+#endif
 	trap_UnlinkEntity( ed );     // unlink from world
 
 	if ( ed->neverFree ) {
 		return;
 	}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	/* A trap may retire/reuse the slot or replace the map. Never clean up or
+	 * clear the replacement allocation through a borrowed entity pointer. */
+	if ( cod1HadRef && (!G_Cod1EntitySameAllocation( &cod1FreeRef ) || !G_Cod1ItemLifecyclePreparedFreeGuard(&cod1FreeRef)) ) return;
+	if ( cod1HadRef && !G_Cod1EntityFree( &cod1FreeRef ) ) return;
+	if ( cod1HadRef && (!G_Cod1EntitySameAllocation( &cod1FreeRef ) || !G_Cod1ItemLifecyclePreparedFreeGuard(&cod1FreeRef)) ) return;
+	if ( ed->neverFree ) return;
+#endif
 
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(cod1HadRef && (!G_Cod1LoopSoundBeforeFree(&cod1FreeRef) || !G_Cod1LoopFxBeforeFree(&cod1FreeRef) ||
+       !G_Cod1EntitySameAllocation(&cod1FreeRef) || ed->neverFree || !G_Cod1ItemLifecyclePreparedFreeGuard(&cod1FreeRef))) return;
+#endif
 	memset( ed, 0, sizeof( *ed ) );
 	ed->classname = "freed";
 	ed->freetime = level.time;
 	ed->inuse = qfalse;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(cod1HadRef)G_Cod1LoopFxAfterFree(&cod1FreeRef);
+#endif
 }
 
 /*
@@ -789,39 +893,4 @@ void G_ProcessTagConnect( gentity_t *ent, qboolean clearAngles ) {
 	}
 }
 
-/*
-================
-DebugLine
-
-  debug polygons only work when running a local game
-  with r_debugSurface set to 2
-================
-*/
-int DebugLine( vec3_t start, vec3_t end, int color ) {
-	vec3_t points[4], dir, cross, up = {0, 0, 1};
-	float dot;
-
-	VectorCopy( start, points[0] );
-	VectorCopy( start, points[1] );
-	//points[1][2] -= 2;
-	VectorCopy( end, points[2] );
-	//points[2][2] -= 2;
-	VectorCopy( end, points[3] );
-
-
-	VectorSubtract( end, start, dir );
-	VectorNormalize( dir );
-	dot = DotProduct( dir, up );
-	if ( dot > 0.99 || dot < -0.99 ) {
-		VectorSet( cross, 1, 0, 0 );
-	} else { CrossProduct( dir, up, cross );}
-
-	VectorNormalize( cross );
-
-	VectorMA( points[0], 2, cross, points[0] );
-	VectorMA( points[1], -2, cross, points[1] );
-	VectorMA( points[2], -2, cross, points[2] );
-	VectorMA( points[3], 2, cross, points[3] );
-
-	return trap_DebugPolygonCreate( color, 4, points );
-}
+#include "g_cod1_r200_collision.inc"

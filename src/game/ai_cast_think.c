@@ -225,7 +225,7 @@ void AICast_InputToUserCommand( cast_state_t *cs, bot_input_t *bi, usercmd_t *uc
 	//
 	// relaxed mode show no weapons
 	if ( cs->aiState <= AISTATE_QUERY ) {
-		if ( WEAPS_ONE_HANDED & ( 1 << ucmd->weapon ) ) { // one-handed wepons don't draw, others do
+		if ( BG_IsOneHandedWeapon(ucmd->weapon) ) { // one-handed wepons don't draw, others do
 			ucmd->weapon = WP_NONE;
 		}
 	}
@@ -665,23 +665,6 @@ void AICast_Think( int client, float thinktime ) {
 		cs->leaderNum = -1;
 	}
 	//
-#if 0
-	// HACK for village2, if they are stuck, find a good position (there is a friendly guy placed inside a table)
-	{
-		trace_t tr;
-		vec3_t org;
-		trap_Trace( &tr, cs->bs->cur_ps.origin, cs->bs->cur_ps.mins, cs->bs->cur_ps.maxs, cs->bs->cur_ps.origin, cs->entityNum, CONTENTS_SOLID );
-		while ( tr.startsolid ) {
-			VectorCopy( cs->bs->cur_ps.origin, org );
-			org[0] += 96 * crandom();
-			org[1] += 96 * crandom();
-			org[2] += 16 * crandom();
-			trap_Trace( &tr, org, cs->bs->cur_ps.mins, cs->bs->cur_ps.maxs, org, cs->entityNum, CONTENTS_SOLID );
-			G_SetOrigin( &g_entities[cs->entityNum], org );
-			VectorCopy( org, g_entities[cs->entityNum].client->ps.origin );
-		}
-	}
-#endif
 	//add the delta angles to the cast's current view angles
 	for ( i = 0; i < 3; i++ ) {
 		cs->viewangles[i] = AngleMod( cs->viewangles[i] + SHORT2ANGLE( cs->bs->cur_ps.delta_angles[i] ) );

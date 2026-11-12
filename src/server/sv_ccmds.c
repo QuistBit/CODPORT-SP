@@ -134,6 +134,75 @@ static client_t *SV_GetPlayerByNum( void ) {
 
 //=========================================================
 
+/*
+==================
+SV_ReadSaveGameHeader
+
+Check the fixed RTCW save prefix and minimum body length before handing the
+file to the VM. The variable entity records are decoded by G_LoadGame.
+==================
+*/
+static qboolean SV_ReadSaveGameHeader( const char *filename, const byte *buffer,
+										 int size, char *mapname, int *savegameTime ) {
+	int version;
+	int offset, infoLen, fogLen, finalSentinel;
+	const char *savedMap;
+
+	if ( !buffer || size < (int)( 2 * sizeof( int ) + MAX_QPATH ) ) {
+		Com_Printf( "Invalid savegame header: %s\n", filename );
+		return qfalse;
+	}
+	memcpy( &version, buffer, sizeof( version ) );
+	if ( version != SAVE_VERSION ) {
+		Com_Printf( "Incompatible savegame %s (version %i, expected %i)\n",
+					filename, version, SAVE_VERSION );
+		return qfalse;
+	}
+	savedMap = (const char *)( buffer + sizeof( int ) );
+	if ( !savedMap[0] || !memchr( savedMap, '\0', MAX_QPATH ) ) {
+		Com_Printf( "Invalid map name in savegame %s\n", filename );
+		return qfalse;
+	}
+	if ( mapname ) {
+		Q_strncpyz( mapname, savedMap, MAX_QPATH );
+	}
+	if ( savegameTime ) {
+		memcpy( savegameTime, buffer + sizeof( int ) + MAX_QPATH,
+					sizeof( *savegameTime ) );
+	}
+	// Follow G_SaveGame's fixed fields: time, playtime, episode, info length,
+	// nine timestamp ints, music path, fog length, skill and three record lists.
+	offset = sizeof( int ) + MAX_QPATH + 3 * sizeof( int );
+	if ( size - offset < (int)( sizeof( int ) + 9 * sizeof( int ) +
+			MAX_QPATH + sizeof( int ) + 7 * sizeof( int ) ) ) {
+		Com_Printf( "Truncated savegame %s\n", filename );
+		return qfalse;
+	}
+	memcpy( &infoLen, buffer + offset, sizeof( infoLen ) );
+	offset += sizeof( infoLen );
+	if ( infoLen < 0 || infoLen >= SAVE_INFOSTRING_LENGTH ||
+		size - offset < (int)( infoLen + 9 * sizeof( int ) + MAX_QPATH +
+				sizeof( int ) + 7 * sizeof( int ) ) ) {
+		Com_Printf( "Invalid savegame info field: %s\n", filename );
+		return qfalse;
+	}
+	offset += infoLen + 9 * sizeof( int ) + MAX_QPATH;
+	memcpy( &fogLen, buffer + offset, sizeof( fogLen ) );
+	offset += sizeof( fogLen );
+	if ( fogLen < 0 || fogLen >= SAVE_INFOSTRING_LENGTH ||
+		size - offset < (int)( fogLen + 7 * sizeof( int ) ) ) {
+		Com_Printf( "Invalid savegame fog field: %s\n", filename );
+		return qfalse;
+	}
+	memcpy( &finalSentinel, buffer + size - sizeof( finalSentinel ),
+			sizeof( finalSentinel ) );
+	if ( finalSentinel != -1 ) {
+		Com_Printf( "Incomplete savegame records: %s\n", filename );
+		return qfalse;
+	}
+	return qtrue;
+}
+
 
 /*
 ==================
@@ -175,14 +244,16 @@ static void SV_Map_f( void ) {
 			strcpy( savemap, map );
 		}
 
-		size = FS_ReadFile( savemap, NULL );
-		if ( size < 0 ) {
+		size = FS_ReadFile( savemap, (void **)&buffer );
+		if ( size < 0 || !buffer ) {
 			Com_Printf( "Can't find savegame %s\n", savemap );
 			return;
 		}
 
-		//buffer = Hunk_AllocateTempMemory(size);
-		FS_ReadFile( savemap, (void **)&buffer );
+		if ( !SV_ReadSaveGameHeader( savemap, buffer, size, smapname, &savegameTime ) ) {
+			Hunk_FreeTempMemory( buffer );
+			return;
+		}
 
 		if ( Q_stricmp( savemap, "save/current.svg" ) != 0 ) {
 			// copy it to the current savegame file
@@ -207,12 +278,7 @@ static void SV_Map_f( void ) {
 		// set the filename
 		Cvar_Set( "savegame_filename", savemap );
 
-		// the mapname is at the very start of the savegame file
-		Com_sprintf( savemap, sizeof( savemap ), ( char * )( buffer + sizeof( int ) ) );  // skip the version
-		Q_strncpyz( smapname, savemap, sizeof( smapname ) );
 		map = smapname;
-
-		savegameTime = *( int * )( buffer + sizeof( int ) + MAX_QPATH );
 
 		if ( savegameTime >= 0 ) {
 			svs.time = savegameTime;
@@ -358,17 +424,18 @@ static void SV_MapRestart_f( void ) {
 		byte *buffer;
 		int size, savegameTime;
 
-		size = FS_ReadFile( savemap, NULL );
-		if ( size < 0 ) {
+		size = FS_ReadFile( savemap, (void **)&buffer );
+		if ( size < 0 || !buffer ) {
 			Com_Printf( "Can't find savegame %s\n", savemap );
+			Cvar_Set( "savegame_loading", "0" );
 			return;
 		}
 
-		//buffer = Hunk_AllocateTempMemory(size);
-		FS_ReadFile( savemap, (void **)&buffer );
-
-		// the mapname is at the very start of the savegame file
-		savegameTime = *( int * )( buffer + sizeof( int ) + MAX_QPATH );
+		if ( !SV_ReadSaveGameHeader( savemap, buffer, size, NULL, &savegameTime ) ) {
+			Hunk_FreeTempMemory( buffer );
+			Cvar_Set( "savegame_loading", "0" );
+			return;
+		}
 
 		if ( savegameTime >= 0 ) {
 			svs.time = savegameTime;
@@ -479,17 +546,17 @@ void    SV_LoadGame_f( void ) {
 		*(char *)strstr( filename, "\\" ) = '/';
 	}
 
-	size = FS_ReadFile( filename, NULL );
-	if ( size < 0 ) {
+	size = FS_ReadFile( filename, (void **)&buffer );
+	if ( size < 0 || !buffer ) {
 		Com_Printf( "Can't find savegame %s\n", filename );
 		return;
 	}
 
-	//buffer = Hunk_AllocateTempMemory(size);
-	FS_ReadFile( filename, (void **)&buffer );
-
-	// read the mapname, if it is the same as the current map, then do a fast load
-	Com_sprintf( mapname, sizeof( mapname ), (const char*)( buffer + sizeof( int ) ) );
+	// Only the port's own save format can be passed to the game VM.
+	if ( !SV_ReadSaveGameHeader( filename, buffer, size, mapname, NULL ) ) {
+		Hunk_FreeTempMemory( buffer );
+		return;
+	}
 
 	if ( com_sv_running->integer && ( com_frameTime != sv.serverId ) ) {
 		// check mapname
@@ -516,9 +583,9 @@ void    SV_LoadGame_f( void ) {
 
 	// otherwise, do a slow load
 	if ( Cvar_VariableIntegerValue( "sv_cheats" ) ) {
-		Cbuf_ExecuteText( EXEC_APPEND, va( "spdevmap %s", filename ) );
+		Cbuf_ExecuteText( EXEC_APPEND, va( "spdevmap %s\n", filename ) );
 	} else {    // no cheats
-		Cbuf_ExecuteText( EXEC_APPEND, va( "spmap %s", filename ) );
+		Cbuf_ExecuteText( EXEC_APPEND, va( "spmap %s\n", filename ) );
 	}
 }
 
@@ -947,19 +1014,5 @@ SV_RemoveOperatorCommands
 ==================
 */
 void SV_RemoveOperatorCommands( void ) {
-#if 0
-	// removing these won't let the server start again
-	Cmd_RemoveCommand( "heartbeat" );
-	Cmd_RemoveCommand( "kick" );
-	Cmd_RemoveCommand( "banUser" );
-	Cmd_RemoveCommand( "banClient" );
-	Cmd_RemoveCommand( "status" );
-	Cmd_RemoveCommand( "serverinfo" );
-	Cmd_RemoveCommand( "systeminfo" );
-	Cmd_RemoveCommand( "dumpuser" );
-	Cmd_RemoveCommand( "map_restart" );
-	Cmd_RemoveCommand( "sectorlist" );
-	Cmd_RemoveCommand( "say" );
-#endif
 }
 

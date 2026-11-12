@@ -35,6 +35,14 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include "g_local.h"
+#include "bg_cod1_fire_event.h"
+#include "bg_cod1_combat.h"
+#include "bg_cod1_inventory.h"
+#include "bg_cod1_lean.h"
+#include "bg_cod1_impact.h"
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+#include "g_cod1_entity_host.h"
+#endif
 
 static float s_quadFactor;
 static vec3_t forward, right, up;
@@ -49,8 +57,6 @@ void Bullet_Fire( gentity_t *ent, float spread, int damage );
 void Bullet_Fire_Extended( gentity_t *source, gentity_t *attacker, vec3_t start, vec3_t end, float spread, int damage, int recursion );
 
 int G_GetWeaponDamage( int weapon ); // JPW
-
-#define NUM_NAILSHOTS 10
 
 /*
 ======================================================================
@@ -145,6 +151,26 @@ void Weapon_Knife( gentity_t *ent ) {
 	}
 
 	G_Damage( traceEnt, ent, ent, vec3_origin, tr.endpos, ( damage + rand() % 5 ) * s_quadFactor, 0, mod );
+}
+
+/* HANDHELD_FINAL_R1: WeaponDef-driven CoD melee. The preserved CoD1 cgame
+ * proves input/timing/damage fields, but the original SP world trace range was
+ * not part of that recovered block. Keep this range isolated as a compatibility
+ * constant rather than pretending the RTCW knife path is native behavior. */
+#define COD1_MELEE_RANGE 64.0f
+void G_Cod1MeleeAttack( gentity_t *ent, int definitionIndex ) {
+    const cwDef_t *d;trace_t tr;gentity_t *hit;vec3_t f,r,u,start,end;int damage;
+    if(!ent || !ent->client || ent->health<=0 || definitionIndex<0)return;
+    d=CW_Get(definitionIndex);
+    if(!d || CW_FamilyRoot(definitionIndex)!=CW_WeaponRoot(ent->client->ps.weapon))return;
+    damage=(int)CW_Number(d,"meleeDamage");if(damage<=0)return;
+    AngleVectors(ent->client->ps.viewangles,f,r,u);
+    CalcMuzzlePointForActivate(ent,f,r,u,start);
+    VectorMA(start,COD1_MELEE_RANGE,f,end);
+    trap_Trace(&tr,start,NULL,NULL,end,ent->s.number,MASK_SHOT);
+    if((tr.surfaceFlags&SURF_NOIMPACT) || tr.fraction==1.0f || tr.entityNum==ENTITYNUM_WORLD)return;
+    hit=&g_entities[tr.entityNum];if(!hit->takedamage)return;
+    G_Damage(hit,ent,ent,f,tr.endpos,damage,0,MOD_KNIFE);
 }
 
 // JPW NERVE
@@ -740,97 +766,6 @@ float G_GetWeaponSpread( int weapon ) {
 
 /*
 ==============
-SP5_Fire
-
-  dead code
-==============
-*/
-
-
-/*
-==============
-Cross_Fire
-==============
-*/
-void Cross_Fire( gentity_t *ent ) {
-// (SA) temporarily use the zombie spit effect to check working state
-	weapon_zombiespit( ent );
-}
-
-
-
-/*
-==============
-Tesla_Fire
-==============
-*/
-void Tesla_Fire( gentity_t *ent ) {
-	// TODO: Find all targets in the client's view frame, and lock onto them all, applying damage
-	// and telling all clients to draw the appropriate effects.
-
-	//G_Printf("TODO: Tesla damage/effects\n" );
-}
-
-
-
-void RubbleFlagCheck( gentity_t *ent, trace_t tr ) {
-	qboolean is_valid = qfalse;
-	int type = 0;
-
-	// (SA) moving client-side
-
-	return;
-
-
-
-
-	if ( tr.surfaceFlags & SURF_RUBBLE || tr.surfaceFlags & SURF_GRAVEL ) {
-		is_valid = qtrue;
-		type = 4;
-	} else if ( tr.surfaceFlags & SURF_METAL )     {
-//----(SA)	removed
-//		is_valid = qtrue;
-//		type = 2;
-	} else if ( tr.surfaceFlags & SURF_WOOD )     {
-		is_valid = qtrue;
-		type = 1;
-	}
-
-	if ( is_valid && ent->client && ( ent->s.weapon == WP_VENOM
-									  || ent->client->ps.persistant[PERS_HWEAPON_USE] ) ) {
-		if ( rand() % 100 > 75 ) {
-			gentity_t   *sfx;
-			vec3_t start;
-			vec3_t dir;
-
-			sfx = G_Spawn();
-
-			sfx->s.density = type;
-
-			VectorCopy( tr.endpos, start );
-
-			VectorCopy( muzzleTrace, dir );
-			VectorNegate( dir, dir );
-
-			G_SetOrigin( sfx, start );
-			G_SetAngle( sfx, dir );
-
-			G_AddEvent( sfx, EV_SHARD, DirToByte( dir ) );
-
-			sfx->think = G_FreeEntity;
-			sfx->nextthink = level.time + 1000;
-
-			sfx->s.frame = 3 + ( rand() % 3 ) ;
-
-			trap_LinkEntity( sfx );
-
-		}
-	}
-
-}
-
-/*
-==============
 EmitterCheck
 	see if a new particle emitter should be created at the bullet impact point
 ==============
@@ -863,11 +798,6 @@ void EmitterCheck( gentity_t *ent, gentity_t *attacker, trace_t *tr ) {
 }
 
 
-void SniperSoundEFX( vec3_t pos ) {
-	gentity_t *sniperEnt;
-	sniperEnt = G_TempEntity( pos, EV_SNIPER_SOUND );
-}
-
 
 /*
 ==============
@@ -882,6 +812,13 @@ void Bullet_Endpos( gentity_t *ent, float spread, vec3_t *end ) {
 
 	r = crandom() * spread;
 	u = crandom() * spread;
+    if(ent->client && !(ent->r.svFlags&SVF_CASTAI) && CW_Active(&ent->client->ps)) {
+        int saved=ent->client->ps.stats[STAT_COD1_SHOT_CONE];
+        float cone=saved>0?(saved-1)*.001f:CW_SpreadDegrees(&ent->client->ps);
+        float radius=(float)tan(cone*M_PI/180.0)*dist;
+        float angle=random()*2*M_PI, distance=random()*radius;
+        r=(float)cos(angle)*distance;u=(float)sin(angle)*distance;
+    }
 
 	// Ridah, if this is an AI shooting, apply their accuracy
 	if ( ent->r.svFlags & SVF_CASTAI ) {
@@ -915,7 +852,10 @@ void Bullet_Fire( gentity_t *ent, float spread, int damage ) {
 	vec3_t end;
 
 	Bullet_Endpos( ent, spread, &end );
-	Bullet_Fire_Extended( ent, ent, muzzleTrace, end, spread, damage, 0 );
+	/* PATCH62: base damage is metadata; armor, hit locations and falloff still
+     * use the existing RTCW damage backend. */
+    if(ent->client && CW_Active(&ent->client->ps))damage=(int)CW_Number(CW_PSDef(&ent->client->ps),"damage");
+    Bullet_Fire_Extended( ent, ent, muzzleTrace, end, spread, damage, 0 );
 }
 
 
@@ -930,6 +870,7 @@ Bullet_Fire_Extended
 */
 void Bullet_Fire_Extended( gentity_t *source, gentity_t *attacker, vec3_t start, vec3_t end, float spread, int damage, int recursion ) {
 	trace_t tr;
+    vec3_t cod1Contact;
 	gentity_t   *tent;
 	gentity_t   *traceEnt;
 	int dflags = 0;         // flag if source==attacker, meaning it wasn't shot directly, but was reflected went through an entity that allows bullets to pass through
@@ -950,6 +891,16 @@ void Bullet_Fire_Extended( gentity_t *source, gentity_t *attacker, vec3_t start,
 	// (SA) changed so player could shoot his own dynamite.
 	// (SA) whoops, but that broke bullets going through explosives...
 	trap_Trace( &tr, start, NULL, NULL, end, source->s.number, MASK_SHOT );
+    VectorCopy(tr.endpos,cod1Contact); /* before legacy SnapVectorTowards */
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+    if(!recursion&&attacker&&attacker->client&&CW_Active(&attacker->client->ps)&&G_Cod1GscTestCarbineActive()) {
+        GscEntityRef owner,sourceOwner;int serverTime=level.time;
+        if(!G_Cod1EntityCapture(attacker,&owner)||!G_Cod1EntityCapture(source,&sourceOwner))return;
+        G_Cod1BulletDamageTriggers(start,tr.endpos,attacker,damage);
+        if(!G_Cod1EntitySameAllocation(&owner)||!G_Cod1EntitySameAllocation(&sourceOwner)||
+           level.time!=serverTime||!G_Cod1GscTestCarbineActive())return;
+    }
+#endif
 //	trap_Trace (&tr, start, NULL, NULL, end, ENTITYNUM_NONE, MASK_SHOT);
 
 	// DHM - Nerve :: only in single player
@@ -965,7 +916,6 @@ void Bullet_Fire_Extended( gentity_t *source, gentity_t *attacker, vec3_t start,
 	}
 
 
-	RubbleFlagCheck( attacker, tr );
 
 	traceEnt = &g_entities[ tr.entityNum ];
 
@@ -1046,6 +996,23 @@ void Bullet_Fire_Extended( gentity_t *source, gentity_t *attacker, vec3_t start,
 		} else {
 			tent->s.otherEntityNum2 = ENTITYNUM_NONE;
 		}
+        /* CoD bullet reactions also apply to inline brush models (doors,
+         * script_brushmodel, etc.). R9 restores their material-bearing point
+         * traces. Keep actors/shield reflections on the legacy path. Marks on
+         * inline models are deferred until mover-relative decals exist: native
+         * FX and sound still use the exact world-space contact and normal. */
+        if(!reflectBullet && attacker->client && CW_Active(&attacker->client->ps) &&
+            (tr.entityNum==ENTITYNUM_WORLD || tr.entityNum==ENTITYNUM_NONE || traceEnt->r.bmodel)) {
+            const cwDef_t *d=CW_PSDef(&attacker->client->ps);
+            if(d && !strcmp(CW_String(d,"weaponType"),"bullet")) {
+                CI_WriteEvent(&tent->s,&tr,cod1Contact,start,end,
+                    attacker->client->ps.weapon,CW_Number(d,"rifleBullet")!=0);
+                if(traceEnt->r.bmodel && tr.entityNum!=ENTITYNUM_WORLD && tr.entityNum!=ENTITYNUM_NONE) {
+                    tent->s.time2|=CI_NOMARKS;
+                    tent->s.otherEntityNum2=tr.entityNum;
+                }
+            }
+        }
 		// done.
 	}
 	tent->s.otherEntityNum = attacker->s.number;
@@ -1116,16 +1083,6 @@ GRENADE LAUNCHER
 ======================================================================
 */
 extern void G_ExplodeMissilePoisonGas( gentity_t *ent );
-
-gentity_t *weapon_crowbar_throw( gentity_t *ent ) {
-	gentity_t   *m;
-
-	m = fire_crowbar( ent, muzzleEffect, forward );
-	m->damage *= s_quadFactor;
-	m->splashDamage *= s_quadFactor;
-
-	return m;
-}
 
 gentity_t *weapon_grenadelauncher_fire( gentity_t *ent, int grenType ) {
 	gentity_t   *m, *te; // JPW NERVE
@@ -1454,90 +1411,6 @@ void Weapon_RocketLauncher_Fire( gentity_t *ent, float aimSpreadScale ) {
 
 
 /*
-======================================================================
-
-LIGHTNING GUN
-
-======================================================================
-*/
-
-// RF, not used anymore for Flamethrower (still need it for tesla?)
-void Weapon_LightningFire( gentity_t *ent ) {
-	trace_t tr;
-	vec3_t end;
-	gentity_t   *traceEnt;
-	int damage;
-
-	damage = 5 * s_quadFactor;
-
-	VectorMA( muzzleTrace, LIGHTNING_RANGE, forward, end );
-
-	trap_Trace( &tr, muzzleTrace, NULL, NULL, end, ent->s.number, MASK_SHOT );
-
-	if ( tr.entityNum == ENTITYNUM_NONE ) {
-		return;
-	}
-
-	traceEnt = &g_entities[ tr.entityNum ];
-/*
-	if ( traceEnt->takedamage && traceEnt->client ) {
-		tent = G_TempEntity( tr.endpos, EV_MISSILE_HIT );
-		tent->s.otherEntityNum = traceEnt->s.number;
-		tent->s.eventParm = DirToByte( tr.plane.normal );
-		tent->s.weapon = ent->s.weapon;
-		if( LogAccuracyHit( traceEnt, ent ) ) {
-			ent->client->ps.persistant[PERS_ACCURACY_HITS]++;
-		}
-	} else if ( !( tr.surfaceFlags & SURF_NOIMPACT ) ) {
-		tent = G_TempEntity( tr.endpos, EV_MISSILE_MISS );
-		tent->s.eventParm = DirToByte( tr.plane.normal );
-	}
-*/
-	if ( traceEnt->takedamage && !AICast_NoFlameDamage( traceEnt->s.number ) ) {
-		#define FLAME_THRESHOLD 50
-
-		// RF, only do damage once they start burning
-		//if (traceEnt->health > 0)	// don't explode from flamethrower
-		//	G_Damage( traceEnt, ent, ent, forward, tr.endpos, 1, 0, MOD_LIGHTNING);
-
-		// now check the damageQuota to see if we should play a pain animation
-		// first reduce the current damageQuota with time
-		if ( traceEnt->flameQuotaTime && traceEnt->flameQuota > 0 ) {
-			traceEnt->flameQuota -= (int)( ( (float)( level.time - traceEnt->flameQuotaTime ) / 1000 ) * (float)damage / 2.0 );
-			if ( traceEnt->flameQuota < 0 ) {
-				traceEnt->flameQuota = 0;
-			}
-		}
-
-		// add the new damage
-		traceEnt->flameQuota += damage;
-		traceEnt->flameQuotaTime = level.time;
-
-		// Ridah, make em burn
-		if ( traceEnt->client && ( traceEnt->health <= 0 || traceEnt->flameQuota > FLAME_THRESHOLD ) ) {
-			if ( traceEnt->s.onFireEnd < level.time ) {
-				traceEnt->s.onFireStart = level.time;
-			}
-			if ( traceEnt->health <= 0 || !( traceEnt->r.svFlags & SVF_CASTAI ) || ( g_gametype.integer != GT_SINGLE_PLAYER ) ) {
-				if ( traceEnt->r.svFlags & SVF_CASTAI ) {
-					traceEnt->s.onFireEnd = level.time + 6000;
-				} else {
-					traceEnt->s.onFireEnd = level.time + FIRE_FLASH_TIME;
-				}
-			} else {
-				traceEnt->s.onFireEnd = level.time + 99999; // make sure it goes for longer than they need to die
-			}
-			traceEnt->flameBurnEnt = ent->s.number;
-			// add to playerState for client-side effect
-			traceEnt->client->ps.onFireStart = level.time;
-		}
-	}
-}
-
-//======================================================================
-
-
-/*
 ==============
 AddLean
 	add leaning offset
@@ -1545,7 +1418,9 @@ AddLean
 */
 void AddLean( gentity_t *ent, vec3_t point ) {
 	if ( ent->client ) {
-		if ( ent->client->ps.leanf ) {
+        if(BG_Cod1LeanActive(&ent->client->ps)) {
+            COD1_LeanOffset(point,ent->client->ps.viewangles[YAW],ent->client->ps.leanf,16,20);
+        } else if ( ent->client->ps.leanf ) {
 			vec3_t right;
 			AngleVectors( ent->client->ps.viewangles, NULL, right, NULL );
 			VectorMA( point, ent->client->ps.leanf, right, point );
@@ -1596,7 +1471,7 @@ set muzzle location relative to pivoting eye
 */
 void CalcMuzzlePoint( gentity_t *ent, int weapon, vec3_t forward, vec3_t right, vec3_t up, vec3_t muzzlePoint ) {
 	VectorCopy( ent->r.currentOrigin, muzzlePoint );
-	muzzlePoint[2] += ent->client->ps.viewheight;
+	muzzlePoint[2] += BG_Cod1LeanActive(&ent->client->ps)?BG_Cod1LeanEyeHeight(&ent->client->ps):ent->client->ps.viewheight;
 	// Ridah, this puts the start point outside the bounding box, isn't necessary
 //	VectorMA( muzzlePoint, 14, forward, muzzlePoint );
 	// done.
@@ -1642,7 +1517,7 @@ void CalcMuzzlePoint( gentity_t *ent, int weapon, vec3_t forward, vec3_t right, 
 void CalcMuzzlePointForActivate( gentity_t *ent, vec3_t forward, vec3_t right, vec3_t up, vec3_t muzzlePoint ) {
 
 	VectorCopy( ent->s.pos.trBase, muzzlePoint );
-	muzzlePoint[2] += ent->client->ps.viewheight;
+	muzzlePoint[2] += BG_Cod1LeanActive(&ent->client->ps)?BG_Cod1LeanEyeHeight(&ent->client->ps):ent->client->ps.viewheight;
 
 	AddLean( ent, muzzlePoint );
 
@@ -1658,6 +1533,15 @@ void CalcMuzzlePoints( gentity_t *ent, int weapon ) {
 	vec3_t viewang;
 
 	VectorCopy( ent->client->ps.viewangles, viewang );
+    /* PATCH56: native game 0x20049646 uses command weapon pitch/yaw,
+     * while roll still comes from playerState. Never alter movement angles. */
+    if(ent->client->pers.cmd.cod1AimValid && CW_WeaponDef(weapon) &&
+       !ent->client->ps.aiChar && !(ent->r.svFlags&SVF_CASTAI) &&
+       (ent->client->pers.cmd.wbuttons&WBUTTON_COD1_STANCE)) {
+        float p=ent->client->pers.cmd.cod1WeaponAngles[0];
+        float y=ent->client->pers.cmd.cod1WeaponAngles[1];
+        if(p>=-360 && p<=360 && y>=-360 && y<=360) {viewang[PITCH]=p;viewang[YAW]=y;}
+    }
 
 	if ( !( ent->r.svFlags & SVF_CASTAI ) ) {   // non ai's take into account scoped weapon 'sway' (just another way aimspread is visualized/utilized)
 		float spreadfrac, phase;
@@ -1684,6 +1568,106 @@ void CalcMuzzlePoints( gentity_t *ent, int weapon ) {
 //			they came out of the weap.
 	CalcMuzzlePointForActivate( ent, forward, right, up, muzzleTrace );
 	CalcMuzzlePoint( ent, weapon, forward, right, up, muzzleEffect );
+}
+
+/*
+====================
+G_Cod1FireWeapon
+
+Player-only CoD dispatch.  CW_Active() deliberately excludes AI, so the
+legacy switch below remains available to RTCW actors and future NPC work.
+For CoD hitscan weapons Bullet_Endpos() consumes STAT_COD1_SHOT_CONE and
+Bullet_Fire() consumes WeaponDef damage, making the old per-weapon RTCW
+spread/damage cases redundant for the player path.
+====================
+*/
+static qboolean G_Cod1FireWeapon( gentity_t *ent, int shotWeapon ) {
+    const cwDef_t *d;
+    const char *type;
+
+    if ( !ent->client || ent->client->ps.aiChar || !CW_WeaponDef(shotWeapon) ) {
+        return qfalse;
+    }
+
+    d = shotWeapon==ent->client->ps.weapon ? CW_PSDef( &ent->client->ps ) : CW_WeaponDef(shotWeapon);
+    if ( !d ) {
+        return qfalse;
+    }
+    type = CW_String( d, "weaponType" );
+
+    if ( !strcmp( type, "grenade" ) || !strcmp( type, "projectile" ) ) {
+        gentity_t *m;
+        vec3_t velocity, start, end;
+        trace_t launchTrace;
+        int grenade = !strcmp( type, "grenade" );
+
+        VectorCopy( muzzleTrace, start );
+        if ( !grenade ) {
+            VectorMA( start, 16, forward, end );
+            trap_Trace( &launchTrace, start, NULL, NULL, end, ent->s.number, MASK_MISSILESHOT );
+            VectorCopy( launchTrace.endpos, start );
+        }
+        VectorScale( forward, (float)CW_Number( d, "projectileSpeed" ), velocity );
+        if ( grenade ) {
+            vec3_t throwDirection;
+            float inherited;
+            velocity[2] += (float)CW_Number( d, "projectileSpeedUp" );
+            VectorCopy( velocity, throwDirection );
+            VectorNormalize( throwDirection );
+            inherited = DotProduct( ent->client->ps.velocity, throwDirection );
+            VectorMA( velocity, inherited, throwDirection, velocity );
+            ent->client->ps.grenadeTimeLeft = (int)CW_Number( d, "fuseTime" );
+            m = fire_grenade( ent, start, velocity, WP_GRENADE_PINEAPPLE );
+        } else {
+            m = fire_rocket( ent, start, forward );
+        }
+        m->s.weapon = shotWeapon;
+        m->damage = (int)CW_Number( d, "damage" );
+        m->splashDamage = (int)CW_Number( d, "explosionInnerDamage" );
+        m->splashRadius = (float)CW_Number( d, "explosionRadius" );
+        m->cod1ExplosionOuterDamage = (int)CW_Number( d, "explosionOuterDamage" );
+        m->cod1ExplosionType = !Q_stricmp( CW_String( d, "projExplosionType" ), "rocket" ) ? 1 :
+            !Q_stricmp( CW_String( d, "projExplosionType" ), "molotov" ) ? 2 : 0;
+        m->cod1ImpactExplode = (qboolean)( CW_Number( d, "projImpactExplode" ) != 0 );
+        VectorCopy( velocity, m->s.pos.trDelta );
+        if ( grenade ) {
+            m->s.pos.trTime = level.time;
+        }
+        trap_LinkEntity( m );
+        if ( !grenade ) {
+            AICast_RecordWeaponFire( ent );
+        }
+        return qtrue;
+    }
+
+    if ( !strcmp( d->name, "stalingrad_ammo" ) ) {
+        return qtrue;
+    }
+
+    if ( !strcmp( type, "bullet" ) ) {
+        /* The spread argument is intentionally neutral: Bullet_Endpos()
+         * replaces it with the native CoD cone whenever CW_Active() is true. */
+        Bullet_Fire( ent, 0.0f, (int)CW_Number( d, "damage" ) );
+        if ( g_gametype.integer == GT_SINGLE_PLAYER ) {
+            AICast_RecordWeaponFire( ent );
+        }
+        return qtrue;
+    }
+
+    return qfalse;
+}
+
+/* R217: an already emitted handheld shot remains a shot from that weapon
+ * after disposal, a queued switch, or several PmoveSingle steps in one cmd. */
+qboolean G_Cod1FireWeaponEvent(gentity_t *ent,int event,int parameter) {
+    int shotWeapon;
+    if(!ent || !ent->client || (ent->r.svFlags&SVF_CASTAI))return qfalse;
+    shotWeapon=CW_ProjectileFireEventWeapon(event,parameter,ent->client->ps.aiChar);
+    if(shotWeapon==WP_NONE)return qfalse;
+    if(ent->client->ps.persistant[PERS_HWEAPON_USE] && ent->active)return qtrue;
+    s_quadFactor=ent->client->ps.powerups[PW_QUAD]?g_quadfactor.value:1;
+    CalcMuzzlePoints(ent,shotWeapon);
+    return G_Cod1FireWeapon(ent,shotWeapon);
 }
 
 /*
@@ -1716,6 +1700,11 @@ void FireWeapon( gentity_t *ent ) {
 
 	// Ridah, need to call this for AI prediction also
 	CalcMuzzlePoints( ent, ent->s.weapon );
+
+	/* CoD player weapons no longer enter the RTCW weapon switch below. */
+	if ( G_Cod1FireWeapon( ent, ent->client->ps.weapon ) ) {
+		return;
+	}
 
 	if ( g_userAim.integer ) {
 		aimSpreadScale = ent->client->currentAimSpreadScale;
@@ -1754,7 +1743,7 @@ void FireWeapon( gentity_t *ent ) {
 		aimSpreadScale = 1.0;
 	}
 
-	// fire the specific weapon
+	// fire the specific legacy/AI weapon
 	switch ( ent->s.weapon ) {
 	case WP_KNIFE:
 		Weapon_Knife( ent );
@@ -1832,6 +1821,10 @@ void FireWeapon( gentity_t *ent ) {
 	case WP_MP40:
 		Bullet_Fire( ent, MP40_SPREAD * aimSpreadScale, MP40_DAMAGE );
 		break;
+    case WP_MP44:case WP_PPSH:case WP_BAR:case WP_BREN:case WP_M1CARBINE:
+    case WP_KAR98K:case WP_ENFIELD:case WP_MOSIN:case WP_KAR98KSCOPE:case WP_MOSINSCOPE:case WP_SPRINGFIELD:
+        Bullet_Fire(ent,THOMPSON_SPREAD*aimSpreadScale,(int)CW_Number(CW_PSDef(&ent->client->ps),"damage"));
+        break;
 	case WP_THOMPSON:
 		Bullet_Fire( ent, THOMPSON_SPREAD * aimSpreadScale, THOMPSON_DAMAGE );
 		break;
@@ -1844,23 +1837,14 @@ void FireWeapon( gentity_t *ent ) {
 	case WP_DYNAMITE:
 		// weapon_grenadelauncher_fire( ent, ent->s.weapon );
 		//RF- disabled this since it's broken (do we still want it?)
-		//if (ent->aiName && !Q_strncmp(ent->aiName, "mechanic", 8) && !AICast_HasFiredWeapon(ent->s.number, ent->s.weapon))
-		//	weapon_crowbar_throw (ent);
-		//else
 		if ( ent->s.weapon == WP_DYNAMITE ) {
 			ent->client->ps.classWeaponTime = level.time; // JPW NERVE
 		}
 		weapon_grenadelauncher_fire( ent, ent->s.weapon );
 		break;
 	case WP_FLAMETHROWER:
-		// RF, this is done client-side only now
-		//Weapon_LightningFire( ent );
 		break;
 	case WP_TESLA:
-		if ( g_gametype.integer == GT_SINGLE_PLAYER ) { // JPW NERVE
-			Tesla_Fire( ent );
-		}
-
 		// push the player back a bit
 		if ( !ent->aiCharacter ) {
 			vec3_t forward, vangle;

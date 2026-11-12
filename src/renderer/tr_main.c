@@ -34,6 +34,11 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "tr_local.h"
+#include "tr_cod1_actor_capture.h"
+#include "tr_cod1_depthhack.h"
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+#include <limits.h>
+#endif
 
 trGlobals_t tr;
 
@@ -66,6 +71,9 @@ R_Fog (void)
 */
 void R_Fog( glfog_t *curfog ) {
 	static glfog_t setfog;
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	vec4_t cod1FogColor;
+#endif
 
 	if ( !r_wolffog->integer ) {
 		R_FogOff();
@@ -99,6 +107,18 @@ void R_Fog( glfog_t *curfog ) {
 //		setfog.mode = curfog->mode;
 //	}
 //	if(curfog->color[0] != setfog.color[0] || curfog->color[1] != setfog.color[1] || curfog->color[2] != setfog.color[2] || !setfog.registered) {
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	if ( cod1Bsp59MapActive ) {
+		/* CoDSP 0x4C88E1 calls 0x4C8A20 after retaining raw scene
+		 * RGBA. Native normal fog RGB uses the same identityLight as
+		 * material color; alpha and the authored record stay unchanged. */
+		memcpy( cod1FogColor, curfog->color, sizeof( cod1FogColor ) );
+		cod1FogColor[0] *= tr.identityLight;
+		cod1FogColor[1] *= tr.identityLight;
+		cod1FogColor[2] *= tr.identityLight;
+		qglFogfv( GL_FOG_COLOR, cod1FogColor );
+	} else
+#endif
 	qglFogfv( GL_FOG_COLOR, curfog->color );
 //		VectorCopy(setfog.color, curfog->color);
 //	}
@@ -162,6 +182,16 @@ void R_FogOff( void ) {
 }
 
 void R_FogOn( void ) {
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	/* CoDSP 0x4F5D50 selects a separate sky record before portal/world
+	 * fog. A missing sky record must stay disabled even when a material
+	 * stage calls this enable helper after SetIteratorFog. */
+	if ( cod1Bsp59MapActive && ( backEnd.refdef.rdflags & RDF_DRAWINGSKY ) &&
+		 !glfogsettings[FOG_SKY].registered ) {
+		R_FogOff();
+		return;
+	}
+#endif
 	if ( fogIsOn ) {
 		return;
 	}
@@ -245,6 +275,15 @@ void R_SetFog( int fogvar, int var1, int var2, float r, float g, float b, float 
 			glfogsettings[fogvar].clearscreen   = qfalse;
 			glfogsettings[fogvar].density       = density;
 		}
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+		if ( cod1Bsp59MapActive ) {
+			/* CoDSP 0x4C8B1A..0x4C8B20 sets these flags before
+			 * selecting LINEAR or EXP. Opaque distance fog does not
+			 * suppress the authored sky in native CoD materials. */
+			glfogsettings[fogvar].drawsky = qtrue;
+			glfogsettings[fogvar].clearscreen = qfalse;
+		}
+#endif
 		glfogsettings[fogvar].hint          = GL_DONT_CARE;
 		glfogsettings[fogvar].registered    = qtrue;
 
@@ -301,6 +340,16 @@ void R_SetFog( int fogvar, int var1, int var2, float r, float g, float b, float 
 	} else {
 		// setup transition times
 		glfogsettings[FOG_TARGET].startTime = tr.refdef.time;
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+		/* Both RTCW and CoD commands reach this setter. Saturate only if
+		 * their signed duration addition would overflow; normal RTCW timing
+		 * follows the unchanged expression below. */
+		if ( var2 > 0 && tr.refdef.time > INT_MAX - var2 ) {
+			glfogsettings[FOG_TARGET].finishTime = INT_MAX;
+		} else if ( var2 < 0 && tr.refdef.time < INT_MIN - var2 ) {
+			glfogsettings[FOG_TARGET].finishTime = INT_MIN;
+		} else
+#endif
 		glfogsettings[FOG_TARGET].finishTime = tr.refdef.time + var2;
 	}
 }
@@ -437,18 +486,6 @@ void R_LocalPointToWorld( vec3_t local, vec3_t world ) {
 	world[0] = local[0] * tr.or.axis[0][0] + local[1] * tr.or.axis[1][0] + local[2] * tr.or.axis[2][0] + tr.or.origin[0];
 	world[1] = local[0] * tr.or.axis[0][1] + local[1] * tr.or.axis[1][1] + local[2] * tr.or.axis[2][1] + tr.or.origin[1];
 	world[2] = local[0] * tr.or.axis[0][2] + local[1] * tr.or.axis[1][2] + local[2] * tr.or.axis[2][2] + tr.or.origin[2];
-}
-
-/*
-=================
-R_WorldToLocal
-
-=================
-*/
-void R_WorldToLocal( vec3_t world, vec3_t local ) {
-	local[0] = DotProduct( world, tr.or.axis[0] );
-	local[1] = DotProduct( world, tr.or.axis[1] );
-	local[2] = DotProduct( world, tr.or.axis[2] );
 }
 
 /*
@@ -690,6 +727,14 @@ void R_SetFrameFog( void ) {
 			glfogsettings[FOG_CURRENT].color[1]     = glfogsettings[FOG_LAST].color[1] + ( ( glfogsettings[FOG_TARGET].color[1] - glfogsettings[FOG_LAST].color[1] ) * lerpPos );
 			glfogsettings[FOG_CURRENT].color[2]     = glfogsettings[FOG_LAST].color[2] + ( ( glfogsettings[FOG_TARGET].color[2] - glfogsettings[FOG_LAST].color[2] ) * lerpPos );
 
+			/* CoDSP 0x4C9A63..0x4C9A77 interpolates density together
+			 * with near/far and RGB when the fog modes match. */
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+			if ( cod1Bsp59MapActive ) {
+				glfogsettings[FOG_CURRENT].density = glfogsettings[FOG_LAST].density +
+					( glfogsettings[FOG_TARGET].density - glfogsettings[FOG_LAST].density ) * lerpPos;
+			} else
+#endif
 			glfogsettings[FOG_CURRENT].density      = glfogsettings[FOG_TARGET].density;
 			glfogsettings[FOG_CURRENT].mode         = glfogsettings[FOG_TARGET].mode;
 			glfogsettings[FOG_CURRENT].registered   = qtrue;
@@ -853,13 +898,25 @@ void R_SetupProjection( void ) {
 
 	tr.viewParms.projectionMatrix[2] = 0;
 	tr.viewParms.projectionMatrix[6] = 0;
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	if ( cod1Bsp59MapActive ) {
+		/* CoDSP 0x4C9C60/0x4C9D0C uses an infinite far plane for
+		 * ordinary BSP59 views, independently of the fog parameters. */
+		tr.viewParms.projectionMatrix[10] = -1;
+		tr.viewParms.projectionMatrix[14] = -2 * zNear;
+	} else
+#endif
+	{
 	tr.viewParms.projectionMatrix[10] = -( zFar + zNear ) / depth;
 	tr.viewParms.projectionMatrix[14] = -2 * zFar * zNear / depth;
+	}
 
 	tr.viewParms.projectionMatrix[3] = 0;
 	tr.viewParms.projectionMatrix[7] = 0;
 	tr.viewParms.projectionMatrix[11] = -1;
 	tr.viewParms.projectionMatrix[15] = 0;
+	R_Cod1DepthHackProjection( tr.viewParms.projectionMatrix, r_znear_depthhack->value,
+	                          tr.viewParms.depthHackProjectionMatrix );
 }
 
 /*
@@ -1650,6 +1707,135 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	R_AddDrawSurfCmd( drawSurfs, numDrawSurfs );
 }
 
+/* The camera is only available while building a view. A posed actor may
+ * appear in more than one view in the same frame, so each view gets its own
+ * immutable skinned surface array after LOD selection. */
+static int R_Cod1ActorSelectLOD(const cod1ActorModel_t *actor,
+                                const trRefEntity_t *ent) {
+	float radius, dist, projected, projectionW, scale, flod, viewPlane;
+	int i, lod;
+	if (actor->part[COD1_ACTOR_BODY].numLods < 2) return 0;
+	if (ent->e.reFlags & REFLAG_FORCE_LOD)
+		return actor->part[COD1_ACTOR_BODY].numLods - 1;
+	radius = RadiusFromBounds(actor->bounds[0],actor->bounds[1]);
+	if (ent->e.nonNormalizedAxes) {
+		float maxScale = 0;
+		for (i = 0; i < 3; i++) {
+			float axisScale = VectorLength(ent->e.axis[i]);
+			if (axisScale > maxScale && axisScale < 10000) maxScale = axisScale;
+		}
+		if (maxScale > 0) radius *= maxScale;
+	}
+	viewPlane = DotProduct(tr.viewParms.or.axis[0],tr.viewParms.or.origin);
+	dist = DotProduct(tr.viewParms.or.axis[0],ent->e.origin) - viewPlane;
+	if (dist <= 0) projected = 0;
+	else {
+		projectionW = radius*tr.viewParms.projectionMatrix[7] -
+			dist*tr.viewParms.projectionMatrix[11] +
+			tr.viewParms.projectionMatrix[15];
+		projected = projectionW != 0 ?
+			(radius*tr.viewParms.projectionMatrix[5] -
+			 dist*tr.viewParms.projectionMatrix[9] +
+			 tr.viewParms.projectionMatrix[13])/projectionW : 0;
+		if (projected > 1) projected = 1;
+	}
+	scale = r_lodscale ? r_lodscale->value : 5;
+	if (scale > 20) scale = 20;
+	flod = projected != 0 ? 1 - projected*scale : 0;
+	lod = myftol(flod*actor->part[COD1_ACTOR_BODY].numLods);
+	if (lod < 0) lod = 0;
+	if (lod >= actor->part[COD1_ACTOR_BODY].numLods)
+		lod = actor->part[COD1_ACTOR_BODY].numLods - 1;
+	lod += r_lodbias ? r_lodbias->integer : 0;
+	if (lod < 0) lod = 0;
+	if (lod >= actor->part[COD1_ACTOR_BODY].numLods)
+		lod = actor->part[COD1_ACTOR_BODY].numLods - 1;
+	return lod;
+}
+
+static int R_Cod1ActorFogNum(const cod1ActorDraw_t *draw,
+                             const trRefEntity_t *ent) {
+	vec3_t center;
+	float scale = 0, axisScale, radius;
+	int i, j;
+	if ((tr.refdef.rdflags & RDF_NOWORLDMODEL) || !tr.world) return 0;
+	VectorCopy(ent->e.origin,center);
+	for (i = 0; i < 3; i++) {
+		VectorMA(center,draw->localOrigin[i],ent->e.axis[i],center);
+		axisScale = VectorLength(ent->e.axis[i]);
+		if (axisScale > scale) scale = axisScale;
+	}
+	radius = draw->radius * scale;
+	for (i = 1; i < tr.world->numfogs; i++) {
+		const fog_t *fog = &tr.world->fogs[i];
+		for (j = 0; j < 3; j++)
+			if (center[j] - radius >= fog->bounds[1][j] ||
+			    center[j] + radius <= fog->bounds[0][j]) break;
+		if (j == 3) return i;
+	}
+	return 0;
+}
+
+void R_AddCod1ActorSurfaces(trRefEntity_t *ent) {
+	const cod1ActorModel_t *actor = tr.currentModel ? tr.currentModel->cod1Actor : NULL;
+	cod1ActorDraw_t *draw;
+	backEndData_t *frame;
+	size_t arenaBefore;
+	int selected[COD1_ACTOR_PARTS],lod,part,i,j,fogNum,personalModel;
+	if (!actor || !ent->cod1ActorSubmission) return;
+	frame = backEndData[tr.smpFrame];
+	arenaBefore = frame->cod1ActorArena.used;
+	lod = R_Cod1ActorSelectLOD(actor,ent);
+	for (part = 0; part < COD1_ACTOR_PARTS; part++) {
+		selected[part] = lod;
+		if (selected[part] >= actor->part[part].numLods)
+			selected[part] = actor->part[part].numLods - 1;
+	}
+	draw = R_Cod1ActorSkinLOD(actor,ent->cod1ActorSubmission,
+	                         &frame->cod1ActorArena,selected);
+	if (!draw) {
+		if (!frame->cod1ActorOverflowReported) {
+			ri.Printf(PRINT_WARNING,"CoD1 actor: frame snapshot exhausted or invalid; skipping actor\n");
+			frame->cod1ActorOverflowReported = qtrue;
+		}
+		return;
+	}
+	personalModel = (ent->e.renderfx & RF_THIRD_PERSON) && !tr.viewParms.isPortal;
+	if (!(ent->e.renderfx & RF_FIRST_PERSON) &&
+	    R_CullLocalBox(draw->bounds) == CULL_OUT) {
+		frame->cod1ActorArena.used = arenaBefore;
+		return;
+	}
+	if (personalModel) {
+		frame->cod1ActorArena.used = arenaBefore;
+		return;
+	}
+	R_SetupEntityLighting(&tr.refdef,ent);
+	fogNum = R_Cod1ActorFogNum(draw,ent);
+	for (i = 0; i < draw->numSurfaces; i++) {
+		const cod1ActorSurface_t *source = draw->surface[i].source;
+		shader_t *shader = source->shader;
+		if (ent->e.customShader) shader = R_GetShaderByHandle(ent->e.customShader);
+		else if (ent->e.customSkin > 0 && ent->e.customSkin < tr.numSkins) {
+			skin_t *skin = R_GetSkinByHandle(ent->e.customSkin);
+			for (j = 0; j < skin->numSurfaces; j++)
+				if (!Q_stricmp(skin->surfaces[j]->name,source->name) ||
+				    !Q_stricmp(skin->surfaces[j]->name,source->name + 6)) {
+					shader = skin->surfaces[j]->shader;
+					break;
+				}
+		}
+		if (!shader) shader = tr.defaultShader;
+		if (r_shadows->integer == 2 && fogNum == 0 &&
+		    !(ent->e.renderfx & (RF_NOSHADOW | RF_DEPTHHACK)) &&
+		    shader->sort == SS_OPAQUE)
+			R_AddDrawSurf((surfaceType_t *)&draw->surface[i].geometry,
+			              tr.shadowShader,0,qfalse,tr.currentModel->ATI_tess);
+		R_AddDrawSurf((surfaceType_t *)&draw->surface[i].geometry,
+		              shader,fogNum,qfalse,tr.currentModel->ATI_tess);
+	}
+}
+
 /*
 =============
 R_AddEntitySurfaces
@@ -1686,7 +1872,8 @@ void R_AddEntitySurfaces( void ) {
 		switch ( ent->e.reType ) {
 		case RT_PORTALSURFACE:
 			break;      // don't draw anything
-		case RT_SPRITE:
+		case RT_POLY: /* MUZZLE_R1: center + two half-extent axes, world space */
+        case RT_SPRITE:
 		case RT_SPLASH:
 		case RT_BEAM:
 		case RT_LIGHTNING:
@@ -1724,6 +1911,15 @@ void R_AddEntitySurfaces( void ) {
 					// done.
 				case MOD_MDS:
 					R_AddAnimSurfaces( ent );
+					break;
+				case MOD_COD1_XMODEL:
+					R_AddCod1NativeSurfaces( ent );
+					break;
+				case MOD_COD1_TURRET_ACTOR: R_AddCod1TurretActorSurfaces(ent); break;
+                case MOD_COD1_TURRET_XMODEL:
+                    R_AddCod1TurretSurfaces(ent); break;
+				case MOD_COD1_ACTOR_XMODEL:
+					R_AddCod1ActorSurfaces( ent );
 					break;
 				case MOD_BRUSH:
 					R_AddBrushModelSurfaces( ent );
@@ -1879,3 +2075,6 @@ void R_RenderView( viewParms_t *parms ) {
 	R_FogOn();
 
 }
+
+#include "tr_cod1_turret_frontend.inc"
+#include "tr_cod1_turret_actor_frontend.inc"

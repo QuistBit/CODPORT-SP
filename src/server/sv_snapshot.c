@@ -28,7 +28,10 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include "server.h"
+#include "../game/bg_cod1_lean.h"
 
+
+qboolean SV_Cod1UnmountedSnapshotCurrent(const sharedEntity_t *ent);
 
 /*
 =============================================================================
@@ -198,7 +201,7 @@ static void SV_WriteSnapshotToClient( client_t *client, msg_t *msg ) {
 
 	// padding for rate debugging
 	if ( sv_padPackets->integer ) {
-		for ( i = 0 ; i < sv_padPackets->integer ; i++ ) {
+		for ( i = 0 ; i < sv_padPackets->integer && !msg->overflowed ; i++ ) {
 			MSG_WriteByte( msg, svc_nop );
 		}
 	}
@@ -216,13 +219,15 @@ void SV_UpdateServerCommandsToClient( client_t *client, msg_t *msg ) {
 	int i;
 
 	// write any unacknowledged serverCommands
-	for ( i = client->reliableAcknowledge + 1 ; i <= client->reliableSequence ; i++ ) {
+	for ( i = client->reliableAcknowledge ; i < client->reliableSequence && !msg->overflowed ; ) {
+		i++;
 		MSG_WriteByte( msg, svc_serverCommand );
 		MSG_WriteLong( msg, i );
 		//MSG_WriteString( msg, client->reliableCommands[ i & (MAX_RELIABLE_COMMANDS-1) ] );
 		MSG_WriteString( msg, SV_GetReliableCommand( client, i & ( MAX_RELIABLE_COMMANDS - 1 ) ) );
 	}
-	client->reliableSent = client->reliableSequence;
+	/* Serialization is not send admission.  The complete checked sender
+	 * commits reliableSent only after mandatory payload and EOF fit. */
 }
 
 /*
@@ -338,7 +343,7 @@ static void SV_AddEntitiesVisibleFromPoint( vec3_t origin, clientSnapshot_t *fra
 		}
 
 		// entities can be flagged to explicitly not be sent to the client
-		if ( ent->r.svFlags & SVF_NOCLIENT ) {
+		if ( (ent->r.svFlags & SVF_NOCLIENT) && !SV_Cod1UnmountedSnapshotCurrent(ent) ) {
 			continue;
 		}
 
@@ -470,7 +475,7 @@ static void SV_AddEntitiesVisibleFromPoint( vec3_t origin, clientSnapshot_t *fra
 						ment->s.number = h;
 					}
 
-					if ( ment->r.svFlags & SVF_NOCLIENT ) {
+					if ( (ment->r.svFlags & SVF_NOCLIENT) && !SV_Cod1UnmountedSnapshotCurrent(ment) ) {
 						continue;
 					}
 
@@ -572,6 +577,13 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 	// clear everything in this snapshot
 	entityNumbers.numSnapshotEntities = 0;
 	memset( frame->areabits, 0, sizeof( frame->areabits ) );
+	/* GAME init can unbind gentity while a full restart keeps client frames.
+	 * No old ring/player data may escape in the inactive pre-Begin snapshot.
+	 * Reliable delivery/rate/ping fields remain owned by the send path. */
+	frame->areabytes = 0;
+	memset( &frame->ps, 0, sizeof( frame->ps ) );
+	frame->num_entities = 0;
+	frame->first_entity = svs.nextSnapshotEntities;
 
 	clent = client->gentity;
 	if ( !clent || client->state == CS_ZOMBIE ) {
@@ -594,11 +606,13 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 
 	// find the client's viewpoint
 	VectorCopy( ps->origin, org );
-	org[2] += ps->viewheight;
+	org[2] += BG_Cod1LeanActive(ps)?BG_Cod1LeanEyeHeight(ps):ps->viewheight;
 
 //----(SA)	added for 'lean'
 	// need to account for lean, so areaportal doors draw properly
-	if ( frame->ps.leanf != 0 ) {
+    if(BG_Cod1LeanActive(ps)) {
+        COD1_LeanOffset(org,ps->viewangles[YAW],ps->leanf,16,20);
+    } else if ( frame->ps.leanf != 0 ) {
 		vec3_t right, v3ViewAngles;
 		VectorCopy( ps->viewangles, v3ViewAngles );
 		v3ViewAngles[2] += frame->ps.leanf / 2.0f;
@@ -680,23 +694,49 @@ SV_SendMessageToClient
 Called by SV_SendClientSnapshot and SV_SendClientGameState
 =======================
 */
-void SV_SendMessageToClient( msg_t *msg, client_t *client ) {
+/* A refused message does not consume a netchan sequence.  Do not hammer
+ * the same impossible payload on every frame; no partial reliable prefix is
+ * substituted.  A persistently oversized mandatory payload remains a
+ * liveness refusal, rather than an empty packet presented as progress. */
+void SV_DeferClientMessage( client_t *client ) {
+	int delay = client->snapshotMsec;
+	if ( delay < 20 ) delay = 20;
+	if ( svs.time > INT_MAX - delay ) {
+		client->nextSnapshotTime = INT_MAX;
+	} else {
+		client->nextSnapshotTime = svs.time + delay;
+	}
+}
+
+qboolean SV_SendMessageToClient( msg_t *msg, client_t *client ) {
 	int rateMsec;
 
-	// record information about the message
+	if ( !SV_MessageFitsWithEOF( msg ) ) {
+		Com_Printf( "WARNING: complete message refused for %s\n", client->name );
+		SV_DeferClientMessage( client );
+		return qfalse;
+	}
+
+	// record information about the admitted complete message
 	client->frames[client->netchan.outgoingSequence & PACKET_MASK].messageSize = msg->cursize;
 	client->frames[client->netchan.outgoingSequence & PACKET_MASK].messageSent = svs.time;
 	client->frames[client->netchan.outgoingSequence & PACKET_MASK].messageAcked = -1;
 
 	// send the datagram
-	SV_Netchan_Transmit( client, msg ); //msg->cursize, msg->data );
+	/* No callbacks or message mutations occur between the preflight and
+	 * this genuine outer-EOF writer.  UDP receipt is not implied. */
+	if ( !SV_Netchan_Transmit( client, msg ) ) {
+		Com_Error( ERR_FATAL, "SV_SendMessageToClient: inconsistent EOF admission" );
+		return qfalse;
+	}
+	client->reliableSent = client->reliableSequence;
 
 	// set nextSnapshotTime based on rate and requested number of updates
 
 	// local clients get snapshots every frame
 	if ( client->netchan.remoteAddress.type == NA_LOOPBACK || Sys_IsLANAddress( client->netchan.remoteAddress ) ) {
 		client->nextSnapshotTime = svs.time - 1;
-		return;
+		return qtrue;
 	}
 
 	// normal rate / snapshotMsec calculation
@@ -721,6 +761,7 @@ void SV_SendMessageToClient( msg_t *msg, client_t *client ) {
 			client->nextSnapshotTime = svs.time + 1000;
 		}
 	}
+	return qtrue;
 }
 
 
@@ -733,8 +774,9 @@ Also called by SV_FinalMessage
 =======================
 */
 void SV_SendClientSnapshot( client_t *client ) {
-	byte msg_buf[MAX_MSGLEN];
+	byte msg_buf[SV_MESSAGE_BUFFER_SIZE];
 	msg_t msg;
+	svDownloadSend_t downloadSend;
 
 	//RF, AI don't need snapshots built
 	if ( client->gentity && client->gentity->r.svFlags & SVF_CASTAI ) {
@@ -750,7 +792,7 @@ void SV_SendClientSnapshot( client_t *client ) {
 		return;
 	}
 
-	MSG_Init( &msg, msg_buf, sizeof( msg_buf ) );
+	MSG_Init( &msg, msg_buf, MAX_MSGLEN );
 	msg.allowoverflow = qtrue;
 
 	// NOTE, MRE: all server->client messages now acknowledge
@@ -764,16 +806,22 @@ void SV_SendClientSnapshot( client_t *client ) {
 	// and the playerState_t
 	SV_WriteSnapshotToClient( client, &msg );
 
-	// Add any download data if the client is downloading
-	SV_WriteDownloadToClient( client, &msg );
-
-	// check for overflow
-	if ( msg.overflowed ) {
-		Com_Printf( "WARNING: msg overflowed for %s\n", client->name );
-		MSG_Clear( &msg );
+	/* All reliable commands and the actual snapshot are mandatory.  Refuse
+	 * the whole packet if even its outer EOF cannot fit; never transmit a
+	 * cleared packet, an omitted command tail, or a synthetic snapshot. */
+	if ( !SV_MessageFitsWithEOF( &msg ) ) {
+		SV_SendMessageToClient( &msg, client );
+		return;
 	}
 
-	SV_SendMessageToClient( &msg, client );
+	SV_WriteDownloadToClient( client, &msg, &downloadSend );
+	if ( SV_SendMessageToClient( &msg, client ) ) {
+		/* File reads and window initialization may persist independently.
+		 * Serialized block/error transmission commits only after admission. */
+		client->downloadXmitBlock = downloadSend.xmitBlock;
+		client->downloadSendTime = downloadSend.sendTime;
+		if ( downloadSend.clearName ) *client->downloadName = 0;
+	}
 }
 
 

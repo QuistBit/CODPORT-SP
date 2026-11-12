@@ -387,9 +387,15 @@ qboolean S_LoadSound( sfx_t *sfx ) {
 		Com_DPrintf( S_COLOR_YELLOW "WARNING: %s is a 8 bit wav file\n", sfx->soundName );
 	}
 
-	if ( info.rate != 22050 ) {
-		Com_DPrintf( S_COLOR_YELLOW "WARNING: %s is not a 22kHz wav file\n", sfx->soundName );
-	}
+    /* Retail CoD assets legitimately include 44.1 kHz PCM. ResampleSfx
+     * already converts to dma.speed; a different source rate is not an error.
+     * Reject malformed/unsupported input before allocation or division. */
+    if(info.format!=1 || (info.width!=1 && info.width!=2) || info.rate<=0 ||
+       info.samples<=0 || info.dataofs<0 || info.dataofs>size ||
+       info.samples>(size-info.dataofs)/info.width) {
+        Com_Printf(S_COLOR_YELLOW "WARNING: unsupported or invalid PCM WAV %s\n",sfx->soundName);
+        FS_FreeFile(data);return qfalse;
+    }
 
 	samples = Hunk_AllocateTempMemory( info.samples * sizeof( short ) * 2 );
 
@@ -402,7 +408,7 @@ qboolean S_LoadSound( sfx_t *sfx ) {
 	// sound in as needed
 
 
-	if ( s_nocompressed->value ) {
+	if ( s_nocompressed->value || ALab_Active() ) {
 		sfx->soundCompressionMethod = 0;
 		sfx->soundLength = info.samples;
 		sfx->soundData = NULL;

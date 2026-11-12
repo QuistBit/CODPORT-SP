@@ -30,6 +30,9 @@ If you have questions concerning this license or the applicable additional terms
 // string allocation/managment
 
 #include "ui_shared.h"
+#ifndef CGAMEDLL
+#include "../game/bg_public.h"
+#endif
 
 #define SCROLL_TIME_START                   500
 #define SCROLL_TIME_ADJUST              150
@@ -562,9 +565,11 @@ String_Parse
 */
 qboolean String_Parse( char **p, const char **out ) {
 	char *token;
+    const char *start=p?*p:NULL;
+    while(start&&(*start==' '||*start=='\t'))++start;
 
 	token = COM_ParseExt( p, qfalse );
-	if ( token && token[0] != 0 ) {
+	if ( token && (token[0] != 0 || (start&&start[0]=='"'&&start[1]=='"')) ) {
 		*( out ) = String_Alloc( token );
 		return qtrue;
 	}
@@ -583,7 +588,8 @@ qboolean PC_String_Parse( int handle, const char **out ) {
 		return qfalse;
 	}
 
-	*( out ) = String_Alloc( token.string );
+	*( out ) = String_Alloc( token.string[0] == '@' && DC && DC->getTranslatedString
+		? DC->getTranslatedString( token.string ) : token.string );
 	return qtrue;
 }
 
@@ -635,7 +641,7 @@ qboolean PC_Script_Parse( int handle, const char **out ) {
 			return qtrue;
 		}
 
-		if ( token.string[1] != '\0' ) {
+		if ( token.type==TT_STRING || token.string[1] != '\0' ) {
 			Q_strcat( script, 1024, va( "\"%s\"", token.string ) );
 		} else {
 			Q_strcat( script, 1024, token.string );
@@ -1212,9 +1218,27 @@ void Script_FadeOut( itemDef_t *item, char **args ) {
 
 
 
+#ifndef CGAMEDLL
+/* The death menu paints after main. Close it before opening the pause menu
+ * or its restart prompt. Its retail onClose releases the pause. */
+static qboolean CoD_OpenFailedTrainingMain(itemDef_t *item) {
+    menuDef_t *death = Menus_FindByName("deadscreen");
+    if (!item || !death || item->parent != death ||
+        !(death->window.flags & WINDOW_VISIBLE) ||
+        DC->getCVarValue("g_cod1GscNativeThreads") != 1 ||
+        DC->getCVarValue("g_reloading") != RELOAD_SAVEGAME) return qfalse;
+    Menus_CloseByName("deadscreen");
+    DC->setCVar("cl_paused","1");
+    Menus_OpenByName("main");
+    return qtrue;
+}
+#endif
 void Script_Open( itemDef_t *item, char **args ) {
 	const char *name;
 	if ( String_Parse( args, &name ) ) {
+#ifndef CGAMEDLL
+        if (!Q_stricmp(name,"main") && CoD_OpenFailedTrainingMain(item)) return;
+#endif
 		Menus_OpenByName( name );
 	}
 }
@@ -1463,6 +1487,54 @@ void Script_SetCvar( itemDef_t *item, char **args ) {
 void Script_Exec( itemDef_t *item, char **args ) {
 	const char *val;
 	if ( String_Parse( args, &val ) ) {
+#ifndef CGAMEDLL
+        /* The retail menu invokes engine difficulty commands which RTCW does
+         * not register. Keep the four menu choices effective in this port. */
+        if (!Q_stricmp(val,"difficultyeasy") ||
+            !Q_stricmp(val,"difficultymedium") ||
+            !Q_stricmp(val,"difficultyhard") ||
+            !Q_stricmp(val,"difficultyfu")) {
+            int skill = !Q_stricmp(val,"difficultyeasy") ? 0 :
+                !Q_stricmp(val,"difficultymedium") ? 1 :
+                !Q_stricmp(val,"difficultyhard") ? 2 : 3;
+            DC->setCVar("g_spSkill",va("%d",skill+1));
+            /* The fourth RTCW setting uses GSKILL_MAX for its hardest mode. */
+            DC->setCVar("g_gameskill",va("%d",skill));
+            return;
+        }
+        if (!Q_stricmp(val,"loadgame_continue")) {
+            char lastSave[MAX_QPATH];
+            /* Training's active Session cannot yet produce a restorable checkpoint.
+             * Ask explicitly before discarding the failed level, even if an older save exists. */
+            if (CoD_OpenFailedTrainingMain(item)) {
+                Menus_OpenByName("restart_popmenu");
+                return;
+            }
+            DC->getCVarString("g_lastSaveGame",lastSave,sizeof(lastSave));
+            if (lastSave[0] && DC->savegameExists &&
+                DC->savegameExists(lastSave))
+                DC->executeText(EXEC_APPEND,va("loadgame %s\n",lastSave));
+            return;
+        }
+        if (!Q_stricmp(val,"loadgame_restart")) {
+            char command[]="closeingame", *p=command;
+            char map[MAX_QPATH];
+            const char *restart = "map_restart 0\n";
+
+            DC->getCVarString("mapname", map, sizeof(map));
+            if (!Q_stricmp(map, "training") && DC->getCVarValue("sv_running") == 1 &&
+                DC->getCVarValue("g_gametype") == GT_SINGLE_PLAYER &&
+                DC->getCVarValue("g_cod1GscNativeThreads") == 1) {
+                /* Restart the local world with fresh actor and script ownership. */
+                restart = DC->getCVarValue("sv_cheats") == 1
+                    ? "killserver\nwait 2\nspdevmap training\n"
+                    : "killserver\nwait 2\nspmap training\n";
+            }
+            DC->runScript(&p);
+            DC->executeText(EXEC_APPEND, restart);
+            return;
+        }
+#endif
 		DC->executeText( EXEC_APPEND, va( "%s ; ", val ) );
 	}
 }
@@ -1470,6 +1542,10 @@ void Script_Exec( itemDef_t *item, char **args ) {
 void Script_Play( itemDef_t *item, char **args ) {
 	const char *val;
 	if ( String_Parse( args, &val ) ) {
+		if ( !Q_strncmp( val, "music_", 6 ) ) {
+			DC->startBackgroundTrack( val, val, 0 );
+			return;
+		}
 		DC->startLocalSound( DC->registerSound( val ), CHAN_LOCAL_SOUND );      // all sounds are not 3d
 	}
 }
@@ -1497,8 +1573,51 @@ void Script_AddListItem( itemDef_t *item, char **args ) {
 }
 // -NERVE - SMF
 
+/* CoD main.menu control commands have arguments, unlike uiScript. */
+static void Script_Cod1IngameOpen(itemDef_t *item, char **args) {
+    const char *name;
+    if (String_Parse(args,&name) && DC->getCVarValue("cl_paused"))
+        Menus_OpenByName(name);
+}
+static void Script_Cod1IngameClose(itemDef_t *item, char **args) {
+    const char *name;
+    if (String_Parse(args,&name) && DC->getCVarValue("cl_paused"))
+        Menus_CloseByName(name);
+}
+static void Script_Cod1SaveHide(itemDef_t *item, char **args) {
+    const char *name;
+    char lastSave[MAX_QPATH];
+    if (!String_Parse(args,&name)) return;
+    DC->getCVarString("g_lastSaveGame",lastSave,sizeof(lastSave));
+    Menu_ShowItemByName(item->parent,name,
+        lastSave[0] && DC->savegameExists && DC->savegameExists(lastSave));
+}
+static void Script_Cod1RestartHide(itemDef_t *item, char **args) {
+    const char *name;
+    char mapname[MAX_QPATH];
+    DC->getCVarString("mapname",mapname,sizeof(mapname));
+    if(String_Parse(args,&name))
+        Menu_ShowItemByName(item->parent,name,
+            DC->getCVarValue("cl_paused") != 0 && mapname[0] != 0);
+}
+
+/* Retail save_load.menu uses these checks, in order, to hide Save outside a
+ * playable level and while a checkpoint is being restored. */
+static void Script_Cod1ExecOnCvarIntValue(itemDef_t *item, char **args) {
+	const char *cvar, *command;
+	int value;
+	if (String_Parse(args, &cvar) && Int_Parse(args, &value) &&
+		String_Parse(args, &command) && (int)DC->getCVarValue(cvar) == value)
+		DC->executeText(EXEC_APPEND, va("%s\n", command));
+}
+
 commandDef_t commandList[] =
 {
+    {"ingameopen", &Script_Cod1IngameOpen},
+    {"ingameclose", &Script_Cod1IngameClose},
+    {"savegamehide", &Script_Cod1SaveHide},
+    {"restarthide", &Script_Cod1RestartHide},
+	{"execOnCvarIntValue", &Script_Cod1ExecOnCvarIntValue},
 	{"fadein", &Script_FadeIn},                  // group/name
 	{"fadeout", &Script_FadeOut},                // group/name
 	{"show", &Script_Show},                      // group/name
@@ -3140,7 +3259,12 @@ void Item_Text_AutoWrapped_Paint( itemDef_t *item ) {
 			return;
 		} else {
 			DC->getCVarString( item->cvar, text, sizeof( text ) );
-			textPtr = text;
+			if (text[0] == '@' && DC->getTranslatedString) {
+                const char *localized = DC->getTranslatedString(text);
+                if (localized && localized != text)
+                    Q_strncpyz(text, localized, sizeof(text));
+            }
+            textPtr = text;
 		}
 	} else {
 		textPtr = item->text;
@@ -3447,6 +3571,14 @@ static bind_t g_bindings[] =
 	{"+moveright",       '.',         -1, -1, -1},
 	{"+moveup",      K_SPACE,        -1, -1, -1},
 	{"+movedown",        'c',         -1, -1, -1},
+	/* Original CoD control pages; these commands are registered by the
+	 * current stance input path. Do not invent default keys. */
+	{"+gostand",         -1,          -1, -1, -1},
+	{"gocrouch",         -1,          -1, -1, -1},
+	{"goprone",          -1,          -1, -1, -1},
+	{"togglecrouch",     -1,          -1, -1, -1},
+	{"toggleprone",      -1,          -1, -1, -1},
+	{"+prone",           -1,          -1, -1, -1},
 	{"+left",            K_LEFTARROW,    -1, -1, -1},
 	{"+right",           K_RIGHTARROW,   -1, -1, -1},
 	{"+strafe",      K_ALT,          -1, -1, -1},
@@ -3498,6 +3630,15 @@ static bind_t g_bindings[] =
 	{"weapon 31",        -1,             -1, -1, -1},
 	{"weapon 32",        -1,             -1, -1, -1},
 	{"+attack",      K_CTRL,         -1, -1, -1},
+	/* Separate retail controls for toggle ADS and hold ADS. */
+	{"+cod1adstoggle", -1,          -1, -1, -1},
+	{"+cod1adshold",   -1,          -1, -1, -1},
+	{"+cod1mode",      -1,          -1, -1, -1},
+	{"+melee",           -1,          -1, -1, -1},
+	{"weaponslot primary",  -1,      -1, -1, -1},
+	{"weaponslot primaryb", -1,      -1, -1, -1},
+	{"weaponslot pistol",   -1,      -1, -1, -1},
+	{"weaponslot grenade",  -1,      -1, -1, -1},
 	{"weapprev",     K_MWHEELDOWN,   -1, -1, -1},
 	{"weapnext",     K_MWHEELUP,     -1, -1, -1},
 	{"weapalt",          -1,             -1, -1, -1},
@@ -3536,6 +3677,7 @@ static bind_t g_bindings[] =
 
 	{"savegame quicksave",   -1,         -1, -1, -1},    //----(SA)	added
 	{"loadgame quicksave",   -1,         -1, -1, -1},    //----(SA)	added
+	{"screenshotjpeg",       -1,         -1, -1, -1},
 
 	{"+activate",        -1,             -1, -1, -1},
 	{"zoomin",           -1,             -1, -1, -1},
@@ -3882,6 +4024,9 @@ qboolean Item_Bind_HandleKey( itemDef_t *item, int key, qboolean down ) {
 void AdjustFrom640( float *x, float *y, float *w, float *h ) {
 	//*x = *x * DC->scale + DC->bias;
 	*x *= DC->xscale;
+#ifndef CGAMEDLL
+    *x += DC->bias;
+#endif
 	*y *= DC->yscale;
 	*w *= DC->xscale;
 	*h *= DC->yscale;
@@ -4370,7 +4515,19 @@ void Item_Paint( itemDef_t *item ) {
 	}
 
 	// paint the rect first..
-	Window_Paint( &item->window, parent->fadeAmount, parent->fadeClamp, parent->fadeCycle );
+    if(item->window.style==6 && item->cvar) { /* CoD WINDOW_STYLE_CVAR_SHADER */
+        char shader[MAX_STRING_CHARS];qhandle_t oldBackground=item->window.background;
+        shader[0]=0;DC->getCVarString(item->cvar,shader,sizeof(shader));
+        shader[sizeof(shader)-1]=0;
+        if(shader[0]) {
+            item->window.background=DC->registerShaderNoMip(shader);
+            item->window.style=WINDOW_STYLE_SHADER;
+            Window_Paint(&item->window,parent->fadeAmount,parent->fadeClamp,parent->fadeCycle);
+            item->window.style=6;item->window.background=oldBackground;
+        }
+    } else Window_Paint( &item->window, parent->fadeAmount, parent->fadeClamp, parent->fadeCycle );
+    /* A shader cvar supplies an image, never visible text of its file path. */
+    if(item->window.style==6)return;
 
 	if ( debugMode ) {
 		vec4_t color;
@@ -5322,6 +5479,17 @@ qboolean ItemParse_cvar( itemDef_t *item, int handle ) {
 	if ( !PC_String_Parse( handle, &item->cvar ) ) {
 		return qfalse;
 	}
+	/* Translate only bind widgets: CoD's +speed/cl_run and weapalt names
+	 * collide with RTCW movement and legacy alt-weapon behavior. */
+	if ( item->type == ITEM_TYPE_BIND ) {
+		if ( !Q_stricmp( item->cvar, "toggle cl_run" ) ) {
+			item->cvar = "+cod1adstoggle";
+		} else if ( !Q_stricmp( item->cvar, "+speed" ) ) {
+			item->cvar = "+cod1adshold";
+		} else if ( !Q_stricmp( item->cvar, "weapalt" ) ) {
+			item->cvar = "+cod1mode";
+		}
+	}
 	if ( item->typeData ) {
 		editPtr = (editFieldDef_t*)item->typeData;
 		editPtr->minVal = -1;
@@ -5379,6 +5547,14 @@ qboolean ItemParse_cvarFloat( itemDef_t *item, int handle ) {
 		 PC_Float_Parse( handle, &editPtr->defVal ) &&
 		 PC_Float_Parse( handle, &editPtr->minVal ) &&
 		 PC_Float_Parse( handle, &editPtr->maxVal ) ) {
+		/* CoD's Miles mixer names do not exist in RTCW's sound backend. */
+		if ( item->type == ITEM_TYPE_SLIDER ) {
+			if ( !Q_stricmp( item->cvar, "mss_volume" ) ) {
+				item->cvar = "s_volume";
+			} else if ( !Q_stricmp( item->cvar, "mss_musicvolume" ) ) {
+				item->cvar = "s_musicvolume";
+			}
+		}
 		return qtrue;
 	}
 	return qfalse;
@@ -5420,7 +5596,7 @@ qboolean ItemParse_cvarStrList( itemDef_t *item, int handle ) {
 		}
 
 		if ( pass == 0 ) {
-			multiPtr->cvarList[multiPtr->count] = String_Alloc( token.string );
+			multiPtr->cvarList[multiPtr->count] = String_Alloc( token.string[0]=='@' && DC->getTranslatedString ? DC->getTranslatedString(token.string) : token.string );
 			pass = 1;
 		} else {
 			multiPtr->cvarStr[multiPtr->count] = String_Alloc( token.string );
@@ -5439,6 +5615,12 @@ qboolean ItemParse_cvarStrList( itemDef_t *item, int handle ) {
 qboolean ItemParse_cvarFloatList( itemDef_t *item, int handle ) {
 	pc_token_t token;
 	multiDef_t *multiPtr;
+	static const struct { const char *label; int mode; } wideModes[] = {
+		{ "1280x720", 13 }, { "1280x800", 14 },
+		{ "1600x900", 16 }, { "1680x1050", 17 },
+		{ "1920x1080", 15 }, { "1920x1200", 12 },
+		{ "2560x1440", 18 }, { "2560x1600", 19 }
+	};
 
 	Item_ValidateTypeData( item );
 	if ( !item->typeData ) {
@@ -5462,6 +5644,24 @@ qboolean ItemParse_cvarFloatList( itemDef_t *item, int handle ) {
 		}
 
 		if ( *token.string == '}' ) {
+			/* CoD's graphics menu lists only 4:3 modes, while this renderer
+			 * also supports these widescreen modes.  Expose them in the same
+			 * menu so a native display can render both scene and text sharply. */
+			if ( item->cvar && !Q_stricmp( item->cvar, "ui_r_mode" ) ) {
+				int i, j, found;
+				for ( i = 0; i < (int)( sizeof( wideModes ) / sizeof( wideModes[0] ) ); i++ ) {
+					found = 0;
+					for ( j = 0; j < multiPtr->count; j++ ) {
+						if ( multiPtr->cvarValue[j] == wideModes[i].mode ) {
+							found = 1;
+							break;
+						}
+					}
+					if ( found || multiPtr->count >= MAX_MULTI_CVARS ) continue;
+					multiPtr->cvarList[multiPtr->count] = wideModes[i].label;
+					multiPtr->cvarValue[multiPtr->count++] = wideModes[i].mode;
+				}
+			}
 			return qtrue;
 		}
 
@@ -5469,7 +5669,7 @@ qboolean ItemParse_cvarFloatList( itemDef_t *item, int handle ) {
 			continue;
 		}
 
-		multiPtr->cvarList[multiPtr->count] = String_Alloc( token.string );
+		multiPtr->cvarList[multiPtr->count] = String_Alloc( token.string[0]=='@' && DC->getTranslatedString ? DC->getTranslatedString(token.string) : token.string );
 		if ( !PC_Float_Parse( handle, &multiPtr->cvarValue[multiPtr->count] ) ) {
 			return qfalse;
 		}
@@ -5615,6 +5815,7 @@ keywordHash_t itemParseKeywords[] = {
 	{"maxChars", ItemParse_maxChars, NULL},
 	{"maxPaintChars", ItemParse_maxPaintChars, NULL},
 	{"focusSound", ItemParse_focusSound, NULL},
+	{"itemFocusSound", ItemParse_focusSound, NULL}, /* CoD1 spelling */
 	{"cvarFloat", ItemParse_cvarFloat, NULL},
 	{"cvarStrList", ItemParse_cvarStrList, NULL},
 	{"cvarFloatList", ItemParse_cvarFloatList, NULL},
@@ -6326,4 +6527,3 @@ static qboolean Menu_OverActiveItem( menuDef_t *menu, float x, float y ) {
 	}
 	return qfalse;
 }
-

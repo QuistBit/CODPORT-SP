@@ -39,6 +39,7 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "ui_local.h"
+#include "ui_cod1_resources.h"
 
 uiInfo_t uiInfo;
 
@@ -159,6 +160,7 @@ extern displayContextDef_t *DC;
 
 //----(SA)	added for savegame sorting
 static int QDECL UI_SavegamesQsortCompare( const void *arg1, const void *arg2 );
+static void UI_LoadSavegames( char *dir );
 //----(SA)	end
 
 void Text_PaintCenter( float x, float y, int font, float scale, vec4_t color, const char *text, float adjust );
@@ -721,6 +723,12 @@ void _UI_Refresh( int realtime ) {
 	UI_UpdateCvars();
 
 	if ( Menu_Count() > 0 ) {
+        if (_UI_IsFullscreen() && uiInfo.uiDC.bias > 0) {
+            trap_R_SetColor(colorBlack);
+            trap_R_DrawStretchPic(0, 0, uiInfo.uiDC.glconfig.vidWidth,
+                uiInfo.uiDC.glconfig.vidHeight, 0,0,0,0, uiInfo.uiDC.whiteShader);
+            trap_R_SetColor(NULL);
+        }
 		// paint all the menus
 		Menu_PaintAll();
 		// refresh server browser list
@@ -862,7 +870,7 @@ qboolean Asset_Parse( int handle ) {
 			if ( !PC_String_Parse( handle, &tempStr ) ) {
 				return qfalse;
 			}
-			uiInfo.uiDC.Assets.menuEnterSound = trap_S_RegisterSound( tempStr );
+			uiInfo.uiDC.Assets.menuEnterSound = CoD_UIRegisterSound( tempStr );
 			continue;
 		}
 
@@ -871,7 +879,7 @@ qboolean Asset_Parse( int handle ) {
 			if ( !PC_String_Parse( handle, &tempStr ) ) {
 				return qfalse;
 			}
-			uiInfo.uiDC.Assets.menuExitSound = trap_S_RegisterSound( tempStr );
+			uiInfo.uiDC.Assets.menuExitSound = CoD_UIRegisterSound( tempStr );
 			continue;
 		}
 
@@ -880,7 +888,7 @@ qboolean Asset_Parse( int handle ) {
 			if ( !PC_String_Parse( handle, &tempStr ) ) {
 				return qfalse;
 			}
-			uiInfo.uiDC.Assets.itemFocusSound = trap_S_RegisterSound( tempStr );
+			uiInfo.uiDC.Assets.itemFocusSound = CoD_UIRegisterSound( tempStr );
 			continue;
 		}
 
@@ -889,7 +897,7 @@ qboolean Asset_Parse( int handle ) {
 			if ( !PC_String_Parse( handle, &tempStr ) ) {
 				return qfalse;
 			}
-			uiInfo.uiDC.Assets.menuBuzzSound = trap_S_RegisterSound( tempStr );
+			uiInfo.uiDC.Assets.menuBuzzSound = CoD_UIRegisterSound( tempStr );
 			continue;
 		}
 
@@ -1107,6 +1115,7 @@ static void UI_LoadTranslationStrings( void ) {
 	int len, i, numStrings;
 	char *token;
 
+	CoD_UIResourcesInit();
 	Com_sprintf( filename, MAX_QPATH, "text/strings.txt" );
 	len = trap_FS_FOpenFile( filename, &f, FS_READ );
 	if ( len <= 0 ) {
@@ -1256,7 +1265,7 @@ static int UI_SavegameIndexFromName( const char *name ) {
 			}
 		}
 	}
-	return 0;
+	return -1;
 }
 
 /*
@@ -1268,7 +1277,7 @@ UI_SavegameIndexFromName2
 static int UI_SavegameIndexFromName2( const char *name ) {
 	int index;
 	index = UI_SavegameIndexFromName( name );
-
+	if ( index < 0 || index >= uiInfo.savegameCount ) return -1;
 	return uiInfo.savegameStatus.displaySavegames[index];
 }
 
@@ -1283,10 +1292,10 @@ static void UI_DrawSaveGameShot( rectDef_t *rect, float scale, vec4_t color ) {
 
 	trap_R_SetColor( color );
 
-	if ( !strlen( ui_savegameName.string ) || ui_savegameName.string[0] == '0' ) {
+	i = UI_SavegameIndexFromName2( ui_savegameName.string );
+	if ( i < 0 ) {
 		image = trap_R_RegisterShaderNoMip( "menu/art/unknownmap" );
 	} else {
-		i = UI_SavegameIndexFromName2( ui_savegameName.string );
 //	mapName
 		if ( uiInfo.savegameList[i].sshotImage == -1 ) {
 			uiInfo.savegameList[i].sshotImage = trap_R_RegisterShaderNoMip( uiInfo.savegameList[i].imageName );
@@ -2140,7 +2149,7 @@ static int UI_OwnerDrawWidth( int ownerDraw, int font, float scale ) {
 
 	case UI_SAVEGAMEINFO:
 		i = UI_SavegameIndexFromName2( ui_savegameName.string );
-		s = uiInfo.savegameList[i].savegameInfoText;
+		s = i >= 0 ? uiInfo.savegameList[i].savegameInfoText : "";
 		break;
 //----(SA)	end
 
@@ -2893,6 +2902,8 @@ static qboolean UI_SavegameName_HandleKey( int flags, float *special, int key ) 
 	if ( key == K_MOUSE1 || key == K_MOUSE2 || key == K_ENTER || key == K_KP_ENTER ) {
 		int i;
 		i = UI_SavegameIndexFromName( ui_savegameName.string );
+		if ( uiInfo.savegameCount == 0 ) return qfalse;
+		if ( i < 0 ) i = 0;
 
 		if ( key == K_MOUSE2 ) {
 			i--;
@@ -3503,6 +3514,7 @@ void UI_SavegameSort( int column, qboolean force ) {
 
 		// re-select the one that was selected before sorting
 		cursel = UI_SavegameIndexFromName( ui_savegameName.string );
+		if ( cursel < 0 ) cursel = 0;
 		UI_FeederSelection( FEEDER_SAVEGAMES, cursel );
 		Menu_SetFeederSelection( NULL, FEEDER_SAVEGAMES, cursel, NULL );
 
@@ -3510,6 +3522,7 @@ void UI_SavegameSort( int column, qboolean force ) {
 		trap_Cvar_Set( "ui_savegame", "" );
 
 	} else {
+		trap_Cvar_Set( "ui_savegame", "" );
 		trap_Cvar_Set( "ui_savegameName", "" );
 		trap_Cvar_Set( "ui_savegameInfo", "(no savegames)" );
 	}
@@ -3580,12 +3593,40 @@ static void UI_LoadTeams() {
 UI_DelSavegame
 ==============
 */
+/* The retail game stores save previews beside the .svg file. Limit the
+ * derived path to the root save folder or its known autosave subfolder. */
+static qboolean UI_Cod1SaveShotPath( const char *relativeName, char *path ) {
+	const char *slot;
+	const unsigned char *c;
+
+	if ( !relativeName || !relativeName[0] ||
+		strlen( relativeName ) > MAX_QPATH - sizeof( "save/.jpg" ) ) return qfalse;
+	slot = relativeName;
+	if ( !Q_strncmp( relativeName, "autosave/", 9 ) ) slot += 9;
+	if ( !slot[0] ) return qfalse;
+	/* Imported saves may contain spaces or a single dot in the slot name.
+	 * Keep those while rejecting traversal and OS path separators. */
+	if ( slot[0] == '.' || slot[0] == ' ' ||
+		slot[strlen( slot ) - 1] == '.' || slot[strlen( slot ) - 1] == ' ' ||
+		strstr( slot, ".." ) ) return qfalse;
+	for ( c = (const unsigned char *)slot; *c; c++ ) {
+		if ( !Q_isalphanumeric( *c ) && *c != '_' && *c != '-' &&
+			*c != ' ' && *c != '.' ) return qfalse;
+	}
+	Com_sprintf( path, MAX_QPATH, "save/%s.jpg", relativeName );
+	return qtrue;
+}
+
 static void UI_DelSavegame() {
 	int ret, i;
+	char shotPath[MAX_QPATH];
 
 	i = UI_SavegameIndexFromName2( ui_savegameName.string );
+	if ( i < 0 || !uiInfo.savegameList[i].compatible ) return;
+	if ( !UI_Cod1SaveShotPath( uiInfo.savegameList[i].savegameFile, shotPath ) ) return;
 
 	ret = trap_FS_Delete( va( "save/%s.svg", uiInfo.savegameList[i].savegameFile ) );
+	trap_FS_Delete( shotPath );
 
 	if ( ret ) {
 		Com_Printf( "Deleted savegame: %s.svg\n", uiInfo.savegameList[i].savegameName );
@@ -3594,7 +3635,7 @@ static void UI_DelSavegame() {
 	}
 
 
-	UI_SavegameSort( uiInfo.savegameStatus.sortKey, qtrue );  // re-sort
+	UI_LoadSavegames( DC->getCVarValue( "ui_savegameListAutosave" ) ? "autosave" : NULL );
 }
 
 
@@ -3620,92 +3661,78 @@ static char *monthStr[12] =
 UI_ParseSavegame
 ==============
 */
-void UI_ParseSavegame( int index ) {
+static qboolean UI_ReadSavegameHeader( savegameInfo *save, const char *path,
+	qboolean cacheMetadata ) {
 	fileHandle_t f;
 	qtime_t         *tm;
-	int i, ver;
+	int i, ver, fileLen, remaining;
 	static char buf[SAVE_INFOSTRING_LENGTH];
 	char mapname[MAX_QPATH];
 
-	trap_FS_FOpenFile( va( "save/%s.svg", uiInfo.savegameList[index].savegameFile ), &f, FS_READ );
-	if ( !f ) {
-		return;
-	}
-
-	// read the version
-	trap_FS_Read( &ver, sizeof( i ), f );
-
-
-	// 'info' if > 11
-	// 'mission' if > 12
-	// 'skill' if >13
-	// 'time' if > 14
-
-	// if the version is wrong, just set some defaults and get out
-	if ( ver < 9 ) {  // don't try anything for really old savegames
-		trap_FS_FCloseFile( f );
-		uiInfo.savegameList[index].mapName          = "unknownmap";
-		uiInfo.savegameList[index].episode          = -1;
-		uiInfo.savegameList[index].savegameInfoText = "Gametime: (unknown)\nHealth: (unknown)\n(old savegame)";
-
-		uiInfo.savegameList[index].date = "temp_date";
-		uiInfo.savegameList[index].time = "(old savegame)";
-
-		memset( &uiInfo.savegameList[index].tm, 0, sizeof( qtime_t ) );
-		uiInfo.savegameList[index].time = String_Alloc( va( "(old savegame ver: %d)", ver ) );
-		return;
-	}
-
-	// read the mapname
-	trap_FS_Read( mapname, MAX_QPATH, f );
-	uiInfo.savegameList[index].mapName = String_Alloc( &mapname[0] );
-
-	// read the level time
+	/* A retail CoD save has a different header. Keep it listed, but never
+	 * interpret its bytes as the RTCW header or offer it to this game DLL. */
+	save->compatible = qfalse;
+	save->mapName = "unknownmap";
+	save->episode = -1;
+	save->savegameInfoText = "Unsupported save format";
+	save->time = "";
+	save->date = "";
+	memset( &save->tm, 0, sizeof( save->tm ) );
+	fileLen = trap_FS_FOpenFile( path, &f, FS_READ );
+	if ( !f ) return qfalse;
+	remaining = fileLen;
+	if ( remaining < (int)sizeof( ver ) ) goto done;
+	trap_FS_Read( &ver, sizeof( ver ), f );
+	remaining -= sizeof( ver );
+	if ( ver != SAVE_VERSION || remaining < MAX_QPATH + 4 * (int)sizeof( int ) )
+		goto done;
+	trap_FS_Read( mapname, sizeof( mapname ), f );
+	if ( !memchr( mapname, '\0', sizeof( mapname ) ) ) goto done;
+	mapname[sizeof( mapname ) - 1] = '\0';
+	remaining -= sizeof( mapname );
+	/* Level time, total play time, episode and the length of the info field. */
 	trap_FS_Read( &i, sizeof( i ), f );
-
-	// read the totalPlayTime
 	trap_FS_Read( &i, sizeof( i ), f );
-
-	// read the episode
+	trap_FS_Read( &save->episode, sizeof( save->episode ), f );
 	trap_FS_Read( &i, sizeof( i ), f );
-	uiInfo.savegameList[index].episode = i;
-
-	if ( ver < 12 ) {
-		trap_FS_FCloseFile( f );
-		uiInfo.savegameList[index].savegameInfoText = "Gametime: (unknown)\nHealth: (unknown)\n(old savegame)";
-		uiInfo.savegameList[index].date = "temp_date";
-		memset( &uiInfo.savegameList[index].tm, 0, sizeof( qtime_t ) );
-		uiInfo.savegameList[index].time = String_Alloc( va( "(old savegame ver: %d)", ver ) );
-		return;
-	}
-
-	// read the info string length
-	trap_FS_Read( &i, sizeof( i ), f );
-
-	// read the info string
+	remaining -= 4 * sizeof( i );
+	if ( i < 0 || i >= (int)sizeof( buf ) ||
+		remaining < i + 9 * (int)sizeof( int ) ) goto done;
 	trap_FS_Read( buf, i, f );
-	buf[i] = '\0';        //DAJ made it a char
-	uiInfo.savegameList[index].savegameInfoText = String_Alloc( buf );
-
-	// time
-	if ( ver > 14 ) {
-		tm = &uiInfo.savegameList[index].tm;
-		trap_FS_Read( &tm->tm_sec, sizeof( tm->tm_sec ), f );          // secs after the min
-		trap_FS_Read( &tm->tm_min, sizeof( tm->tm_min ), f );          // mins after the hour
-		trap_FS_Read( &tm->tm_hour, sizeof( tm->tm_hour ), f );        // hrs since midnight
-		trap_FS_Read( &tm->tm_mday, sizeof( tm->tm_mday ), f );
-		trap_FS_Read( &tm->tm_mon, sizeof( tm->tm_mon ), f );
-		trap_FS_Read( &tm->tm_year, sizeof( tm->tm_year ), f );        // yrs from 1900
-		trap_FS_Read( &tm->tm_wday, sizeof( tm->tm_wday ), f );
-		trap_FS_Read( &tm->tm_yday, sizeof( tm->tm_yday ), f );        // days since jan1 (0-365)
-		trap_FS_Read( &tm->tm_isdst, sizeof( tm->tm_isdst ), f );
-		uiInfo.savegameList[index].time = String_Alloc( va( "%s %i, %i   %02i:%02i", monthStr[tm->tm_mon], tm->tm_mday, 1900 + tm->tm_year, tm->tm_hour, tm->tm_min ) );
-	} else {
-		memset( &uiInfo.savegameList[index].tm, 0, sizeof( qtime_t ) );
-		uiInfo.savegameList[index].time = String_Alloc( va( "(old save ver: %d)", ver ) );
+	buf[i] = '\0';
+	remaining -= i;
+	tm = &save->tm;
+	trap_FS_Read( &tm->tm_sec, sizeof( tm->tm_sec ), f );
+	trap_FS_Read( &tm->tm_min, sizeof( tm->tm_min ), f );
+	trap_FS_Read( &tm->tm_hour, sizeof( tm->tm_hour ), f );
+	trap_FS_Read( &tm->tm_mday, sizeof( tm->tm_mday ), f );
+	trap_FS_Read( &tm->tm_mon, sizeof( tm->tm_mon ), f );
+	trap_FS_Read( &tm->tm_year, sizeof( tm->tm_year ), f );
+	trap_FS_Read( &tm->tm_wday, sizeof( tm->tm_wday ), f );
+	trap_FS_Read( &tm->tm_yday, sizeof( tm->tm_yday ), f );
+	trap_FS_Read( &tm->tm_isdst, sizeof( tm->tm_isdst ), f );
+	if ( tm->tm_mon < 0 || tm->tm_mon >= 12 ||
+		tm->tm_mday < 1 || tm->tm_mday > 31 ||
+		tm->tm_hour < 0 || tm->tm_hour > 23 ||
+		tm->tm_min < 0 || tm->tm_min > 59 ) goto done;
+	if ( save->episode < 0 || save->episode > 64 ) save->episode = -1;
+	if ( cacheMetadata ) {
+		save->mapName = String_Alloc( mapname );
+		save->savegameInfoText = String_Alloc( buf );
+		save->time = String_Alloc( va( "%s %i, %i   %02i:%02i",
+			monthStr[tm->tm_mon], tm->tm_mday, 1900 + tm->tm_year,
+			tm->tm_hour, tm->tm_min ) );
 	}
-
+	save->compatible = qtrue;
+done:
+	if ( !save->compatible ) save->episode = -1;
 	trap_FS_FCloseFile( f );
+	return save->compatible;
+}
+
+void UI_ParseSavegame( int index ) {
+	savegameInfo *save = &uiInfo.savegameList[index];
+	UI_ReadSavegameHeader( save, va( "save/%s.svg", save->savegameFile ), qtrue );
 }
 
 /*
@@ -3716,53 +3743,71 @@ UI_LoadSavegames
 static void UI_LoadSavegames( char *dir ) {
 	char sglist[4096];
 	char    *sgname;
-	int i, len;
+	char shotPath[MAX_QPATH];
+	fileHandle_t shotFile;
+	int i, j, len, listedCount, slot, pass, passes;
+	int shotLen;
+	const char *listDir, *relativePath;
 
-	if ( dir ) {
-		uiInfo.savegameCount = trap_FS_GetFileList( va( "save/%s", dir ), "svg", sglist, 4096 );
-	} else {
-		uiInfo.savegameCount = trap_FS_GetFileList( "save", "svg", sglist, 4096 );
-	}
-
-	if ( uiInfo.savegameCount ) {
-		if ( uiInfo.savegameCount > MAX_SAVEGAMES ) {
-			uiInfo.savegameCount = MAX_SAVEGAMES;
-		}
+	uiInfo.savegameCount = 0;
+	/* The retail Save/Load toggle requests autosaves in addition to manual
+	 * saves. Read the root first, then the optional autosave subdirectory. */
+	passes = dir ? 2 : 1;
+	for ( pass = 0; pass < passes; pass++ ) {
+		listDir = pass ? dir : NULL;
+		listedCount = trap_FS_GetFileList( listDir ? va( "save/%s", listDir ) : "save",
+			"svg", sglist, sizeof( sglist ) );
+		if ( listedCount <= 0 ) continue;
 		sgname = sglist;
-		for ( i = 0; i < uiInfo.savegameCount; i++ ) {
+		for ( i = 0; i < listedCount && uiInfo.savegameCount < MAX_SAVEGAMES; i++ ) {
 
 			len = strlen( sgname );
-
-			if ( !Q_stricmp( sgname, "current.svg" ) ) {    // ignore some savegames that have special uses and shouldn't be loaded by the user directly
-				i--;
-				uiInfo.savegameCount -= 1;
+			if ( len < 5 || Q_stricmp( sgname + len - 4, ".svg" ) ||
+				!Q_stricmp( sgname, "current.svg" ) ) {
 				sgname += len + 1;
 				continue;
 			}
-
-			if ( !Q_stricmp( sgname +  len - 4,".svg" ) ) {
-				sgname[len - 4] = '\0';
+			sgname[len - 4] = '\0';
+			relativePath = listDir ? va( "%s/%s", listDir, sgname ) : sgname;
+			for ( j = 0; j < uiInfo.savegameCount; j++ ) {
+				if ( !Q_stricmp( uiInfo.savegameList[j].savegameFile, relativePath ) ) break;
 			}
+			if ( j < uiInfo.savegameCount ) {
+				sgname += len + 1;
+				continue;
+			}
+			slot = uiInfo.savegameCount++;
+			memset( &uiInfo.savegameList[slot], 0, sizeof( uiInfo.savegameList[slot] ) );
 //			Q_strupr(sgname);
-			if ( dir ) {
-				uiInfo.savegameList[i].savegameFile = String_Alloc( va( "%s/%s", dir, sgname ) );
-			} else {
-				uiInfo.savegameList[i].savegameFile = String_Alloc( sgname );
-			}
+			uiInfo.savegameList[slot].savegameFile = String_Alloc( relativePath );
 
-			uiInfo.savegameList[i].savegameName = String_Alloc( sgname );
+			/* Feeder selection uses savegameName as its key. Two folders may
+			 * contain the same basename, so autosaves need a distinct key. */
+			uiInfo.savegameList[slot].savegameName = String_Alloc( relativePath );
 
 			// get string into list for sorting too
-			uiInfo.savegameStatus.displaySavegames[i] = i;
+			uiInfo.savegameStatus.displaySavegames[slot] = slot;
 //			qsort( &uiInfo.savegameStatus.displaySavegames[0], uiInfo.savegameCount, sizeof(int), UI_SavegamesQsortCompare);
 
 			// read savegame and get needed info
-			UI_ParseSavegame( i );
+			UI_ParseSavegame( slot );
 
-			if ( uiInfo.savegameList[i].episode != -1 ) {
-				uiInfo.savegameList[i].sshotImage = trap_R_RegisterShaderNoMip( va( "levelshots/episodeshots/e%d.tga", uiInfo.savegameList[i].episode + 1 ) );
-			} else {
-				uiInfo.savegameList[i].sshotImage = trap_R_RegisterShaderNoMip( "levelshots/episodeshots/e_unknown.tga" );
+			/* If the saved JPEG exists and the renderer can load it, show the
+			 * screenshot. The episode image remains the fallback for older saves. */
+			if ( UI_Cod1SaveShotPath( uiInfo.savegameList[slot].savegameFile, shotPath ) ) {
+				shotFile = 0;
+				shotLen = trap_FS_FOpenFile( shotPath, &shotFile, FS_READ );
+				if ( shotFile ) trap_FS_FCloseFile( shotFile );
+				if ( shotLen > 0 ) {
+					uiInfo.savegameList[slot].sshotImage = trap_R_RegisterShaderNoMip( shotPath );
+				}
+			}
+			if ( !uiInfo.savegameList[slot].sshotImage ) {
+				if ( uiInfo.savegameList[slot].episode != -1 ) {
+					uiInfo.savegameList[slot].sshotImage = trap_R_RegisterShaderNoMip( va( "levelshots/episodeshots/e%d.tga", uiInfo.savegameList[slot].episode + 1 ) );
+				} else {
+					uiInfo.savegameList[slot].sshotImage = trap_R_RegisterShaderNoMip( "levelshots/episodeshots/e_unknown.tga" );
+				}
 			}
 
 
@@ -3770,13 +3815,8 @@ static void UI_LoadSavegames( char *dir ) {
 			sgname += len + 1;
 		}
 
-		// sort it
-		UI_SavegameSort( 0, qtrue );
-
-		// set current selection
-//		i = UI_SavegameIndexFromName(ui_savegameName.string);
-//		Menu_SetFeederSelection(NULL, FEEDER_SAVEGAMES, i, NULL);
 	}
+	UI_SavegameSort( SORT_SAVENAME, qtrue );
 }
 
 
@@ -4443,11 +4483,7 @@ static void UI_Update( const char *name ) {
 		if ( val == 0 ) {
 			UI_LoadSavegames( NULL );
 		} else {
-			// TODO: get this from a cvar, so more complicated
-			// directory structures can be set up later if desired
-//			cvar = getcvar("ui_savegameSubdir");
-//			UI_LoadSavegames(cvar.value);
-			UI_LoadSavegames( "autosave" );    // get from default directory 'main/save/autosave/*.svg'
+			UI_LoadSavegames( "autosave" );    // include autosaves alongside manual saves
 		}
 	}
 //----(SA)	end
@@ -4614,6 +4650,13 @@ static void UI_RunMenuScript( char **args ) {
 			UI_LoadSavegames( NULL );
 		} else if ( Q_stricmp( name, "Loadgame" ) == 0 ) {
 			int i = UI_SavegameIndexFromName2( ui_savegameName.string );
+			if ( i < 0 ) return;
+			if ( !uiInfo.savegameList[i].compatible ) {
+				trap_Cvar_Set( "ui_savegameInfo", "Unsupported save format" );
+				Com_Printf( "Cannot load %s: save version does not match this engine\n",
+					uiInfo.savegameList[i].savegameFile );
+				return;
+			}
 			// in developer, don't actually load the game
 			if ( DC->getCVarValue( "developer" ) ) {
 				Com_Printf( "would load game (developer 0):\n   %s\n", uiInfo.savegameList[i].savegameFile );
@@ -4647,7 +4690,7 @@ static void UI_RunMenuScript( char **args ) {
 			}
 			// save with no confirm for overwrite
 		} else if ( Q_stricmp( name, "Savegame2" ) == 0 ) {
-			if ( !strlen( name ) ) {
+			if ( !UI_Cvar_VariableString( "ui_savegame" )[0] ) {
 				Menus_OpenByName( "save_name_popmenu" );
 			} else {
 				trap_Cmd_ExecuteText( EXEC_APPEND, va( "savegame %s\n", UI_Cvar_VariableString( "ui_savegame" ), MAX_NAME_LENGTH ) );
@@ -4655,6 +4698,7 @@ static void UI_RunMenuScript( char **args ) {
 			}
 		} else if ( Q_stricmp( name, "DelSavegame" ) == 0 ) {
 			int i = UI_SavegameIndexFromName2( ui_savegameName.string );
+			if ( i < 0 || !uiInfo.savegameList[i].compatible ) return;
 			if ( DC->getCVarValue( "developer" ) ) {
 				Com_Printf( "would delete game (developer 0):\n   %s\n", uiInfo.savegameList[i].savegameFile );
 			} else {
@@ -4674,7 +4718,7 @@ static void UI_RunMenuScript( char **args ) {
 
 			//----(SA)	added
 		} else if ( Q_stricmp( name, "playerstart" ) == 0 ) {
-			trap_Cmd_ExecuteText( EXEC_APPEND, "fade 0 0 0 0 3\n" );    // fade screen up
+			trap_Cmd_ExecuteText( EXEC_APPEND, "cod1pregamestart\n" ); // current CGame chooses its owned HUD or legacy fade
 			trap_Cvar_Set( "g_playerstart", "1" );                 // set cvar which will trigger "playerstart" in script
 			Menus_CloseAll();
 			//----(SA)	end
@@ -5724,6 +5768,7 @@ UI_translateString
 */
 static const char *UI_translateString( const char *inString ) {
 	int i, numStrings;
+	if ( inString && inString[0] == '@' ) return CoD_UITranslate( inString );
 
 	numStrings = sizeof( translateStrings ) / sizeof( translateStrings[0] ) - 1;
 
@@ -6000,7 +6045,12 @@ static void UI_FeederSelection( float feederID, int index ) {
 			}
 
 			// the text entry box
-			trap_Cvar_Set( "ui_savegame", uiInfo.savegameList[uiInfo.savegameStatus.displaySavegames[index]].savegameName );
+			/* The editable Save As field only accepts a plain filename. A
+			 * selected autosave is loadable, but must not become a save path. */
+			trap_Cvar_Set( "ui_savegame",
+				Q_stricmpn( uiInfo.savegameList[uiInfo.savegameStatus.displaySavegames[index]].savegameFile,
+					"autosave/", 9 ) ?
+					uiInfo.savegameList[uiInfo.savegameStatus.displaySavegames[index]].savegameName : "" );
 
 			trap_Cvar_Set( "ui_savegameName", uiInfo.savegameList[uiInfo.savegameStatus.displaySavegames[index]].savegameName );
 			trap_Cvar_Set( "ui_savegameInfo", uiInfo.savegameList[uiInfo.savegameStatus.displaySavegames[index]].savegameInfoText );
@@ -6421,6 +6471,30 @@ static void UI_Pause( qboolean b ) {
 	}
 }
 
+static qboolean UI_Cod1SavegameExists( const char *lastSaveGame ) {
+	savegameInfo save;
+	char path[MAX_QPATH];
+	const char *c;
+	if ( !lastSaveGame || !lastSaveGame[0] ||
+		strstr( lastSaveGame, ".." ) ) {
+		return qfalse;
+	}
+	/* The command argument must be a single safe file name. The loader opens
+	 * save/<name>.svg, so test that exact path instead of a root-level file. */
+	for ( c = lastSaveGame; *c; c++ ) {
+		if ( !Q_isalphanumeric( *c ) && *c != '_' && *c != '/' &&
+			*c != '.' && *c != '-' ) return qfalse;
+	}
+	if ( strlen( lastSaveGame ) > MAX_QPATH - 10 ) {
+		return qfalse;
+	}
+	Com_sprintf( path, sizeof( path ), "%s%s%s",
+		Q_strncmp( lastSaveGame, "save/", 5 ) ? "save/" : "",
+		lastSaveGame, strchr( lastSaveGame, '.' ) ? "" : ".svg" );
+	memset( &save, 0, sizeof( save ) );
+	return UI_ReadSavegameHeader( &save, path, qfalse );
+}
+
 // TTimo: unused
 /*
 static int UI_OwnerDraw_Width(int ownerDraw) {
@@ -6551,6 +6625,8 @@ void _UI_Init( qboolean inGameLoad ) {
 	// for 640x480 virtualized screen
 	uiInfo.uiDC.yscale = uiInfo.uiDC.glconfig.vidHeight * ( 1.0 / 480.0 );
 	uiInfo.uiDC.xscale = uiInfo.uiDC.glconfig.vidWidth * ( 1.0 / 640.0 );
+    if (uiInfo.uiDC.xscale > uiInfo.uiDC.yscale)
+        uiInfo.uiDC.xscale = uiInfo.uiDC.yscale;
 	if ( uiInfo.uiDC.glconfig.vidWidth * 480 > uiInfo.uiDC.glconfig.vidHeight * 640 ) {
 		// wide screen
 		uiInfo.uiDC.bias = 0.5 * ( uiInfo.uiDC.glconfig.vidWidth - ( uiInfo.uiDC.glconfig.vidHeight * ( 640.0 / 480.0 ) ) );
@@ -6609,13 +6685,14 @@ void _UI_Init( qboolean inGameLoad ) {
 	uiInfo.uiDC.Print = &Com_Printf;
 	uiInfo.uiDC.Pause = &UI_Pause;
 	uiInfo.uiDC.ownerDrawWidth = &UI_OwnerDrawWidth;
-	uiInfo.uiDC.registerSound = &trap_S_RegisterSound;
-	uiInfo.uiDC.startBackgroundTrack = &trap_S_StartBackgroundTrack;
+	uiInfo.uiDC.registerSound = &CoD_UIRegisterSound;
+	uiInfo.uiDC.startBackgroundTrack = &CoD_UIBackgroundTrack;
 	uiInfo.uiDC.stopBackgroundTrack = &trap_S_StopBackgroundTrack;
 	uiInfo.uiDC.playCinematic = &UI_PlayCinematic;
 	uiInfo.uiDC.stopCinematic = &UI_StopCinematic;
 	uiInfo.uiDC.drawCinematic = &UI_DrawCinematic;
 	uiInfo.uiDC.runCinematicFrame = &UI_RunCinematicFrame;
+	uiInfo.uiDC.savegameExists = &UI_Cod1SavegameExists;
 
 	Init_Display( &uiInfo.uiDC );
 
@@ -6709,6 +6786,12 @@ void _UI_KeyEvent( int key, qboolean down ) {
 			trap_Cvar_Set( "cl_paused", "0" );
 		}
 	}
+
+    if (!Menu_GetFocused() && trap_Cvar_VariableValue("cl_paused")) {
+        trap_Key_SetCatcher(trap_Key_GetCatcher() & ~KEYCATCH_UI);
+        trap_Key_ClearStates();
+        trap_Cvar_Set("cl_paused","0");
+    }
 
 	//if ((s > 0) && (s != menu_null_sound)) {
 	//  trap_S_StartLocalSound( s, CHAN_LOCAL_SOUND );
@@ -6865,13 +6948,41 @@ void _UI_SetActiveMenu( uiMenuCommand_t menu ) {
 			return;
 
 		case UIMENU_INGAME:
+            if (uiInfo.inGameLoad) UI_LoadNonIngame();
 			trap_Cvar_Set( "cl_paused", "1" );
 			trap_Key_SetCatcher( KEYCATCH_UI );
 			UI_BuildPlayerList();
 			Menus_CloseAll();
-			Menus_ActivateByName( "ingame" );
+			/* CoD main.menu contains the pause variant selected by cl_paused. */
+			Menus_ActivateByName( "main" );
 			return;
 
+        case UIMENU_COD1_DEATH:
+            if (uiInfo.inGameLoad) UI_LoadNonIngame();
+            if (!Menus_FindByName("deadscreen")) UI_ParseMenu("ui/deadscreen.menu");
+            if (!Menus_FindByName("deadscreen")) {
+                Com_Printf("Original deadscreen unavailable\n");
+                return;
+            }
+            Menus_CloseAll();
+            trap_Key_SetCatcher(KEYCATCH_UI);
+            Menus_ActivateByName("deadscreen");
+            return;
+
+        case UIMENU_COD1_VICTORY:
+            if (uiInfo.inGameLoad) UI_LoadNonIngame();
+            if (!Menus_FindByName("victoryscreen")) UI_ParseMenu("ui/victoryscreen.menu");
+            if (!Menus_FindByName("victoryscreen")) {
+                Com_Printf("R229 original victoryscreen unavailable\n");
+                return;
+            }
+            Menus_CloseAll();
+            trap_Key_SetCatcher(KEYCATCH_UI);
+            /* Training belongs to the American campaign; winning native DDS exists. */
+            trap_Cvar_Set("cg_victoryscreen_backdrop","levelshots/victoryscreen/victory_american");
+            /* Original onOpen/onClose own cl_paused. Next Level closes it. */
+            Menus_ActivateByName("victoryscreen");
+            return;
 		case UIMENU_PREGAME:
 			trap_Cvar_Set( "cl_paused", "1" );
 			trap_Key_SetCatcher( KEYCATCH_UI );

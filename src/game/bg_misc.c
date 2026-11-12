@@ -36,6 +36,10 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "q_shared.h"
 #include "bg_public.h"
+#if defined(GAMEDLL) || defined(CGAMEDLL)
+/* UI also compiles bg_misc.c, but does not own a WeaponDef registry. */
+#include "bg_cod1_inventory.h"
+#endif
 
 
 #ifdef CGAMEDLL
@@ -84,7 +88,7 @@ extern vmCvar_t g_gametype;
 //
 //
 
-ammotable_t ammoTable[] = {
+ammotable_t ammoTable[WP_NUM_WEAPONS] = {
 	//	MAX				USES	MAX		RELOAD	FIRE			NEXT	HEAT,	COOL,	MOD,	...
 	//	AMMO			AMT.	CLIP	TIME	DELAY			SHOT
 	{   0,              0,      0,      0,      50,             0,      0,      0,      0                       },  //	WP_NONE					// 0
@@ -133,12 +137,33 @@ ammotable_t ammoTable[] = {
 	{   999,            0,      999,    0,      50,             0,      0,      0,      0                       },  //	WP_MONSTER_ATTACK1		// 33
 	{   999,            0,      999,    0,      50,             0,      0,      0,      0                       },  //	WP_MONSTER_ATTACK2		// 34
 	{   999,            0,      999,    0,      50,             0,      0,      0,      0                       },  //	WP_MONSTER_ATTACK3		// 35
-	{   999,            0,      999,    0,      50,             0,      0,      0,      0                       }   //	WP_GAUNTLET				// 36
+	{   999,            0,      999,    0,      50,             0,      0,      0,      0                       } , //	WP_GAUNTLET				// 36
+    /* Unused legacy slots 27..31, then independent CoD slots. */
+    {0},
+    {0},
+    {0},
+    {0},
+    {0},
+    {300,1,30,2100,0,120,0,0,MOD_MP40}, /* MP44 */
+    {355,1,71,1830,0,67,0,0,MOD_THOMPSON}, /* PPSh */
+    {200,1,20,3400,0,110,0,0,MOD_FG42}, /* BAR */
+    {300,1,30,2860,0,120,0,0,MOD_FG42}, /* Bren */
+    {150,1,15,2650,0,135,0,0,MOD_GARAND} /* M1 Carbine */,
+    {125,1,5,2500,0,330,0,0,MOD_MAUSER}, /* kar98k */
+    {160,1,10,700,0,330,0,0,MOD_MAUSER}, /* enfield */
+    {150,1,5,2400,0,330,0,0,MOD_MAUSER}, /* mosin_nagant */
+    {150,1,5,600,0,330,0,0,MOD_MAUSER}, /* kar98k_sniper */
+    {150,1,5,2500,0,330,0,0,MOD_MAUSER}, /* mosin_nagant_sniper */
+    {200,1,5,600,0,330,0,0,MOD_MAUSER}, /* springfield */
+    {10,1,10,2000,0,1000,0,0,MOD_GRENADE_PINEAPPLE}, /* mk1britishfrag */
+    {10,1,10,2000,0,1000,0,0,MOD_GRENADE_PINEAPPLE}, /* rgd-33russianfrag */
+    {5,0,5,2000,0,100,0,0,MOD_MAUSER}, /* stalingrad_ammo */
+
 };
 
 
 //----(SA)	moved in here so both games can get to it
-int weapAlts[] = {
+int weapAlts[WP_NUM_WEAPONS] = {
 	WP_NONE,            // 0 WP_NONE
 	WP_NONE,            // 1 WP_KNIFE
 	WP_SILENCER,        // 2 WP_LUGER
@@ -1133,7 +1158,7 @@ model="models/weapons2/garand/garand.md3"
 
 		"icons/iconw_garand_1",  // icon
 		"icons/ammo3",           // ammo icon
-		"",                      // pickup			//----(SA)	modified so it can no longer be given individually
+		"M1 Garand",              // CoD display name; inventory slot retained
 		50,
 		IT_WEAPON,
 		WP_GARAND,
@@ -3454,6 +3479,48 @@ model="models/powerups/keys/key.md3"
 
 
 
+    { "weapon_mp44", "sound/misc/w_pkup.wav",
+      {"xmodel/weapon_mp44",0,0,0,0}, "icons/iconw_thompson_1", "icons/ammo2",
+      "MP44", 30, IT_WEAPON, WP_MP44, WP_MP44, WP_MP44, "", "" },
+    { "weapon_ppsh", "sound/misc/w_pkup.wav",
+      {"xmodel/weapon_ppsh",0,0,0,0}, "icons/iconw_thompson_1", "icons/ammo2",
+      "PPSh-41", 71, IT_WEAPON, WP_PPSH, WP_PPSH, WP_PPSH, "", "" },
+    { "weapon_bar", "sound/misc/w_pkup.wav",
+      {"xmodel/weapon_bar",0,0,0,0}, "icons/iconw_thompson_1", "icons/ammo2",
+      "BAR", 20, IT_WEAPON, WP_BAR, WP_BAR, WP_BAR, "", "" },
+    { "weapon_bren", "sound/misc/w_pkup.wav",
+      {"xmodel/weapon_bren",0,0,0,0}, "icons/iconw_thompson_1", "icons/ammo2",
+      "Bren", 30, IT_WEAPON, WP_BREN, WP_BREN, WP_BREN, "", "" },
+    { "weapon_m1carbine", "sound/misc/w_pkup.wav",
+      {"xmodel/weapon_m1carbine",0,0,0,0}, "icons/iconw_thompson_1", "icons/ammo2",
+      "M1 Carbine", 15, IT_WEAPON, WP_M1CARBINE, WP_M1CARBINE, WP_M1CARBINE, "", "" },
+    { "weapon_kar98k", "sound/misc/w_pkup.wav",
+      {"xmodel/weapon_kAr98",0,0,0,0}, "icons/iconw_thompson_1", "icons/ammo2",
+      "Kar98k", 5, IT_WEAPON, WP_KAR98K, WP_KAR98K, WP_KAR98K, "", "" },
+    { "weapon_enfield", "sound/misc/w_pkup.wav",
+      {"xmodel/weapon_enfield",0,0,0,0}, "icons/iconw_thompson_1", "icons/ammo2",
+      "Lee-Enfield", 10, IT_WEAPON, WP_ENFIELD, WP_ENFIELD, WP_ENFIELD, "", "" },
+    { "weapon_mosin_nagant", "sound/misc/w_pkup.wav",
+      {"xmodel/weapon_mosinnagant",0,0,0,0}, "icons/iconw_thompson_1", "icons/ammo2",
+      "Mosin-Nagant", 5, IT_WEAPON, WP_MOSIN, WP_MOSIN, WP_MOSIN, "", "" },
+    { "weapon_kar98k_sniper", "sound/misc/w_pkup.wav",
+      {"xmodel/weapon_kar98scoped",0,0,0,0}, "icons/iconw_thompson_1", "icons/ammo2",
+      "Scoped Kar98k", 5, IT_WEAPON, WP_KAR98KSCOPE, WP_KAR98KSCOPE, WP_KAR98KSCOPE, "", "" },
+    { "weapon_mosin_nagant_sniper", "sound/misc/w_pkup.wav",
+      {"xmodel/weapon_mosinnagantscoped",0,0,0,0}, "icons/iconw_thompson_1", "icons/ammo2",
+      "Scoped Mosin-Nagant", 5, IT_WEAPON, WP_MOSINSCOPE, WP_MOSINSCOPE, WP_MOSINSCOPE, "", "" },
+    { "weapon_springfield", "sound/misc/w_pkup.wav",
+      {"xmodel/weapon_springfield",0,0,0,0}, "icons/iconw_thompson_1", "icons/ammo2",
+      "Springfield", 5, IT_WEAPON, WP_SPRINGFIELD, WP_SPRINGFIELD, WP_SPRINGFIELD, "", "" },
+    { "weapon_mk1britishfrag", "sound/misc/w_pkup.wav",
+      {"xmodel/weapon_british_handgrenade",0,0,0,0}, "icons/iconw_thompson_1", "icons/ammo2",
+      "Mills Bomb", 10, IT_WEAPON, WP_MK1, WP_MK1, WP_MK1, "", "" },
+    { "weapon_rgd-33russianfrag", "sound/misc/w_pkup.wav",
+      {"xmodel/weapon_russian_handgrenade",0,0,0,0}, "icons/iconw_thompson_1", "icons/ammo2",
+      "RGD-33", 10, IT_WEAPON, WP_RGD33, WP_RGD33, WP_RGD33, "", "" },
+    { "weapon_stalingrad_ammo", "sound/misc/w_pkup.wav",
+      {"xmodel/viewmodel_ammo",0,0,0,0}, "icons/iconw_thompson_1", "icons/ammo2",
+      "Rifle ammunition", 5, IT_WEAPON, WP_STALINGRAD_AMMO, WP_STALINGRAD_AMMO, WP_STALINGRAD_AMMO, "", "" },
 	// end of list marker
 	{NULL}
 };
@@ -3528,7 +3595,7 @@ gitem_t *BG_FindItemForWeapon( weapon_t weapon ) {
 		lookupTableInit = qfalse;
 	}
 
-	if ( weapon < 0 || weapon > NUM_TABLE_ELEMENTS ) {
+	if ( weapon < 0 || weapon >= NUM_TABLE_ELEMENTS ) {
 		Com_Error( ERR_DROP, "BG_FindItemForWeapon: weapon out of range %i", weapon );
 	}
 
@@ -3570,7 +3637,7 @@ weapon_t BG_FindClipForWeapon( weapon_t weapon ) {
 		lookupTableInit = qfalse;
 	}
 
-	if ( weapon < 0 || weapon > NUM_TABLE_ELEMENTS ) {
+	if ( weapon < 0 || weapon >= NUM_TABLE_ELEMENTS ) {
 		Com_Error( ERR_DROP, "BG_FindClipForWeapon: weapon out of range %i", weapon );
 	}
 
@@ -3605,12 +3672,20 @@ weapon_t BG_FindAmmoForWeapon( weapon_t weapon ) {
 		lookupTableInit = qfalse;
 	}
 
-	if ( weapon < 0 || weapon > NUM_TABLE_ELEMENTS ) {
+	if ( weapon < 0 || weapon >= NUM_TABLE_ELEMENTS ) {
 		Com_Error( ERR_DROP, "BG_FindAmmoForWeapon: weapon out of range %i", weapon );
 	}
 
 	// get the weapon from the lookup table
 	return lookupTable[weapon];
+}
+
+/* UI links bg_misc without the game/cgame WeaponDef registry. */
+weapon_t BG_PlayerAmmoIndex(const playerState_t *ps,weapon_t weapon) {
+#if defined(GAMEDLL) || defined(CGAMEDLL)
+    if(ps && !ps->aiChar && CW_WeaponDef(weapon))return weapon;
+#endif
+    return BG_FindAmmoForWeapon(weapon);
 }
 
 /*
@@ -3836,6 +3911,8 @@ qboolean isClipOnly( int weap ) {
 	switch ( weap ) {
 	case WP_GRENADE_LAUNCHER:
 	case WP_GRENADE_PINEAPPLE:
+	case WP_MK1:
+	case WP_RGD33:
 	case WP_DYNAMITE:
 	case WP_TESLA:
 	case WP_FLAMETHROWER:
@@ -3883,7 +3960,11 @@ qboolean    BG_CanItemBeGrabbed( const entityState_t *ent, const playerState_t *
 						return qfalse;
 					}
 				} else {
-					if ( ps->ammo[item->giAmmoIndex] >= ammoTable[item->giAmmoIndex].maxammo ) { // you are loaded with the ammo
+#if defined(GAMEDLL) || defined(CGAMEDLL)
+					if ( ps->ammo[BG_PlayerAmmoIndex(ps,item->giTag)] >= CW_MaxAmmo(ps,item->giTag) ) { // you are loaded with the ammo
+#else
+					if ( ps->ammo[item->giAmmoIndex] >= ammoTable[item->giAmmoIndex].maxammo ) {
+#endif
 						return qfalse;
 					}
 				}
@@ -3893,7 +3974,7 @@ qboolean    BG_CanItemBeGrabbed( const entityState_t *ent, const playerState_t *
 		return qtrue;
 
 	case IT_AMMO:
-		ammoweap = BG_FindAmmoForWeapon( item->giTag );
+		ammoweap = BG_PlayerAmmoIndex(ps,item->giTag);
 
 		if ( isClipOnly( ammoweap ) ) {
 			if ( ps->ammoclip[ammoweap] >= ammoTable[ammoweap].maxclip ) {
@@ -3901,7 +3982,11 @@ qboolean    BG_CanItemBeGrabbed( const entityState_t *ent, const playerState_t *
 			}
 		}
 
-		if ( ps->ammo[ammoweap] >= ammoTable[ammoweap].maxammo ) {
+		#if defined(GAMEDLL) || defined(CGAMEDLL)
+        if(ps->ammo[ammoweap] >= CW_MaxAmmo(ps,item->giTag)) {
+#else
+        if ( ps->ammo[ammoweap] >= ammoTable[ammoweap].maxammo ) {
+#endif
 			return qfalse;
 		}
 
@@ -3987,12 +4072,40 @@ BG_EvaluateTrajectory
 
 ================
 */
+/* Selected angular-only port trajectory. Millisecond ramp fields are exact
+ * integers in binary32, shared unchanged by GAME and CGAME/MSG. */
+static int BG_Cod1YawSample(const trajectory_t *tr,int atTime,float *fraction,float *speed) {
+	double total,accel,decel,t,denominator,velocity,value,rate;
+	int i;
+	if(!tr||!fraction||!speed||tr->trDuration<1||tr->trDuration>600000)return 0;
+	for(i=0;i<3;++i)if(!isfinite(tr->trBase[i])||!isfinite(tr->trDelta[i])||
+		tr->trBase[i]<-36000.0f||tr->trBase[i]>36000.0f)return 0;
+	accel=tr->trDelta[0];decel=tr->trDelta[2];total=tr->trDuration;
+	if(accel<0||decel<0||accel>total||decel>total||accel+decel>total||
+		accel!=(int)accel||decel!=(int)decel||tr->trDelta[1]<-3600.0f||tr->trDelta[1]>3600.0f)return 0;
+	t=(double)atTime-(double)tr->trTime;
+	if(t<=0){*fraction=0;*speed=0;return 1;}
+	if(t>=total){*fraction=1;*speed=0;return 1;}
+	denominator=total-0.5*(accel+decel);velocity=1.0/denominator;
+	if(accel>0&&t<accel){value=0.5*velocity*t*t/accel;rate=velocity*t/accel;}
+	else if(decel>0&&t>total-decel){double left=total-t;value=1.0-0.5*velocity*left*left/decel;rate=velocity*left/decel;}
+	else{value=velocity*(t-0.5*accel);rate=velocity;}
+	*fraction=(float)value;*speed=(float)(rate*1000.0);return 1;
+}
+
 void BG_EvaluateTrajectory( const trajectory_t *tr, int atTime, vec3_t result ) {
 	float deltaTime;
 	float phase;
 	vec3_t v;
 
 	switch ( tr->trType ) {
+	case TR_COD1_YAW_R216:
+		if(!BG_Cod1YawSample(tr,atTime,&phase,&deltaTime)) {
+			Com_Error(ERR_DROP,"invalid selected yaw trajectory");return;
+		}
+		VectorCopy(tr->trBase,result);
+		result[YAW]=tr->trBase[YAW]+tr->trDelta[YAW]*phase;
+		break;
 	case TR_STATIONARY:
 	case TR_INTERPOLATE:
 	case TR_GRAVITY_PAUSED: //----(SA)
@@ -4082,6 +4195,12 @@ void BG_EvaluateTrajectoryDelta( const trajectory_t *tr, int atTime, vec3_t resu
 	float phase;
 
 	switch ( tr->trType ) {
+	case TR_COD1_YAW_R216:
+		if(!BG_Cod1YawSample(tr,atTime,&phase,&deltaTime)) {
+			Com_Error(ERR_DROP,"invalid selected yaw velocity trajectory");return;
+		}
+		VectorClear(result);result[YAW]=tr->trDelta[YAW]*deltaTime;
+		break;
 	case TR_STATIONARY:
 	case TR_INTERPOLATE:
 		VectorClear( result );
@@ -4323,6 +4442,18 @@ char *eventnames[] = {
 	"EV_GIVEPAGE",
 	"EV_CLOSEMENU",
 
+	"EV_COD1_LAND",
+	"EV_COD1_FALL_DAMAGE",
+	"EV_COD1_EJECT_BRASS",
+	"EV_COD1_ROCKET_EXPLODE",
+	"EV_COD1_ROCKET_EXPLODE_NOMARKS",
+	"EV_COD1_MELEE_START",
+	"EV_COD1_MELEE_HIT",
+	"EV_COD1_STEP",
+    "EV_COD1_FOOTSTEP",
+    "EV_COD1_WEAPON_AMMO_PICKUP",
+    "EV_COD1_TURRET_SHOT",
+    "EV_COD1_TURRET_IMPACT",
 	"EV_MAX_EVENTS"
 };
 

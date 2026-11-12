@@ -30,6 +30,19 @@ If you have questions concerning this license or the applicable additional terms
 #define __TR_TYPES_H
 
 
+/* Typed original MG42 submission. Metadata is copied into frame storage;
+ * GAME/CGAME retain authoritative allocation/tick validation. */
+#include "../renderer/cod1_turret_actor_state.h"
+#define COD1_TURRET_RENDER_VERSION 2
+#define COD1_TURRET_MODEL_ALIAS "cod1turret/mg42_bipod"
+typedef struct {
+    int version, size, hModel, ownerNum;
+    unsigned int epochLo, epochHi, generation;
+    int sampleTick;
+    float origin[3], baseAngles[3], controlAngles[3];
+    int animated;float phases[2],weights[2];
+} cod1TurretRenderState_t;
+
 #define MAX_CORONAS     32          //----(SA)	not really a reason to limit this other than trying to keep a reasonable count
 #define MAX_DLIGHTS     32          // can't be increased, because bit flags are used on surfaces
 #define MAX_ENTITIES    1023        // can't be increased without changing drawsurf bit packing

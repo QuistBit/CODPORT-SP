@@ -28,6 +28,8 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "tr_local.h"
 
+/* Implemented by the BSP59 loader; only queried while a CoD1 world is active. */
+int R_Cod1ViewCell( const mnode_t *leaf );
 
 
 /*
@@ -166,14 +168,14 @@ static int R_DlightFace( srfSurfaceFace_t *face, int dlightBits ) {
 	dlight_t    *dl;
 
 	for ( i = 0 ; i < tr.refdef.num_dlights ; i++ ) {
-		if ( !( dlightBits & ( 1 << i ) ) ) {
+		if ( !( dlightBits & ( 1u << i ) ) ) {
 			continue;
 		}
 		dl = &tr.refdef.dlights[i];
 		d = DotProduct( dl->origin, face->plane.normal ) - face->plane.dist;
 		if ( d < -dl->radius || d > dl->radius ) {
 			// dlight doesn't reach the plane
-			dlightBits &= ~( 1 << i );
+			dlightBits &= ~( 1u << i );
 		}
 	}
 
@@ -190,7 +192,7 @@ static int R_DlightGrid( srfGridMesh_t *grid, int dlightBits ) {
 	dlight_t    *dl;
 
 	for ( i = 0 ; i < tr.refdef.num_dlights ; i++ ) {
-		if ( !( dlightBits & ( 1 << i ) ) ) {
+		if ( !( dlightBits & ( 1u << i ) ) ) {
 			continue;
 		}
 		dl = &tr.refdef.dlights[i];
@@ -201,7 +203,7 @@ static int R_DlightGrid( srfGridMesh_t *grid, int dlightBits ) {
 											 || dl->origin[2] - dl->radius > grid->meshBounds[1][2]
 			 || dl->origin[2] + dl->radius < grid->meshBounds[0][2] ) {
 			// dlight doesn't reach the bounds
-			dlightBits &= ~( 1 << i );
+			dlightBits &= ~( 1u << i );
 		}
 	}
 
@@ -685,6 +687,7 @@ R_AddWorldSurfaces
 =============
 */
 void R_AddWorldSurfaces( void ) {
+	int firstDrawSurfs;
 	if ( !r_drawworld->integer ) {
 		return;
 	}
@@ -706,5 +709,41 @@ void R_AddWorldSurfaces( void ) {
 	if ( tr.refdef.num_dlights > 32 ) {
 		tr.refdef.num_dlights = 32 ;
 	}
-	R_RecursiveWorldNode( tr.world->nodes, 15, ( 1 << tr.refdef.num_dlights ) - 1 );
+	firstDrawSurfs = tr.refdef.numDrawSurfs;
+	R_RecursiveWorldNode( tr.world->nodes, 15,
+		tr.refdef.num_dlights == 32 ? ~0u : ( 1u << tr.refdef.num_dlights ) - 1u );
+
+	/* One compact line per second while enabled. Count draw references after
+	 * RTCW frustum/PVS culling, then report the native BSP59 camera cell. */
+	if ( tr.world->isCod1 && !tr.viewParms.isPortal ) {
+		static cvar_t *cod1Diag;
+		static unsigned lastReport;
+		static qboolean wasEnabled;
+		unsigned now;
+		mnode_t *viewLeaf;
+		int i, markedLeaves = 0;
+		if ( !cod1Diag ) cod1Diag = ri.Cvar_Get( "r_cod1Diag", "0", 0 );
+		if ( !cod1Diag->integer ) {
+			wasEnabled = qfalse;
+			return;
+		}
+		now = (unsigned)ri.Milliseconds();
+		if ( wasEnabled && (unsigned)( now - lastReport ) < 1000u ) return;
+		wasEnabled = qtrue;
+		lastReport = now;
+		viewLeaf = R_PointInLeaf( tr.viewParms.pvsOrigin );
+		for ( i = tr.world->numDecisionNodes; i < tr.world->numnodes; i++ ) {
+			mnode_t *leaf = &tr.world->nodes[i];
+			if ( leaf->contents != CONTENTS_SOLID && leaf->visframe == tr.visCount ) {
+				markedLeaves++;
+			}
+		}
+		ri.Printf( PRINT_ALL,
+			"[BSP59 R4 renderer] map=%s pvsOrigin=%.1f,%.1f,%.1f cell=%d cluster=%d area=%d pvs=%s markedLeaves=%d worldDrawRefs=%d\n",
+			tr.world->baseName, tr.viewParms.pvsOrigin[0], tr.viewParms.pvsOrigin[1],
+			tr.viewParms.pvsOrigin[2], R_Cod1ViewCell( viewLeaf ),
+			viewLeaf->cluster, viewLeaf->area,
+			r_novis->integer ? "forced_all" : ( tr.world->vis ? "map" : "absent" ),
+			markedLeaves, tr.refdef.numDrawSurfs - firstDrawSurfs );
+	}
 }

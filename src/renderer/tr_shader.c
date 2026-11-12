@@ -27,6 +27,33 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "tr_local.h"
+#include "cod1_material_map.h"
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+#include "cod1_sun_config.h"
+#endif
+#if defined(COD1_BSP59_SORT_ADDITIVE_CANDIDATE) && COD1_BSP59_SORT_ADDITIVE_CANDIDATE && \
+    (!defined(COD1_BSP59_EXACT_VERTEX_ALPHA) || !COD1_BSP59_EXACT_VERTEX_ALPHA)
+#error COD1_BSP59_SORT_ADDITIVE_CANDIDATE requires source-aware BSP59 registration
+#endif
+#include "cod1_material_probe.h"
+#include "cod1_material_eligibility.h"
+#include "cod1_material_window_glow.h"
+#if defined(COD1_WATER_FIXED2_CANDIDATE) && COD1_WATER_FIXED2_CANDIDATE
+#if !defined(COD1_STAGE_BACKEND_INFRA) || !COD1_STAGE_BACKEND_INFRA
+#error COD1_WATER_FIXED2_CANDIDATE requires COD1_STAGE_BACKEND_INFRA=1
+#endif
+#ifndef COD1_WATER_FIXED2_CONSTLIGHT_SCALE
+/* No measured CoD profile was supplied to this experimental compiler. */
+#define COD1_WATER_FIXED2_CONSTLIGHT_SCALE (-1.0f)
+#endif
+#include "cod1_material_water_fixed2.h"
+#endif
+#if defined(COD1_MATERIAL_STAGE_COMPILER) && COD1_MATERIAL_STAGE_COMPILER
+#if !defined(COD1_STAGE_BACKEND_INFRA) || !COD1_STAGE_BACKEND_INFRA
+#error COD1_MATERIAL_STAGE_COMPILER requires COD1_STAGE_BACKEND_INFRA=1
+#endif
+#include "cod1_material_compiler_shape.h"
+#endif
 
 // tr_shader.c -- this file deals with the parsing and definition of shaders
 
@@ -36,7 +63,67 @@ static char *s_shaderText;
 // dynamically allocated memory if it is valid.
 static shaderStage_t stages[MAX_SHADER_STAGES];
 static shader_t shader;
+/* Material provenance, never a name or current-map heuristic. */
+static qboolean R_Cod1NativeMaterialSource(void) {
+    if(shader.cod1ShaderType || shader.cod1StaticModelSource)return qtrue;
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+    if(shader.cod1Bsp59WorldMaterialSource)return qtrue;
+#endif
+    return qfalse;
+}
 static texModInfo_t texMods[MAX_SHADER_STAGES][TR_MAX_TEXMODS];
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+/* A dedicated scratch array prevents future bundle[1] texmods from aliasing
+ * bundle[0]. No script parser assigns bundle[1] mods in this WIP. */
+static texModInfo_t cod1Bundle1TexMods[MAX_SHADER_STAGES][TR_MAX_TEXMODS];
+static texModInfo_t cod1Bundle2TexMods[MAX_SHADER_STAGES][TR_MAX_TEXMODS];
+#endif
+#include "cod1_material_stype.h"
+/* Private compile proof, indexed by the projected stage. It is never a
+ * draw-time capability guess and cannot leak into the next registration. */
+static unsigned cod1BundleAuth[MAX_SHADER_STAGES];
+static int cod1BundleAuthStrict;
+static unsigned cod1MultiplyIdentityStages;
+static qboolean cod1MultiplyIdentityUnsupported;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+static qboolean cod1PerlightCompiling;
+#endif
+static int R_Cod1NativeTextureUnits(void) {
+    int units=qglActiveTextureARB?glConfig.maxActiveTextures:1;
+    /* Native 0x4fef7e..0x4fef88 bounds the effective query at eight. */
+    return units>8?8:units;
+}
+static int Cod1PL_NativeSort(const char *name,int *value);
+static void R_Cod1ClearBundleAuth(void) {
+    memset(cod1BundleAuth,0,sizeof(cod1BundleAuth));cod1BundleAuthStrict=0;
+    cod1MultiplyIdentityStages=0;
+    cod1MultiplyIdentityUnsupported=qfalse;
+}
+static void R_Cod1SetBundleAuth(const cod1StResult_t *result,int strictAuth) {
+    int i;R_Cod1ClearBundleAuth();cod1BundleAuthStrict=strictAuth;
+    for(i=0;i<MAX_SHADER_STAGES && i<8;++i)cod1BundleAuth[i]=result->bundleAuth[i];
+}
+static unsigned R_Cod1StageBundleAuth(const shaderStage_t *stage) {
+    int i;for(i=0;i<MAX_SHADER_STAGES;++i)if(stage==&stages[i])return cod1BundleAuth[i];
+    return 0;
+}
+static qboolean R_Cod1StageMultiplyIdentity(const shaderStage_t *stage) {
+    int i;for(i=0;i<MAX_SHADER_STAGES && i<8;++i)if(stage==&stages[i])
+        return (cod1MultiplyIdentityStages&(1u<<i))?qtrue:qfalse;
+    return qfalse;
+}
+static qboolean R_Cod1ThirdBundle(const shaderStage_t *stage) {
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    return stage->bundle[2].image[0] || stage->cod1TexEnv2;
+#else
+    (void)stage;return qfalse;
+#endif
+}
+static qboolean R_Cod1AnyThirdBundle(void) {
+    int i;for(i=0;i<MAX_SHADER_STAGES;++i)
+        if(stages[i].active && R_Cod1ThirdBundle(&stages[i]))return qtrue;
+    return qfalse;
+}
 static qboolean deferLoad;
 
 #define FILE_HASH_SIZE      4096
@@ -85,6 +172,23 @@ static long generateHashValue( const char *fname ) {
 	return hash;
 }
 
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+static shader_t *R_FindShaderByNameForSource( const char *name,
+		qboolean cod1Bsp59WorldMaterialSource ) {
+	char strippedName[MAX_QPATH];
+	shader_t *sh;
+	int hash;
+	if ( !name || !name[0] ) return tr.defaultShader;
+	COM_StripExtension( name, strippedName );
+	hash = generateHashValue( strippedName );
+	for ( sh = hashTable[hash]; sh; sh = sh->next ) {
+		if ( sh->cod1Bsp59WorldMaterialSource == cod1Bsp59WorldMaterialSource &&
+			 !Q_stricmp( sh->name, strippedName ) ) return sh;
+	}
+	return tr.defaultShader;
+}
+#endif
+
 void R_RemapShader( const char *shaderName, const char *newShaderName, const char *timeOffset ) {
 	char strippedName[MAX_QPATH];
 	int hash;
@@ -116,6 +220,37 @@ void R_RemapShader( const char *shaderName, const char *newShaderName, const cha
 	// even tho they might have different lightmaps
 	COM_StripExtension( shaderName, strippedName );
 	hash = generateHashValue( strippedName );
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+	{
+		shader_t *targets[2] = { NULL, NULL };
+		int source;
+		for ( sh = hashTable[hash]; sh; sh = sh->next ) {
+			if ( Q_stricmp( sh->name, strippedName ) ) continue;
+			source = !!sh->cod1Bsp59WorldMaterialSource;
+			if ( targets[source] ) continue;
+			targets[source] = R_FindShaderByNameForSource( newShaderName, source );
+			if ( !targets[source] || targets[source] == tr.defaultShader ) {
+				targets[source] = source ?
+					R_FindCod1Bsp59WorldMaterialShader( newShaderName, 0, qtrue ) :
+					R_FindShader( newShaderName, 0, qtrue );
+			}
+			if ( targets[source] && targets[source]->defaultShader ) {
+				targets[source] = NULL;
+				ri.Printf( PRINT_WARNING, "WARNING: R_RemapShader: new shader %s not found for source %d\n",
+					newShaderName, source );
+			}
+		}
+		for ( sh = hashTable[hash]; sh; sh = sh->next ) {
+			if ( Q_stricmp( sh->name, strippedName ) ) continue;
+			source = !!sh->cod1Bsp59WorldMaterialSource;
+			if ( targets[source] ) sh->remappedShader = sh == targets[source] ? NULL : targets[source];
+		}
+		if ( timeOffset ) {
+			if ( targets[0] ) targets[0]->timeOffset = atof( timeOffset );
+			if ( targets[1] ) targets[1]->timeOffset = atof( timeOffset );
+		}
+	}
+#else
 	for ( sh = hashTable[hash]; sh; sh = sh->next ) {
 		if ( Q_stricmp( sh->name, strippedName ) == 0 ) {
 			if ( sh != sh2 ) {
@@ -128,6 +263,7 @@ void R_RemapShader( const char *shaderName, const char *newShaderName, const cha
 	if ( timeOffset ) {
 		sh2->timeOffset = atof( timeOffset );
 	}
+#endif
 }
 
 /*
@@ -135,6 +271,28 @@ void R_RemapShader( const char *shaderName, const char *newShaderName, const cha
 ParseVector
 ===============
 */
+#include "cod1_const_lighting.h"
+/* Strict numeric input for the newly restored native operation. Existing
+ * RTCW ParseVector users retain their historical parser behavior. */
+static qboolean R_Cod1ParseConstLighting(char **text,shaderStage_t *stage) {
+    float color[3];double value;int i;char *token;
+    token=COM_ParseExt(text,qfalse);
+    if(strcmp(token,"("))return qfalse;
+    for(i=0;i<3;i++) {
+        token=COM_ParseExt(text,qfalse);
+        if(!Cod1MP_Number(token,&value) || value < -FLT_MAX || value > FLT_MAX)
+            return qfalse;
+        color[i]=(float)value;
+    }
+    token=COM_ParseExt(text,qfalse);
+    if(strcmp(token,")") || !C1CL_Pack(color,tr.identityLight,stage->constantColor))
+        return qfalse;
+    stage->rgbGen=CGEN_CONST;
+    if(ri.Cvar_Get && ri.Cvar_Get("r_cod1MaterialTrace","0",0)->integer)
+        ri.Printf(PRINT_ALL,"CoD1 R55 constLighting: material=%s scale=%.9g rgb=%u/%u/%u; authored constant, no instance-light substitution\n",
+            shader.name,tr.identityLight,stage->constantColor[0],stage->constantColor[1],stage->constantColor[2]);
+    return qtrue;
+}
 static qboolean ParseVector( char **text, int count, float *v ) {
 	char    *token;
 	int i;
@@ -322,14 +480,19 @@ static void ParseTexMod( char *_text, shaderStage_t *stage ) {
 	const char *token;
 	char **text = &_text;
 	texModInfo_t *tmi;
+    texModInfo_t candidate;
+    qboolean nativeSource=R_Cod1NativeMaterialSource();
 
-	if ( stage->bundle[0].numTexMods == TR_MAX_TEXMODS ) {
+	if ( !nativeSource && stage->bundle[0].numTexMods == TR_MAX_TEXMODS ) {
 		ri.Error( ERR_DROP, "ERROR: too many tcMod stages in shader '%s'\n", shader.name );
 		return;
 	}
 
-	tmi = &stage->bundle[0].texMods[stage->bundle[0].numTexMods];
-	stage->bundle[0].numTexMods++;
+    if(nativeSource){memset(&candidate,0,sizeof(candidate));tmi=&candidate;}
+    else {
+	    tmi = &stage->bundle[0].texMods[stage->bundle[0].numTexMods];
+	    stage->bundle[0].numTexMods++;
+    }
 
 	token = COM_ParseExt( text, qfalse );
 
@@ -364,7 +527,10 @@ static void ParseTexMod( char *_text, shaderStage_t *stage ) {
 		tmi->wave.phase = atof( token );
 		token = COM_ParseExt( text, qfalse );
 		if ( token[0] == 0 ) {
-			ri.Printf( PRINT_WARNING, "WARNING: missing tcMod turb in shader '%s'\n", shader.name );
+            if(nativeSource)
+                ri.Printf(PRINT_WARNING,"CoD1 R60 native recovery: incomplete tcMod turb ignored; texmod count unchanged in shader '%s'\n",shader.name);
+            else
+			    ri.Printf( PRINT_WARNING, "WARNING: missing tcMod turb in shader '%s'\n", shader.name );
 			return;
 		}
 		tmi->wave.frequency = atof( token );
@@ -518,6 +684,18 @@ static void ParseTexMod( char *_text, shaderStage_t *stage ) {
 	{
 		ri.Printf( PRINT_WARNING, "WARNING: unknown tcMod '%s' in shader '%s'\n", token, shader.name );
 	}
+    /* Native ParseTexMod (0x4e6f59..0x4e6f7b) commits only after all
+     * operands. The unused native slot can contain partial scratch values;
+     * its count does not advance. Published modifiers remain unchanged. */
+    if(nativeSource && candidate.type!=TMOD_NONE) {
+        /* Capacity limits committed storage. A recovered incomplete native
+         * operation must return without consuming or requiring a slot. */
+        if(stage->bundle[0].numTexMods==TR_MAX_TEXMODS) {
+            ri.Error(ERR_DROP,"ERROR: too many tcMod stages in shader '%s'\n",shader.name);
+            return;
+        }
+        stage->bundle[0].texMods[stage->bundle[0].numTexMods++]=candidate;
+    }
 }
 
 
@@ -526,10 +704,465 @@ static void ParseTexMod( char *_text, shaderStage_t *stage ) {
 ParseStage
 ===================
 */
+/* PATCH17: resolve images within a stage, preserving alpha/blend/lightmap
+ * semantics instead of replacing the whole shader after a missing extension. */
+static image_t *R_Cod1StageImageEx(const char *name, qboolean mip, qboolean picmip,
+                               qboolean characterMip, int wrap,qboolean multiplyIdentity) {
+    static const char *exts[]={".dds",".tga",".jpg",".blend.dds",".blend.tga",".masked.dds",".masked.tga"};
+    char stem[MAX_QPATH],path[MAX_QPATH];const char *slash,*dot;image_t *image;int i;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    qboolean unsupported=qfalse;
+#endif
+    /* R51: an authored CoD image variant is keyed by sampler/mip settings,
+     * regardless of whether its program came from .stype or a plain .shader.
+     * Keep legacy file-extension candidate ordering unchanged in this pass. */
+    qboolean exactVariant=shader.cod1ShaderType || shader.cod1StaticModelSource;
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+    exactVariant=exactVariant || shader.cod1Bsp59WorldMaterialSource;
+#endif
+    if(!name || !name[0] || name[0]=='$')return NULL;
+    /* A leading slash in retail FX maps means virtual root, not OS root. */
+    while(*name=='/')++name;
+    if(!*name)return NULL;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    if(multiplyIdentity) {
+        image=R_FindCod1MultiplyIdentityImage(name,mip,picmip,characterMip,wrap,tr.identityLight,&unsupported);
+        if(unsupported) {cod1MultiplyIdentityUnsupported=qtrue;return NULL;}
+    }
+    else
+#else
+    (void)multiplyIdentity;
+#endif
+    image=exactVariant?R_FindCod1TypeImage(name,mip,picmip,characterMip,wrap):R_FindImageFileExt(name,mip,picmip,characterMip,wrap);
+    if(image)return image;
+    if(strlen(name)>=sizeof(stem))return NULL;
+    Q_strncpyz(stem,name,sizeof(stem));slash=strrchr(stem,'/');dot=strrchr(stem,'.');
+    /* Preserve variant suffixes such as .blend and .masked. */
+    if(dot && (!slash || dot>slash) &&
+       (!Q_stricmp(dot,".dds") || !Q_stricmp(dot,".tga") || !Q_stricmp(dot,".jpg")))
+        stem[dot-stem]=0;
+    /* R47 types may resolve storage extensions, but may not guess a different
+     * authored image transform (.blend/.masked). Explicit suffixes above stay. */
+    for(i=0;i<(shader.cod1ShaderType?3:(int)(sizeof(exts)/sizeof(exts[0])));i++){
+        if(strlen(stem)+strlen(exts[i])>=sizeof(path))continue;
+        Com_sprintf(path,sizeof(path),"%s%s",stem,exts[i]);
+        if(!Q_stricmp(path,name))continue;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+        if(multiplyIdentity) {
+            image=R_FindCod1MultiplyIdentityImage(path,mip,picmip,characterMip,wrap,tr.identityLight,&unsupported);
+            if(unsupported) {cod1MultiplyIdentityUnsupported=qtrue;return NULL;}
+        }
+        else
+#endif
+        image=exactVariant?R_FindCod1TypeImage(path,mip,picmip,characterMip,wrap):R_FindImageFileExt(path,mip,picmip,characterMip,wrap);
+        if(image){
+            ri.Printf(PRINT_ALL,"CoD1 stage image: %s -> %s (shader %s)\n",name,path,shader.name);
+            return image;
+        }
+    }
+    return NULL;
+}
+static image_t *R_Cod1StageImage(const char *name,qboolean mip,qboolean picmip,
+                                qboolean characterMip,int wrap) {
+    return R_Cod1StageImageEx(name,mip,picmip,characterMip,wrap,qfalse);
+}
+
+/* R53: noopt forbids the original deferred/optimized texture representation.
+ * R_FindImageFileExtForType currently resolves every image synchronously: it
+ * either returns an already uploaded image or calls R_CreateImageExt before
+ * returning. There is NO native texture optimizer in this backend, so that
+ * eager postcondition also holds for noopt, including cached images. Do not
+ * translate it to noPicMip/noMipMaps/noCompress or disable RTCW RMSE heuristics.
+ * Keep the request in the bundle for a future optimizer and diagnostic audits.
+ */
+static void R_Cod1MapPolicyTrace(const char *name,unsigned flags,image_t *image) {
+    if((flags&C1MAP_NOOPT) && image)
+        ri.Printf(PRINT_ALL,"CoD1 R53 map policy: material=%s source=%s noopt=1 policy=eager image=%s mipmaps=%d picmip=%d\n",
+            shader.name,name,image->imgName,image->mipmap,image->allowPicmip);
+}
+
+/* The authored fixed-function branch of opaque glass is base * baked LM +
+ * additive glow. The final perlight/$dlight bundle has a different dynamic
+ * lighting contract; do not silently pretend it has been implemented. This
+ * source-shape plan is active for BSP59 even in an ordinary VS Debug build. */
+static qboolean R_Cod1CompileWindowGlow2(const char *body) {
+    cod1MpCaps_t caps;
+    cod1MaterialProbe_t ir;
+    cod1WgPlan_t plan;
+    shader_t candidateShader;
+    shaderStage_t candidate[3];
+    image_t *base,*glow,*lm;
+    int index=shader.lightmapIndex;
+
+    if (!body || r_vertexLight->integer || r_lightmap->integer ||
+        index<0 || index>=tr.numLightmaps || !tr.lightmaps[index]) return qfalse;
+    memset(&caps,0,sizeof(caps));
+    /* This backend uses the source's <3 branch. It also works as sequential
+     * fixed-function passes when the hardware has only one texture unit. */
+    caps.units=glConfig.maxActiveTextures>1?2:1;
+    if (!Cod1MP_Parse(body,&caps,&ir) || !Cod1WG_Plan(&ir,&plan)) return qfalse;
+    base=R_Cod1StageImage(plan.base,qtrue,qtrue,qfalse,GL_REPEAT);
+    if (!base) return qfalse;
+    glow=R_Cod1StageImage(plan.glow,qtrue,qtrue,qfalse,GL_REPEAT);
+    if (!glow) return qfalse;
+    lm=tr.lightmaps[index];
+
+    candidateShader=shader;
+    candidateShader.sort=SS_OPAQUE;
+    candidateShader.explicitlyDefined=qtrue;
+    candidateShader.cod1MaterialRoute=COD1_MATERIAL_SCRIPT_WINDOW;
+    memset(candidate,0,sizeof(candidate));
+    candidate[0].active=candidate[1].active=candidate[2].active=qtrue;
+    candidate[0].bundle[0].image[0]=base;
+    candidate[0].bundle[0].tcGen=TCGEN_TEXTURE;
+    candidate[0].bundle[0].texMods=texMods[0];
+    candidate[0].rgbGen=CGEN_IDENTITY;
+    candidate[0].alphaGen=AGEN_IDENTITY;
+    candidate[0].stateBits=GLS_DEPTHMASK_TRUE;
+
+    candidate[1].bundle[0].image[0]=lm;
+    candidate[1].bundle[0].isLightmap=qtrue;
+    candidate[1].bundle[0].tcGen=TCGEN_LIGHTMAP;
+    candidate[1].bundle[0].texMods=texMods[1];
+    candidate[1].rgbGen=CGEN_IDENTITY;
+    candidate[1].alphaGen=AGEN_IDENTITY;
+    candidate[1].stateBits=GLS_SRCBLEND_DST_COLOR|GLS_DSTBLEND_ZERO;
+
+    candidate[2].bundle[0].image[0]=glow;
+    candidate[2].bundle[0].tcGen=TCGEN_TEXTURE;
+    candidate[2].bundle[0].texMods=texMods[2];
+    candidate[2].rgbGen=CGEN_IDENTITY_LIGHTING;
+    candidate[2].alphaGen=AGEN_IDENTITY;
+    candidate[2].stateBits=GLS_SRCBLEND_ONE|GLS_DSTBLEND_ONE;
+
+    shader=candidateShader;
+    memcpy(stages,candidate,sizeof(candidate));
+    ri.Printf(PRINT_ALL,"CoD1 BSP59 opaque glass: %s base+lightmap+glow; perlight deferred (fixed 2-TMU source branch)\n",shader.name);
+    return qtrue;
+}
+
+#if defined(COD1_WATER_FIXED2_CANDIDATE) && COD1_WATER_FIXED2_CANDIDATE
+/* The legacy glConfig string may be truncated to 4095 bytes on modern
+ * drivers. Snapshot only the exact operands used by authored water requires
+ * from the complete string while the GL context is current. */
+static qboolean cod1WaterProfileKnown;
+static qboolean cod1WaterExtensions[4];
+static const char *const cod1WaterExtensionNames[4]={
+    "GL_NV_texture_shader", "GL_NV_register_combiners",
+    "GL_ATI_fragment_shader", "GL_ARB_texture_cube_map"
+};
+/* Accept well-formed GL/WGL/GLX/EGL tokens; only exact GL_ names can satisfy
+ * authored requires. The fixed renderer uses two backend bundles. */
+static qboolean R_Cod1WaterProfileStringKnown(const char *start,const char *end) {
+    const char *p=start,*next;
+    qboolean hasMultitexture=qfalse;
+    static const char required[]="GL_ARB_multitexture";
+    if (!start || !end || start>=end) return qfalse;
+    while (p<end) {
+        next=p;
+        while (next<end && *next!=' ') {
+            /* glGetString(GL_EXTENSIONS) is an ASCII space-separated list.
+             * A partial/invalid list must never make absent vendor tokens
+             * look like reliable FALSE operands in `requires`. */
+            if (!((*next>='A' && *next<='Z') ||
+                  (*next>='a' && *next<='z') ||
+                  (*next>='0' && *next<='9') || *next=='_')) return qfalse;
+            ++next;
+        }
+        if (next-p<4 || !(
+            (p[0]=='G' && p[1]=='L' && p[2]=='_') ||
+            (next-p>=5 && p[0]=='W' && p[1]=='G' && p[2]=='L' && p[3]=='_') ||
+            (next-p>=5 && p[0]=='G' && p[1]=='L' && p[2]=='X' && p[3]=='_') ||
+            (next-p>=5 && p[0]=='E' && p[1]=='G' && p[2]=='L' && p[3]=='_'))) return qfalse;
+        if ((size_t)(next-p)==sizeof(required)-1 &&
+            !strncmp(p,required,sizeof(required)-1)) hasMultitexture=qtrue;
+        if (next==end) break;
+        p=next+1;
+        if (p==end || *p==' ') return qfalse;
+    }
+    return hasMultitexture;
+}
+void R_Cod1WaterCaptureGLProfile(const char *extensions) {
+    const char *end,*p,*next;
+    size_t length=0;
+    int i;
+    const char *reason="valid";
+    cod1WaterProfileKnown=qfalse;
+    memset(cod1WaterExtensions,0,sizeof(cod1WaterExtensions));
+    if (!extensions) {
+        reason="no extensions";
+    } else {
+        /* Bound a broken driver string without treating a partial list as
+         * evidence that one of the GL operands is absent. */
+        while (length<65536 && extensions[length]) ++length;
+        if (length==65536) {
+            reason="unterminated/oversized extensions";
+        } else {
+            end=extensions+length;
+            if (!R_Cod1WaterProfileStringKnown(extensions,end)) {
+                reason="invalid extensions or missing GL_ARB_multitexture";
+            } else {
+                cod1WaterProfileKnown=qtrue;
+                for (p=extensions;p<end;p=next+1) {
+                    next=p;
+                    while (next<end && *next!=' ') ++next;
+                    for (i=0;i<4;++i) {
+                        size_t n=strlen(cod1WaterExtensionNames[i]);
+                        if ((size_t)(next-p)==n && !memcmp(p,cod1WaterExtensionNames[i],n))
+                            cod1WaterExtensions[i]=qtrue;
+                    }
+                    if (next==end) break;
+                }
+            }
+        }
+    }
+    ri.Printf(PRINT_ALL,"CoD1 water GL profile: %s; raw length=%u, legacy length=%u, NVshader=%d NVcombiner=%d ATIfragment=%d cube=%d\n",
+              reason,(unsigned)length,(unsigned)strlen(glConfig.extensions_string),
+              cod1WaterExtensions[0],cod1WaterExtensions[1],
+              cod1WaterExtensions[2],cod1WaterExtensions[3]);
+}
+static cod1MpTruth_t R_Cod1WaterExtension(const char *name,void *unused) {
+    int i;
+    (void)unused;
+    for(i=0;i<4;++i)if(!strcmp(name,cod1WaterExtensionNames[i]))break;
+    if(i==4 || !cod1WaterProfileKnown)return COD1_MP_UNKNOWN;
+    return cod1WaterExtensions[i]?COD1_MP_TRUE:COD1_MP_FALSE;
+}
+static void R_Cod1WaterScrollScale(texModInfo_t mods[2],const cod1MwBundle_t *b) {
+    memset(mods,0,2*sizeof(*mods));
+    mods[0].type=TMOD_SCROLL;
+    mods[0].scroll[0]=b->scroll[0];mods[0].scroll[1]=b->scroll[1];
+    mods[1].type=TMOD_SCALE;
+    mods[1].scale[0]=b->scale[0];mods[1].scale[1]=b->scale[1];
+}
+static qboolean R_Cod1CompileWaterFixed2(const char *body) {
+    cod1MpCaps_t caps;
+    cod1MaterialProbe_t ir;
+    cod1MwPlan_t plan;
+    shader_t candidateShader;
+    shaderStage_t candidate[2];
+    texModInfo_t mods[3][2];
+    image_t *base,*overlay;
+    const float cod1ConstLightScale=COD1_WATER_FIXED2_CONSTLIGHT_SCALE;
+    int i;
+    const int backendUnits=2;
+
+    if (!body || !(cod1ConstLightScale>=0.0f && cod1ConstLightScale<=1.0f) ||
+        !qglActiveTextureARB || !qglClientActiveTextureARB ||
+        glConfig.maxActiveTextures<backendUnits || !cod1WaterProfileKnown ||
+        glConfig.hardwareType==GLHW_PERMEDIA2 || r_vertexLight->integer ||
+        (shader.lightmapIndex!=LIGHTMAP_BY_VERTEX && shader.lightmapIndex!=LIGHTMAP_NONE) ||
+        tr.overbrightBits<0 || tr.overbrightBits>1 ||
+        tr.identityLight != 1.0f/(float)(1<<tr.overbrightBits)) return qfalse;
+
+    memset(&caps,0,sizeof(caps));
+    caps.units=glConfig.maxActiveTextures;caps.extension=R_Cod1WaterExtension;
+    if (!Cod1MW_ProfileKnown(&caps)) return qfalse;
+    if (!Cod1MP_Parse(body,&caps,&ir) || !Cod1MW_Plan(&ir,&plan)) return qfalse;
+
+    /* All source operations and runtime guards are checked before image IO.
+     * A failed lookup leaves the shader and stage scratch untouched. */
+    base=R_Cod1StageImage(plan.base.image,qtrue,qtrue,qfalse,GL_REPEAT);
+    if (!base) return qfalse;
+    overlay=R_Cod1StageImage(plan.overlay[0].image,qtrue,qtrue,qfalse,GL_REPEAT);
+    if (!overlay) return qfalse;
+
+    candidateShader=shader;
+    candidateShader.sort=11.0f; /* CoDSP R41B registered damwater sort; port GL queue TBD */
+    candidateShader.surfaceFlags|=SURF_NONSOLID|SURF_NOLIGHTMAP;
+    candidateShader.contentFlags|=CONTENTS_WATER|CONTENTS_TRANSLUCENT;
+    candidateShader.explicitlyDefined=qtrue;
+    candidateShader.cod1WaterFixed2Candidate=qtrue;
+    candidateShader.cod1MaterialRoute=COD1_MATERIAL_SCRIPT_WATER_CANDIDATE;
+    memset(candidate,0,sizeof(candidate));
+    memset(mods,0,sizeof(mods));
+    candidate[0].active=candidate[1].active=qtrue;
+    candidate[0].bundle[0].image[0]=base;
+    candidate[0].bundle[0].tcGen=TCGEN_TEXTURE;
+    candidate[0].bundle[0].numTexMods=2;
+    candidate[0].bundle[0].texMods=texMods[0];
+    candidate[0].rgbGen=CGEN_CONST;
+    candidate[0].alphaGen=AGEN_IDENTITY;
+    candidate[0].stateBits=GLS_DEPTHMASK_TRUE;
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+    candidate[0].cod1NativeFogColor=qtrue;
+#endif
+    for(i=0;i<3;++i) {
+        /* CoDSP's sampled constLighting scalar is 1.0, and the saved
+         * damwater stage contains 127 for each .5 source component.
+         * Require an explicit measured CoD scalar; the port's identityLight
+         * (0.5 in this host profile) is a separate RTCW setting. */
+        candidate[0].constantColor[i]=(byte)(plan.constLighting[i]*cod1ConstLightScale*255.0f);
+    }
+    candidate[0].constantColor[3]=255;
+    candidate[1].bundle[0].image[0]=overlay;
+    candidate[1].bundle[0].tcGen=TCGEN_TEXTURE;
+    candidate[1].bundle[0].numTexMods=2;
+    candidate[1].bundle[0].texMods=texMods[1];
+    candidate[1].bundle[1].image[0]=overlay;
+    candidate[1].bundle[1].tcGen=TCGEN_TEXTURE;
+    candidate[1].bundle[1].numTexMods=2;
+    candidate[1].bundle[1].texMods=cod1Bundle1TexMods[1];
+    candidate[1].cod1TexEnv=GL_MODULATE;
+    candidate[1].rgbGen=CGEN_EXACT_VERTEX;
+    /* Live CoDSP parser promotes an unset alpha mode after exactVertex to
+     * raw mode 4. The R21 live color consumer copies vertex alpha for raw 4
+     * with this stage's RGB mode 5; preserve it in the port. */
+    candidate[1].alphaGen=AGEN_VERTEX;
+    candidate[1].stateBits=GLS_SRCBLEND_ONE|GLS_DSTBLEND_ONE;
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+    candidate[1].cod1NativeFogColor=qtrue;
+#endif
+    R_Cod1WaterScrollScale(mods[0],&plan.base);
+    R_Cod1WaterScrollScale(mods[1],&plan.overlay[0]);
+    R_Cod1WaterScrollScale(mods[2],&plan.overlay[1]);
+
+    shader=candidateShader;
+    stages[0]=candidate[0];stages[1]=candidate[1];
+    memcpy(texMods[0],mods[0],sizeof(mods[0]));
+    memcpy(texMods[1],mods[1],sizeof(mods[1]));
+    memcpy(cod1Bundle1TexMods[1],mods[2],sizeof(mods[2]));
+    return qtrue;
+}
+#endif
+
+#if defined(COD1_MATERIAL_STAGE_COMPILER) && COD1_MATERIAL_STAGE_COMPILER
+/* One authored stage, diffuse + baked lightmap. Both syntax and the current
+ * runtime state are checked before image IO. Image resolution can perform its
+ * usual FS/log/cache/upload effects; global shader scratch is committed only
+ * after successful lookup. This is RTCW behavior, not CoD retail parity. */
+static qboolean R_Cod1CompileOneLightmappedStage(const char *body) {
+    cod1MpCaps_t caps;
+    cod1MeBackend_t backend;
+    cod1MeResult_t eligible;
+    cod1MaterialProbe_t ir;
+    cod1McPlan_t plan;
+    shader_t candidateShader;
+    shaderStage_t candidateStage;
+    texModInfo_t candidateMod;
+    image_t *baseImage,*lightmapImage;
+    int lm=shader.lightmapIndex;
+
+    if (!qglActiveTextureARB || !qglClientActiveTextureARB ||
+        glConfig.maxActiveTextures<2 ||
+        r_vertexLight->integer || r_lightmap->integer ||
+        glConfig.hardwareType==GLHW_PERMEDIA2 ||
+        lm<0 || lm>=tr.numLightmaps || !tr.lightmaps[lm]) return qfalse;
+    memset(&caps,0,sizeof(caps));
+    caps.units=2;
+    backend.maxBundles=2;
+    if (!Cod1MP_Parse(body,&caps,&ir)) return qfalse;
+    Cod1ME_Evaluate(&ir,&backend,&eligible);
+    if (!Cod1MC_Plan(&ir,&eligible,&plan) ||
+        strlen(plan.image)>=MAX_QPATH) return qfalse;
+
+    /* No global stage/texmod data is touched until the sole file image and
+     * requested BSP atlas are both resolved. */
+    lightmapImage=tr.lightmaps[lm];
+    baseImage=R_Cod1StageImage(plan.image,qtrue,qtrue,qfalse,GL_REPEAT);
+    if (!baseImage) return qfalse;
+
+    candidateShader=shader;
+    candidateShader.sort=SS_SEE_THROUGH;
+    candidateShader.surfaceFlags|=SURF_NONSOLID|SURF_NOIMPACT|SURF_NODLIGHT;
+    candidateShader.contentFlags|=CONTENTS_WATER;
+    candidateShader.multitextureEnv=GL_MODULATE;
+    candidateShader.explicitlyDefined=qtrue;
+    candidateShader.cod1MaterialRoute=COD1_MATERIAL_SCRIPT_IR;
+
+    memset(&candidateStage,0,sizeof(candidateStage));
+    candidateStage.active=qtrue;
+    candidateStage.rgbGen=CGEN_IDENTITY;
+    candidateStage.alphaGen=AGEN_IDENTITY;
+    candidateStage.stateBits=GLS_SRCBLEND_SRC_ALPHA|GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA;
+    candidateStage.bundle[0].image[0]=baseImage;
+    candidateStage.bundle[0].tcGen=TCGEN_TEXTURE;
+    candidateStage.bundle[0].numTexMods=1;
+    candidateStage.bundle[0].texMods=texMods[0];
+    candidateStage.bundle[1].image[0]=lightmapImage;
+    candidateStage.bundle[1].isLightmap=qtrue;
+    candidateStage.bundle[1].tcGen=TCGEN_LIGHTMAP;
+    candidateStage.bundle[1].texMods=cod1Bundle1TexMods[0];
+    candidateStage.cod1TexEnv=GL_MODULATE;
+
+    memset(&candidateMod,0,sizeof(candidateMod));
+    candidateMod.type=TMOD_SCROLL;
+    candidateMod.scroll[0]=plan.scroll[0];
+    candidateMod.scroll[1]=plan.scroll[1];
+
+    shader=candidateShader;
+    stages[0]=candidateStage;
+    texMods[0][0]=candidateMod;
+    return qtrue;
+}
+#endif
+
+/* CoD1 lightmap bundles and neutral white bundles used by foliage. */
+static qboolean R_Cod1LightmapBundle(shaderStage_t *stage,char **text) {
+    char *token;int mapped=0,white=0;
+    if(stage->bundle[1].image[0])return qfalse;
+    while(1){
+        token=COM_ParseExt(text,qtrue);
+        if(!token[0])return qfalse;
+        if(!strcmp(token,"}"))break;
+        if(!Q_stricmp(token,"map")){
+            int axes=C1MAP_REPEAT;unsigned flags=0;
+            token=COM_ParseExt(text,qfalse);
+            if(mapped)return qfalse;
+            while(C1Map_Option(token,&axes,&flags))token=COM_ParseExt(text,qfalse);
+            stage->bundle[1].cod1MapLoadFlags=flags;
+            if(!Q_stricmp(token,"$whiteimage"))white=1;
+            else if(Q_stricmp(token,"$lightmap"))return qfalse;
+            mapped=1;
+        }else if(!Q_stricmp(token,"blendFunc")){
+            token=COM_ParseExt(text,qfalse);
+            if(Q_stricmp(token,"filter"))return qfalse;
+        }else return qfalse; /* Unsupported bundle operations keep fallback. */
+    }
+    if(!mapped)return qfalse;
+    /* Multiplication by white is identity, including alpha. Keep the first
+     * bundle's alpha test, depth write and vertex colour, without requiring
+     * another texture unit. Only map and optional filter are accepted above. */
+    if(white){
+        ri.Printf(PRINT_ALL,"CoD1 neutral white bundle: %s\n",shader.name);
+        return qtrue;
+    }
+    stage->bundle[1].image[0]=shader.lightmapIndex>=0?tr.lightmaps[shader.lightmapIndex]:tr.whiteImage;
+    stage->bundle[1].isLightmap=qtrue;stage->bundle[1].tcGen=TCGEN_LIGHTMAP;
+    shader.multitextureEnv=GL_MODULATE;
+    ri.Printf(PRINT_ALL,"CoD1 lightmap bundle: %s\n",shader.name);
+    return qtrue;
+}
+
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+#include "tr_cod1_ordinary_bundle.h"
+#endif
+
+/* IMPACT_R1: these mark materials have a native extra per-light pass. Preserve
+ * their base pass and explicitly defer dynamic-light replay. This remains a
+ * bounded lighting approximation; native depth-bias keywords are generic. */
+static qboolean R_Cod1KnownImpactDecal(const char *name) {
+    static const char *known[]={"gfx/impact/cratered","gfx/impact/bullethole1",
+        "gfx/impact/bullethole2","gfx/impact/stone_singleshot1","gfx/impact/bullethit_wood1","gfx/impact/bullethit_wood2",
+        "gfx/impact/bullethit_plaster","gfx/impact/bullethit_plaster2",
+        "gfx/impact/bullethit_sand","gfx/impact/bullethit_snow",
+        "gfx/impact/bullethit_glass","gfx/impact/bullethit_glass2"};
+    int i;for(i=0;i<(int)(sizeof(known)/sizeof(known[0]));i++)if(!Q_stricmp(name,known[i]))return qtrue;
+    return qfalse;
+}
+
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+static qboolean ParseStageForSource( shaderStage_t *stage, char **text,
+		qboolean cod1Bsp59WorldMaterialSource ) {
+#else
 static qboolean ParseStage( shaderStage_t *stage, char **text ) {
+#endif
 	char *token;
 	int depthMaskBits = GLS_DEPTHMASK_TRUE, blendSrcBits = 0, blendDstBits = 0, atestBits = 0, depthFuncBits = 0;
 	qboolean depthMaskExplicit = qfalse;
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+	qboolean alphaGenExplicit = qfalse;
+#endif
 
 	stage->active = qtrue;
 
@@ -544,6 +1177,29 @@ static qboolean ParseStage( shaderStage_t *stage, char **text ) {
 		if ( token[0] == '}' ) {
 			break;
 		}
+        if(!Q_stricmp(token,"perlight") && R_Cod1KnownImpactDecal(shader.name)) {
+            int depth=1;
+            /* No native per-light decal pass in RTCW. Keep the original base
+             * stage and explicitly omit this extra pass, not an opaque fallback. */
+            while(depth) {
+                token=COM_ParseExt(text,qtrue);
+                if(!*token)return qfalse;
+                if(*token=='{')++depth;
+                else if(*token=='}')--depth;
+            }
+            memset(stage,0,sizeof(*stage));
+            ri.Printf(PRINT_DEVELOPER,"CoD1 mark material: %s perlight pass deferred\n",shader.name);
+            return qtrue;
+        }
+        if(!Q_stricmp(token,"nextbundle")){
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+            if(R_Cod1NativeMaterialSource()) {
+                if(!R_Cod1OrdinaryBundle(stage,text))return qfalse;
+            } else
+#endif
+            if(!R_Cod1LightmapBundle(stage,text))return qfalse;
+            break; /* helper consumed the stage's closing brace */
+        }
 		//
 		// check special case for map16/map32/mapcomp/mapnocomp (compression enabled)
 		if ( !Q_stricmp( token, "map16" ) ) {    // only use this texture if 16 bit color depth
@@ -595,25 +1251,33 @@ static qboolean ParseStage( shaderStage_t *stage, char **text ) {
 		// map <name>
 		//
 		if ( !Q_stricmp( token, "map" ) ) {
-			token = COM_ParseExt( text, qfalse );
+            int axes=C1MAP_REPEAT;
+            int mapWrap;
+            unsigned mapLoadFlags=0;
+            token=COM_ParseExt(text,qfalse);
+            /* R51: the same native qualifiers apply to authored .shader and
+             * expanded .stype; consume qualifiers before the image token. */
+            while(C1Map_Option(token,&axes,&mapLoadFlags))token=COM_ParseExt(text,qfalse);
+            stage->bundle[0].cod1MapLoadFlags=mapLoadFlags;
+            mapWrap=C1Map_Wrap(axes,GL_REPEAT,GL_CLAMP_TO_EDGE,COD1_IMAGE_CLAMP_X,COD1_IMAGE_CLAMP_Y);
 			if ( !token[0] ) {
 				ri.Printf( PRINT_WARNING, "WARNING: missing parameter for 'map' keyword in shader '%s'\n", shader.name );
 				return qfalse;
 			}
 
 //----(SA)	fixes startup error and allows polygon shadows to work again
-			if ( !Q_stricmp( token, "$whiteimage" ) || !Q_stricmp( token, "*white" ) ) {
+			if ( C1Map_Source(token)==C1MAP_WHITE ) {
 //----(SA)	end
 				stage->bundle[0].image[0] = tr.whiteImage;
 				continue;
 			}
 //----(SA) added
-			else if ( !Q_stricmp( token, "$dlight" ) ) {
+			else if ( C1Map_Source(token)==C1MAP_DLIGHT ) {
 				stage->bundle[0].image[0] = tr.dlightImage;
 				continue;
 			}
 //----(SA) end
-			else if ( !Q_stricmp( token, "$lightmap" ) ) {
+			else if ( C1Map_Source(token)==C1MAP_LIGHTMAP ) {
 				stage->bundle[0].isLightmap = qtrue;
 				if ( shader.lightmapIndex < 0 ) {
 					stage->bundle[0].image[0] = tr.whiteImage;
@@ -625,7 +1289,8 @@ static qboolean ParseStage( shaderStage_t *stage, char **text ) {
 			{
 //----(SA)	modified
 //				stage->bundle[0].image[0] = R_FindImageFile( token, !shader.noMipMaps, !shader.noPicMip, GL_REPEAT );
-				stage->bundle[0].image[0] = R_FindImageFileExt( token, !shader.noMipMaps, !shader.noPicMip, shader.characterMip, GL_REPEAT );
+				stage->bundle[0].image[0] = R_Cod1StageImageEx( token, !shader.noMipMaps, !shader.noPicMip, shader.characterMip, mapWrap,R_Cod1StageMultiplyIdentity(stage) );
+                R_Cod1MapPolicyTrace(token,mapLoadFlags,stage->bundle[0].image[0]);
 //----(SA)	end
 				if ( !stage->bundle[0].image[0] ) {
 					ri.Printf( PRINT_WARNING, "WARNING: R_FindImageFile could not find '%s' in shader '%s'\n", token, shader.name );
@@ -643,7 +1308,7 @@ static qboolean ParseStage( shaderStage_t *stage, char **text ) {
 				return qfalse;
 			}
 
-			stage->bundle[0].image[0] = R_FindImageFileExt( token, !shader.noMipMaps, !shader.noPicMip, shader.characterMip, GL_CLAMP );
+			stage->bundle[0].image[0] = R_Cod1StageImageEx( token, !shader.noMipMaps, !shader.noPicMip, shader.characterMip, GL_CLAMP,R_Cod1StageMultiplyIdentity(stage) );
 			if ( !stage->bundle[0].image[0] ) {
 				ri.Printf( PRINT_WARNING, "WARNING: R_FindImageFile could not find '%s' in shader '%s'\n", token, shader.name );
 				return qfalse;
@@ -670,7 +1335,7 @@ static qboolean ParseStage( shaderStage_t *stage, char **text ) {
 				}
 				num = stage->bundle[0].numImageAnimations;
 				if ( num < MAX_IMAGE_ANIMATIONS ) {
-					stage->bundle[0].image[num] = R_FindImageFileExt( token, !shader.noMipMaps, !shader.noPicMip, shader.characterMip, GL_REPEAT );
+					stage->bundle[0].image[num] = R_Cod1StageImage( token, !shader.noMipMaps, !shader.noPicMip, shader.characterMip, GL_REPEAT );
 					if ( !stage->bundle[0].image[num] ) {
 						ri.Printf( PRINT_WARNING, "WARNING: R_FindImageFile could not find '%s' in shader '%s'\n", token, shader.name );
 						return qfalse;
@@ -751,7 +1416,10 @@ static qboolean ParseStage( shaderStage_t *stage, char **text ) {
 		else if ( !Q_stricmp( token, "blendfunc" ) ) {
 			token = COM_ParseExt( text, qfalse );
 			if ( token[0] == 0 ) {
-				ri.Printf( PRINT_WARNING, "WARNING: missing parm for blendFunc in shader '%s'\n", shader.name );
+                if(R_Cod1NativeMaterialSource())
+                    ri.Printf(PRINT_WARNING,"CoD1 R60 native recovery: incomplete blendFunc ignored; blend/depth unchanged in shader '%s'\n",shader.name);
+                else
+				    ri.Printf( PRINT_WARNING, "WARNING: missing parm for blendFunc in shader '%s'\n", shader.name );
 				continue;
 			}
 			// check for "simple" blends first
@@ -766,13 +1434,18 @@ static qboolean ParseStage( shaderStage_t *stage, char **text ) {
 				blendDstBits = GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA;
 			} else {
 				// complex double blends
-				blendSrcBits = NameToSrcBlendMode( token );
+                int sourceBits=NameToSrcBlendMode(token);
+                if(!R_Cod1NativeMaterialSource())blendSrcBits=sourceBits;
 
 				token = COM_ParseExt( text, qfalse );
 				if ( token[0] == 0 ) {
-					ri.Printf( PRINT_WARNING, "WARNING: missing parm for blendFunc in shader '%s'\n", shader.name );
+                    if(R_Cod1NativeMaterialSource())
+                        ri.Printf(PRINT_WARNING,"CoD1 R60 native recovery: incomplete blendFunc ignored; blend/depth unchanged in shader '%s'\n",shader.name);
+                    else
+					    ri.Printf( PRINT_WARNING, "WARNING: missing parm for blendFunc in shader '%s'\n", shader.name );
 					continue;
 				}
+                blendSrcBits=sourceBits;
 				blendDstBits = NameToDstBlendMode( token );
 			}
 
@@ -803,6 +1476,11 @@ static qboolean ParseStage( shaderStage_t *stage, char **text ) {
 				stage->constantColor[2] = 255 * color[2];
 
 				stage->rgbGen = CGEN_CONST;
+            } else if (!Q_stricmp(token,"constLighting")) {
+                if(!R_Cod1ParseConstLighting(text,stage)) {
+                    ri.Printf(PRINT_WARNING,"CoD1 R55 constLighting rejected: malformed/nonfinite or unrepresentable vector in %s\n",shader.name);
+                    return qfalse;
+                }
 			} else if ( !Q_stricmp( token, "identity" ) )    {
 				stage->rgbGen = CGEN_IDENTITY;
 			} else if ( !Q_stricmp( token, "identityLighting" ) )    {
@@ -820,11 +1498,26 @@ static qboolean ParseStage( shaderStage_t *stage, char **text ) {
 				stage->rgbGen = CGEN_EXACT_VERTEX;
 			} else if ( !Q_stricmp( token, "lightingDiffuse" ) )    {
 				stage->rgbGen = CGEN_LIGHTING_DIFFUSE;
+            } else if ( !Q_stricmp(token,"lightingPrecalc") ) {
+                /* R52 source-proven model input, not an alias for diffuse.
+                 * World/2D precalc is not silently assigned model semantics. */
+                if (!shader.cod1StaticModelSource &&
+                    !(shader.cod1ShaderType && shader.cod1ShaderTypeLightmapKey==LIGHTMAP_NONE)) {
+                    ri.Printf(PRINT_WARNING,"R52 lightingPrecalc: native static-instance input required; other producers unverified: %s\n",shader.name);
+                    return qfalse;
+                }
+                stage->rgbGen=CGEN_COD1_PRECALC;
 			} else if ( !Q_stricmp( token, "oneMinusVertex" ) )    {
 				stage->rgbGen = CGEN_ONE_MINUS_VERTEX;
 			} else
 			{
 				ri.Printf( PRINT_WARNING, "WARNING: unknown rgbGen parameter '%s' in shader '%s'\n", token, shader.name );
+                if(R_Cod1NativeMaterialSource()) {
+                    /* Native 0x4ee093 warns and skips the source line. It
+                     * does not alias an unknown mode to const/constLighting. */
+                    SkipRestOfLine(text);
+                    ri.Printf(PRINT_WARNING,"CoD1 R60 native recovery: unrecognized rgbGen skipped; prior RGB mode retained in shader '%s'\n",shader.name);
+                }
 				continue;
 			}
 		}
@@ -832,6 +1525,9 @@ static qboolean ParseStage( shaderStage_t *stage, char **text ) {
 		// alphaGen
 		//
 		else if ( !Q_stricmp( token, "alphaGen" ) ) {
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+			alphaGenExplicit = qtrue;
+#endif
 			token = COM_ParseExt( text, qfalse );
 			if ( token[0] == 0 ) {
 				ri.Printf( PRINT_WARNING, "WARNING: missing parameters for alphaGen in shader '%s'\n", shader.name );
@@ -972,6 +1668,16 @@ static qboolean ParseStage( shaderStage_t *stage, char **text ) {
 		}
 	}
 
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+	/* Native v59 parser promotes the implicit alpha of an authored
+	 * exactVertex stage to vertex alpha (R19 parser and R21 consumer).
+	 * Explicit alphaGen, including identity, remains authored. */
+	if ( cod1Bsp59WorldMaterialSource && stage->rgbGen == CGEN_EXACT_VERTEX &&
+		 !alphaGenExplicit && stage->alphaGen == AGEN_IDENTITY ) {
+		stage->alphaGen = AGEN_VERTEX;
+	}
+#endif
+
 
 	//
 	// implicitly assume that a GL_ONE GL_ZERO blend mask disables blending
@@ -982,8 +1688,18 @@ static qboolean ParseStage( shaderStage_t *stage, char **text ) {
 		depthMaskBits = GLS_DEPTHMASK_TRUE;
 	}
 
+	/* The original CoD HUD mask uses DrawStretchPic color alpha for the ADS
+	 * transition, despite omitting alphaGen. Restrict this compatibility
+	 * default to that exact 2D mask; do not alter global RTCW shader defaults
+	 * or materials with explicit non-identity alpha animation. */
+	if ( shader.lightmapIndex == LIGHTMAP_2D &&
+		 !Q_stricmp( shader.name, "ui/assets/reticle_circle_quarter" ) &&
+		 stage->alphaGen == AGEN_IDENTITY ) {
+		stage->alphaGen = AGEN_VERTEX;
+	}
+
 	// decide which agens we can skip
-	if ( stage->alphaGen == CGEN_IDENTITY ) {
+	if ( stage->alphaGen == (R_Cod1NativeMaterialSource()?AGEN_IDENTITY:CGEN_IDENTITY) ) {
 		if ( stage->rgbGen == CGEN_IDENTITY
 			 || stage->rgbGen == CGEN_LIGHTING_DIFFUSE ) {
 			stage->alphaGen = AGEN_SKIP;
@@ -1000,6 +1716,12 @@ static qboolean ParseStage( shaderStage_t *stage, char **text ) {
 
 	return qtrue;
 }
+
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+static qboolean ParseStage( shaderStage_t *stage, char **text ) {
+	return ParseStageForSource( stage, text, qfalse );
+}
+#endif
 
 /*
 ===============
@@ -1152,11 +1874,23 @@ ParseSkyParms
 skyParms <outerbox> <cloudheight> <innerbox>
 ===============
 */
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
+#endif
+
 static void ParseSkyParms( char **text ) {
 	char        *token;
 	static char *suf[6] = {"rt", "bk", "lf", "ft", "up", "dn"};
 	char pathname[MAX_QPATH];
 	int i;
+	int skyWrap = GL_CLAMP;
+	/* GL_CLAMP blends in the default black border at UV 0/1. Sky faces
+	 * meet at exactly those coordinates; use edge texels at every mip. */
+	if ( atof( glConfig.version_string ) >= 1.2 ||
+		 strstr( glConfig.extensions_string, "GL_EXT_texture_edge_clamp" ) ||
+		 strstr( glConfig.extensions_string, "GL_SGIS_texture_edge_clamp" ) ) {
+		skyWrap = GL_CLAMP_TO_EDGE;
+	}
 
 	// outerbox
 	token = COM_ParseExt( text, qfalse );
@@ -1168,7 +1902,7 @@ static void ParseSkyParms( char **text ) {
 		for ( i = 0 ; i < 6 ; i++ ) {
 			Com_sprintf( pathname, sizeof( pathname ), "%s_%s.tga"
 						 , token, suf[i] );
-			shader.sky.outerbox[i] = R_FindImageFile( ( char * ) pathname, qtrue, qtrue, GL_CLAMP );
+			shader.sky.outerbox[i] = R_FindImageFile( ( char * ) pathname, qtrue, qtrue, skyWrap );
 			if ( !shader.sky.outerbox[i] ) {
 				shader.sky.outerbox[i] = tr.defaultImage;
 			}
@@ -1198,7 +1932,7 @@ static void ParseSkyParms( char **text ) {
 		for ( i = 0 ; i < 6 ; i++ ) {
 			Com_sprintf( pathname, sizeof( pathname ), "%s_%s.tga"
 						 , token, suf[i] );
-			shader.sky.innerbox[i] = R_FindImageFile( ( char * ) pathname, qtrue, qtrue, GL_CLAMP );
+			shader.sky.innerbox[i] = R_FindImageFile( ( char * ) pathname, qtrue, qtrue, skyWrap );
 			if ( !shader.sky.innerbox[i] ) {
 				shader.sky.innerbox[i] = tr.defaultImage;
 			}
@@ -1223,6 +1957,21 @@ void ParseSort( char **text ) {
 		return;
 	}
 
+    if(cod1BundleAuthStrict) {
+        int value;
+        if(Cod1PL_NativeSort(token,&value)) {shader.sort=(float)value;return;}
+    }
+    if(shader.cod1ShaderType) {
+        static const struct {const char *name;float value;} extra[]={
+            {"ocean",3},{"boathull",4},{"water",11},{"corona",12},
+            {"innerBlend",13},{"outerBlend",14},{"blend",15},{"blend2",16},
+            {"blend3",17},{"blend4",18}
+        };
+        unsigned i;
+        for(i=0;i<sizeof(extra)/sizeof(extra[0]);++i)if(!Q_stricmp(token,extra[i].name)) {
+            shader.sort=extra[i].value;return;
+        }
+    }
 	if ( !Q_stricmp( token, "portal" ) ) {
 		shader.sort = SS_PORTAL;
 	} else if ( !Q_stricmp( token, "sky" ) ) {
@@ -1236,7 +1985,13 @@ void ParseSort( char **text ) {
 	} else if ( !Q_stricmp( token, "banner" ) ) {
 		shader.sort = SS_BANNER;
 	} else if ( !Q_stricmp( token, "additive" ) ) {
+#if defined(COD1_BSP59_SORT_ADDITIVE_CANDIDATE) && COD1_BSP59_SORT_ADDITIVE_CANDIDATE
+		/* Live CoDSP parser maps additive to 19.0; R41B also measured 19.0
+		 * in two registered shoreline shaders. Port GL queue parity is pending. */
+		shader.sort = shader.cod1Bsp59WorldMaterialSource ? 19.0f : SS_BLEND1;
+#else
 		shader.sort = SS_BLEND1;
+#endif
 	} else if ( !Q_stricmp( token, "nearest" ) ) {
 		shader.sort = SS_NEAREST;
 	} else if ( !Q_stricmp( token, "underwater" ) ) {
@@ -1372,7 +2127,11 @@ shader.  Parse it into the global shader variable.  Later functions
 will optimize it.
 =================
 */
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+static qboolean ParseShaderForSource( char **text, qboolean cod1Bsp59WorldMaterialSource ) {
+#else
 static qboolean ParseShader( char **text ) {
+#endif
 	char *token;
 	int s;
 
@@ -1398,11 +2157,26 @@ static qboolean ParseShader( char **text ) {
 		}
 		// stage definition
 		else if ( token[0] == '{' ) {
+            if(s>=MAX_SHADER_STAGES) {
+                ri.Printf(PRINT_WARNING,"WARNING: too many stages in %s\n",shader.name);
+                return qfalse;
+            }
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+			if ( !ParseStageForSource( &stages[s], text, cod1Bsp59WorldMaterialSource ) ) {
+#else
 			if ( !ParseStage( &stages[s], text ) ) {
+#endif
 				return qfalse;
 			}
-			stages[s].active = qtrue;
-			s++;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+            if(!stages[s].active) {
+                stages[s].bundle[1].texMods=cod1Bundle1TexMods[s];
+                stages[s].bundle[2].texMods=cod1Bundle2TexMods[s];
+            }
+#endif
+            if(stages[s].active) s++;
+            else stages[s].bundle[0].texMods=texMods[s];
+            /* Inactive stage was explicitly consumed (cratered perlight). */
 			continue;
 		}
 		// skip stuff that only the QuakeEdRadient needs
@@ -1463,7 +2237,8 @@ static qboolean ParseShader( char **text ) {
 		// no mip maps
 		else if ( !Q_stricmp( token, "nomipmaps" ) ) {
 			shader.noMipMaps = qtrue;
-			shader.noPicMip = qtrue;
+            /* CoDSP 0x4eff63 / 0x4eff82 stores independent mip/pic flags. */
+			if ( !shader.cod1ShaderType ) shader.noPicMip = qtrue;
 			continue;
 		}
 		// no picmip adjustment
@@ -1476,9 +2251,22 @@ static qboolean ParseShader( char **text ) {
 			shader.characterMip = qtrue;
 			continue;
 		}
-		// polygonOffset
+		/* CoDSP 0x4effb0..0x4f001e selects exclusive offset modes, with the
+		 * last keyword winning. GL dispatch 0x4cb8ed..0x4cb96d doubles both
+		 * cvar values for offset2 and uses factor zero for offsetConst. */
 		else if ( !Q_stricmp( token, "polygonOffset" ) ) {
 			shader.polygonOffset = qtrue;
+			shader.cod1PolygonOffsetMode = 0;
+			continue;
+		}
+		else if ( !Q_stricmp( token, "polygonOffset2" ) ) {
+			shader.polygonOffset = qtrue;
+			shader.cod1PolygonOffsetMode = 1;
+			continue;
+		}
+		else if ( !Q_stricmp( token, "polygonOffsetConst" ) ) {
+			shader.polygonOffset = qtrue;
+			shader.cod1PolygonOffsetMode = 2;
 			continue;
 		}
 		// entityMergable, allowing sprite surfaces from multiple entities
@@ -1514,6 +2302,26 @@ static qboolean ParseShader( char **text ) {
 		// skyparms <cloudheight> <outerbox> <innerbox>
 		else if ( !Q_stricmp( token, "skyparms" ) ) {
 			ParseSkyParms( text );
+			continue;
+		}
+		else if ( !Q_stricmp( token, "sunfile" ) ) {
+            token = COM_ParseExt( text, qfalse );
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA && \
+    defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+            if (cod1Bsp59WorldMaterialSource) {
+                int captured;
+                captured=Cod1Sun_CaptureName(tr.cod1SunFile,token);
+                if(captured) {
+                    shader.cod1SunFileSeen=qtrue;
+                    Q_strncpyz(shader.cod1SunFile,tr.cod1SunFile,sizeof(shader.cod1SunFile));
+                }
+                if(captured<=0)ri.Printf(PRINT_WARNING,"CoD1 sunfile: %s name in %s\n",
+                    captured<0?"overlong":"empty",shader.name);
+            }
+#else
+            if ( !token[0] || !strcmp( token, "}" ) ) return qfalse;
+            ri.Printf( PRINT_DEVELOPER, "CoD1 sky: sunfile '%s' deferred\n", token );
+#endif
 			continue;
 		}
 		// This is fixed fog for the skybox/clouds determined solely by the shader
@@ -1704,6 +2512,12 @@ static qboolean ParseShader( char **text ) {
 	return qtrue;
 }
 
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+static qboolean ParseShader( char **text ) {
+	return ParseShaderForSource( text, qfalse );
+}
+#endif
+
 /*
 ========================================================================================
 
@@ -1721,7 +2535,13 @@ otherwise set to the generic stage function
 ===================
 */
 static void ComputeStageIteratorFunc( void ) {
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+    if(shader.cod1WaterRuntime){shader.optimalStageIteratorFunc=RB_StageIteratorCod1Water;return;}
+#endif
 	shader.optimalStageIteratorFunc = RB_StageIteratorGeneric;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    if(shader.cod1PerlightRuntime)return;
+#endif
 
 	//
 	// see if this should go into the sky path
@@ -1730,6 +2550,14 @@ static void ComputeStageIteratorFunc( void ) {
 		shader.optimalStageIteratorFunc = RB_StageIteratorSky;
 		goto done;
 	}
+
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	/* The lightmap fast path uses its own hardcoded GL_TexEnv and therefore
+	 * cannot consume an explicit per-stage combine. */
+	if ( R_Cod1AnyThirdBundle() || (shader.numUnfoggedPasses == 1 && stages[0].cod1TexEnv) ) {
+		return;
+	}
+#endif
 
 	if ( r_ignoreFastPath->integer ) {
 		return;
@@ -1834,6 +2662,9 @@ static qboolean CollapseMultitexture( void ) {
 		return qfalse;
 	}
 
+    /* Already bundled CoD stages must not be collapsed a second time. */
+    if(stages[0].bundle[1].image[0] || stages[1].bundle[1].image[0] ||
+       R_Cod1ThirdBundle(&stages[0]) || R_Cod1ThirdBundle(&stages[1]))return qfalse;
 	// make sure both stages are active
 	if ( !stages[0].active || !stages[1].active ) {
 		return qfalse;
@@ -1877,10 +2708,22 @@ static qboolean CollapseMultitexture( void ) {
 		return qfalse;
 	}
 
-	// make sure waveforms have identical parameters
+	/* Native 0x4f08b7..0x4f08d3 retains the first stage's generators
+	 * when a modulating second stage supplies identity RGB and alpha.
+	 * In particular, diffuse vertex color and an identity lightmap form
+	 * one fogged draw. Keep the legacy generator equality rule otherwise. */
 	if ( ( stages[0].rgbGen != stages[1].rgbGen ) ||
 		 ( stages[0].alphaGen != stages[1].alphaGen ) ) {
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+		if ( !R_Cod1NativeMaterialSource() ||
+			 collapse[i].multitextureEnv != GL_MODULATE ||
+			 stages[1].rgbGen != CGEN_IDENTITY ||
+			 ( stages[1].alphaGen != AGEN_IDENTITY &&
+			   stages[1].alphaGen != AGEN_SKIP ) )
+#endif
+		{
 		return qfalse;
+		}
 	}
 
 	// an add collapse can only have identity colors
@@ -1980,6 +2823,23 @@ static shader_t *GeneratePermanentShader( void ) {
 	newShader = R_CacheShaderAlloc( sizeof( shader_t ) );
 
 	*newShader = shader;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    if(shader.cod1PerlightRuntime) {
+        cod1PerlightRuntime_t *program=R_CacheShaderAlloc(sizeof(*program));
+        *program=*shader.cod1PerlightRuntime;
+        for(i=0;i<program->numStages;++i)for(b=0;b<NUM_TEXTURE_BUNDLES;++b) {
+            textureBundle_t *bundle=&program->stage[i].bundle[b];
+            if(!bundle->numTexMods)bundle->texMods=NULL;
+            else {
+                texModInfo_t *old=bundle->texMods;
+                size=bundle->numTexMods*sizeof(*old);
+                bundle->texMods=R_CacheShaderAlloc(size);
+                memcpy(bundle->texMods,old,size);
+            }
+        }
+        newShader->cod1PerlightRuntime=program;
+    }
+#endif
 
 	if ( shader.sort <= SS_OPAQUE ) {
 		newShader->fogPass = FP_EQUAL;
@@ -2167,7 +3027,7 @@ static shader_t *FinishShader( void ) {
 		//
 		// ditch this stage if it's detail and detail textures are disabled
 		//
-		if ( pStage->isDetail && !r_detailTextures->integer ) {
+		if ( !shader.cod1ShaderType && !R_Cod1ThirdBundle(pStage) && pStage->isDetail && !r_detailTextures->integer ) {
 			if ( stage < ( MAX_SHADER_STAGES - 1 ) ) {
 				memmove( pStage, pStage + 1, sizeof( *pStage ) * ( MAX_SHADER_STAGES - stage - 1 ) );
 				// kill the last stage, since it's now a duplicate
@@ -2198,6 +3058,16 @@ static shader_t *FinishShader( void ) {
 			}
 		}
 
+
+        for(i=1;i<NUM_TEXTURE_BUNDLES;++i)
+            if(pStage->bundle[i].isLightmap && pStage->bundle[i].image[0])hasLightmapStage=qtrue;
+
+        if(R_Cod1NativeMaterialSource() && !(pStage->stateBits&GLS_ATEST_BITS)) {
+            unsigned blend=pStage->stateBits&(GLS_SRCBLEND_BITS|GLS_DSTBLEND_BITS);
+            if(blend==(GLS_SRCBLEND_SRC_ALPHA|GLS_DSTBLEND_ONE) ||
+               blend==(GLS_SRCBLEND_SRC_ALPHA|GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA))
+                pStage->stateBits|=GLS_ATEST_GT_0;
+        }
 
 		// not a true lightmap but we want to leave existing
 		// behaviour in place and not print out a warning
@@ -2243,8 +3113,24 @@ static shader_t *FinishShader( void ) {
 				if ( pStage->stateBits & GLS_DEPTHMASK_TRUE ) {
 					shader.sort = SS_SEE_THROUGH;
 				} else {
-					shader.sort = SS_BLEND0;
+                    shader.sort = (shader.cod1ShaderType &&
+                        (stages[0].stateBits&GLS_DSTBLEND_BITS)==GLS_DSTBLEND_ONE)?SS_BLEND1:SS_BLEND0;
 				}
+			}
+		}
+	}
+
+	/* Static XModels supply prepared diffuse RGB through their vertex stream.
+	 * Bind authored lightingDiffuse after stage validation, for both explicit
+	 * scripts and @ types, before collapse and iterator selection. The static
+	 * registration role owns this candidate; alpha and other RGB inputs retain
+	 * their authored rules. No cached or non-static shader is rewritten. */
+	shader.cod1StaticLightingDiffuseBridge = qfalse;
+	if ( shader.cod1StaticModelSource && !shader.defaultShader ) {
+		for ( i = 0; i < stage && stages[i].active; i++ ) {
+			if ( stages[i].rgbGen == CGEN_LIGHTING_DIFFUSE ) {
+				shader.cod1StaticLightingDiffuseBridge = qtrue;
+				stages[i].rgbGen = CGEN_EXACT_VERTEX;
 			}
 		}
 	}
@@ -2258,7 +3144,11 @@ static shader_t *FinishShader( void ) {
 	//
 	// if we are in r_vertexLight mode, never use a lightmap texture
 	//
-	if ( stage > 1 && ( ( r_vertexLight->integer && !r_uiFullScreen->integer ) || glConfig.hardwareType == GLHW_PERMEDIA2 ) ) {
+	if ( !shader.cod1ShaderType && !R_Cod1AnyThirdBundle()
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+         && !shader.cod1WaterRuntime
+#endif
+         && stage > 1 && ( ( r_vertexLight->integer && !r_uiFullScreen->integer ) || glConfig.hardwareType == GLHW_PERMEDIA2 ) ) {
 		VertexLightingCollapse();
 		stage = 1;
 		hasLightmapStage = qfalse;
@@ -2267,7 +3157,11 @@ static shader_t *FinishShader( void ) {
 	//
 	// look for multitexture potential
 	//
-	if ( stage > 1 && CollapseMultitexture() ) {
+	if ( stage > 1
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+         && !shader.cod1WaterRuntime
+#endif
+         && CollapseMultitexture() ) {
 		stage--;
 	}
 
@@ -2276,9 +3170,29 @@ static shader_t *FinishShader( void ) {
 			ri.Printf( PRINT_DEVELOPER, "WARNING: shader '%s' has VERTEX forced lightmap!\n", shader.name );
 		} else {
 			ri.Printf( PRINT_DEVELOPER, "WARNING: shader '%s' has lightmap but no lightmap stage!\n", shader.name );
+#if COD1_NATIVE_LIGHTMAP_PACK
+			if ( cod1PackedWorldShaders
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+			     && shader.cod1Bsp59WorldMaterialSource
+#endif
+			     ) {
+				shader.cod1PackedLightmapFree=qtrue;
+			}
+#endif
 			shader.lightmapIndex = LIGHTMAP_NONE;
 		}
 	}
+
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP && \
+    defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+	/* Stage policy follows the v59 material-table request, including the
+	 * legacy parser and diffuse fallback. It never follows an image name. */
+	if ( shader.cod1Bsp59WorldMaterialSource ) {
+		for ( i = 0; i < stage; i++ ) {
+			stages[i].cod1NativeFogColor=qtrue;
+		}
+	}
+#endif
 
 
 	//
@@ -2301,6 +3215,13 @@ static shader_t *FinishShader( void ) {
 
 	return GeneratePermanentShader();
 }
+
+#if COD1_NATIVE_LIGHTMAP_PACK
+static qboolean R_Cod1PackedLightmapFreeMatch( const shader_t *sh, int lightmapIndex ) {
+	return cod1PackedWorldShaders && lightmapIndex >= 0 &&
+		sh->lightmapIndex == LIGHTMAP_NONE && sh->cod1PackedLightmapFree;
+}
+#endif
 
 //========================================================================================
 
@@ -2413,6 +3334,299 @@ shader_t *R_FindShaderByName( const char *name ) {
 
 
 /*
+========================
+R_CoD1FindImageCandidate
+
+CoDA's working material viewer taught us that CoD1 shader/material names often
+resolve to DDS directly, while some variants use .blend/.masked suffixes.  Keep
+that knowledge in the renderer compatibility path instead of hard-coding map
+material names.
+========================
+*/
+static image_t *R_CoD1FindImageCandidate( const char *name, qboolean mipRawImage, int wrapMode ) {
+	char fileName[MAX_QPATH];
+	image_t *image;
+	const char *extensions[] = { ".dds", ".tga", ".jpg", ".blend.dds", ".blend.tga", ".masked.dds", ".masked.tga" };
+	const char *slash, *backslash, *dot, *lastSep;
+	int i;
+
+	if ( !name || !name[0] || name[0] == '$' ) {
+		return NULL;
+	}
+
+	/* Exact path first when the shader text already supplies an extension. */
+	slash = strrchr( name, '/' );
+	backslash = strrchr( name, '\\' );
+	lastSep = slash;
+	if ( backslash && ( !lastSep || backslash > lastSep ) ) {
+		lastSep = backslash;
+	}
+	dot = strrchr( name, '.' );
+	if ( dot && ( !lastSep || dot > lastSep ) ) {
+		image = R_FindImageFile( name, mipRawImage, mipRawImage, wrapMode );
+		if ( image ) {
+			return image;
+		}
+	}
+
+	for ( i = 0; i < (int)( sizeof( extensions ) / sizeof( extensions[0] ) ); i++ ) {
+		Q_strncpyz( fileName, name[0] == '*' ? name + 1 : name, sizeof( fileName ) );
+		COM_StripExtension( fileName, fileName );
+		Q_strcat( fileName, sizeof( fileName ), extensions[i] );
+		image = R_FindImageFile( fileName, mipRawImage, mipRawImage, wrapMode );
+		if ( image ) {
+			ri.Printf( PRINT_DEVELOPER, "CoD material image fallback: %s -> %s\n", name, fileName );
+			return image;
+		}
+	}
+	return NULL;
+}
+
+
+
+
+/* Source-level probe over any explicit shader. There is no name table and no
+ * call into FinishShader or GL. Hash the source following the material name,
+ * including whitespace before '{': shaderTextStart points into the combined
+ * in-memory script text just after COM_ParseExt has consumed the name.
+ */
+#if defined(COD1_MATERIAL_PROBE_DIAGNOSTICS) && COD1_MATERIAL_PROBE_DIAGNOSTICS
+#define COD1_MP_SEEN_SIZE 4096
+typedef struct {
+    char name[MAX_QPATH];
+    unsigned long sourceOffset;
+    unsigned hash;
+    unsigned selectedMask;
+    unsigned unknownMask;
+    unsigned candidateMask;
+    unsigned blockedMask;
+    unsigned excludedMask;
+    int sourceValid;
+    unsigned uses;
+} cod1MpSeen_t;
+static cod1MpSeen_t cod1MpSeen[COD1_MP_SEEN_SIZE];
+static unsigned cod1MpUnique, cod1MpDuplicates, cod1MpOverflow;
+typedef struct {
+    char name[MAX_QPATH];
+    unsigned long sourceOffset;
+    int requestedLightmap;
+} cod1MpCompiledSeen_t;
+static cod1MpCompiledSeen_t cod1MpCompiledSeen[COD1_MP_SEEN_SIZE];
+static unsigned cod1MpCompiledUnique,cod1MpCompiledDuplicates,cod1MpCompiledOverflow;
+static unsigned cod1MpCompiledReentrant;
+static int cod1MpCompiledLogging;
+
+static cod1MpTruth_t R_Cod1ProbeExtension(const char *name,void *unused) {
+    (void)unused;
+    /* The R5 backend does not execute these authored GPU paths even if the
+     * driver's extension string advertises them. Other caps stay unknown. */
+    if (!strcmp(name,"GL_NV_texture_shader") || !strcmp(name,"GL_NV_register_combiners") ||
+        !strcmp(name,"GL_ATI_fragment_shader") || !strcmp(name,"GL_ARB_texture_cube_map"))
+        return COD1_MP_FALSE;
+    return COD1_MP_UNKNOWN;
+}
+static cod1MpSeen_t *R_Cod1ProbeClaim(const char *name,unsigned long offset) {
+    unsigned i,slot=((unsigned)generateHashValue(name)^(unsigned)offset)&(COD1_MP_SEEN_SIZE-1);
+    for (i=0;i<COD1_MP_SEEN_SIZE;++i) {
+        cod1MpSeen_t *seen=&cod1MpSeen[(slot+i)&(COD1_MP_SEEN_SIZE-1)];
+        if (!seen->name[0]) {
+            Q_strncpyz(seen->name,name,sizeof(seen->name));
+            seen->sourceOffset=offset;seen->uses=1;++cod1MpUnique;
+            return seen;
+        }
+        if (seen->sourceOffset==offset && !Q_stricmp(seen->name,name)) {
+            ++seen->uses;++cod1MpDuplicates;
+            return NULL;
+        }
+    }
+    ++cod1MpOverflow;
+    return NULL;
+}
+static const cod1MpSeen_t *R_Cod1ProbeSource(const char *name,unsigned long offset) {
+    unsigned i,slot=((unsigned)generateHashValue(name)^(unsigned)offset)&(COD1_MP_SEEN_SIZE-1);
+    for (i=0;i<COD1_MP_SEEN_SIZE;++i) {
+        const cod1MpSeen_t *seen=&cod1MpSeen[(slot+i)&(COD1_MP_SEEN_SIZE-1)];
+        if (!seen->name[0]) return NULL;
+        if (seen->sourceOffset==offset && !Q_stricmp(seen->name,name)) return seen;
+    }
+    return NULL;
+}
+static int R_Cod1ProbeClaimCompiled(const char *name,unsigned long offset,int requestedLm) {
+    unsigned i,slot=((unsigned)generateHashValue(name)^(unsigned)offset^
+        ((unsigned)requestedLm*2654435761U))&(COD1_MP_SEEN_SIZE-1);
+    for (i=0;i<COD1_MP_SEEN_SIZE;++i) {
+        cod1MpCompiledSeen_t *seen=&cod1MpCompiledSeen[(slot+i)&(COD1_MP_SEEN_SIZE-1)];
+        if (!seen->name[0]) {
+            Q_strncpyz(seen->name,name,sizeof(seen->name));
+            seen->sourceOffset=offset;seen->requestedLightmap=requestedLm;
+            ++cod1MpCompiledUnique;
+            return 1;
+        }
+        if (seen->sourceOffset==offset && seen->requestedLightmap==requestedLm &&
+            !Q_stricmp(seen->name,name)) {
+            ++cod1MpCompiledDuplicates;
+            return 0;
+        }
+    }
+    ++cod1MpCompiledOverflow;
+    return 0;
+}
+static void R_Cod1ProbeMaterial(const char *name,const char *body) {
+    cod1MpCaps_t caps;
+    cod1MeBackend_t backend;
+    cod1MeResult_t eligibility;
+    cod1MaterialProbe_t ir;
+    cod1MpSeen_t *seen;
+    char stagesReport[512],imageReport[1024],part[256];
+    unsigned long offset;
+    int i,j,valid,more=0;
+    offset=(unsigned long)(body-s_shaderText);
+    seen=R_Cod1ProbeClaim(name,offset);
+    if (!seen) return;
+    caps.units=qglActiveTextureARB?2:1;
+    caps.extension=R_Cod1ProbeExtension;
+    caps.cvar=NULL;caps.user=NULL;
+    valid=Cod1MP_Parse(body,&caps,&ir);
+    seen->hash=valid?ir.sourceHash:0;
+    seen->sourceValid=valid;
+    seen->selectedMask=valid?ir.selectedMask:0;
+    seen->unknownMask=valid?ir.unknownMask:0;
+    if (!valid) {
+        ri.Printf(PRINT_WARNING,
+            "CoD1 material probe: source=combined+%lu name=%s parser=unsupported (%s); render path unchanged\n",
+            offset,name,ir.error);
+        return;
+    }
+    /* This is a declared implemented profile, not an inference that any
+     * advertised driver extension has a corresponding renderer path. */
+    backend.maxBundles=caps.units;
+    Cod1ME_Evaluate(&ir,&backend,&eligibility);
+    seen->candidateMask=eligibility.candidateMask;
+    seen->blockedMask=eligibility.blockedMask;
+    seen->excludedMask=eligibility.excludedMask;
+    stagesReport[0]=0;
+    imageReport[0]=0;
+    for (i=0;i<ir.numStages;++i) {
+        const cod1MpStage_t *s=&ir.stage[i];
+        if (s->selected==COD1_MP_FALSE) continue;
+        Com_sprintf(part,sizeof(part),"%s%d:%c:%s:b%d",
+            stagesReport[0]?",":"",i,s->selected==COD1_MP_TRUE?'T':'?',
+            s->blockingOpcode[0]?s->blockingOpcode:"none",s->numBundles);
+        Q_strcat(stagesReport,sizeof(stagesReport),part);
+        /* Asset probes are deliberately deferred in the live loader:
+         * R_FindImageFileExt may upload a texture and mutate image caches. */
+        if (s->selected!=COD1_MP_TRUE) continue;
+        for (j=0;j<s->numOps;++j) {
+            cod1MpImageEvent_t ev;
+            int imageOp=Cod1MP_ImageEvent(&ir,&s->op[j],&ev);
+            if (!imageOp) continue;
+            if (imageOp<0) {
+                Com_sprintf(part,sizeof(part),"%ss%d:b%d:invalid-image-op",
+                    imageReport[0]?",":"",i,s->op[j].bundle);
+            } else if (ev.kind==COD1_MP_NEXTBUNDLE) {
+                Com_sprintf(part,sizeof(part),"%ss%d:b%d:nextbundle",
+                    imageReport[0]?",":"",i,ev.bundle);
+            } else {
+                Com_sprintf(part,sizeof(part),"%ss%d:b%d:%s:%s:deferred(%s)",
+                    imageReport[0]?",":"",i,ev.bundle,
+                    ev.kind==COD1_MP_CLAMPMAP?"clampmap":(ev.clamp?"map(clamp)":"map"),ev.path,
+                    ev.path[0]=='$'?"symbol":"file");
+            }
+            if (strlen(imageReport)+strlen(part)>=sizeof(imageReport)-24) { more=1;break; }
+            Q_strcat(imageReport,sizeof(imageReport),part);
+        }
+        if (more) break;
+    }
+    if (more) Q_strcat(imageReport,sizeof(imageReport),",...");
+    ri.Printf(PRINT_WARNING,
+        "CoD1 material probe: source=combined+%lu hash=%08x name=%s backendBundles=%d "
+        "selected=%08x unknown=%08x sort=%s topBlock=%s effectiveGlobal=%s stages=[%s] images=[%s] "
+        "candidate=%08x blocked=%08x excluded=%08x; "
+#if defined(COD1_MATERIAL_STAGE_COMPILER) && COD1_MATERIAL_STAGE_COMPILER
+        "source diagnostic only; compiler separately gated\n",
+#else
+        "render path unchanged\n",
+#endif
+        offset,ir.sourceHash,name,caps.units,ir.selectedMask,ir.unknownMask,
+        ir.sortToken[0]?ir.sortToken:"-",
+        ir.topBlockingOpcode[0]?ir.topBlockingOpcode:"none",
+        eligibility.globalBlock[0]?eligibility.globalBlock:"none",stagesReport,imageReport,
+        eligibility.candidateMask,eligibility.blockedMask,eligibility.excludedMask);
+    for (i=0;i<ir.numStages;++i) {
+        ri.Printf(PRINT_WARNING,
+            "CoD1 stage eligibility: source=combined+%lu hash=%08x name=%s "
+            "stage=%d line=%d requires=%s status=%s reason=%s bundles=%d "
+            "globalBlock=%s; source-only\n",
+            offset,ir.sourceHash,name,i,ir.stage[i].line,
+            ir.stage[i].selected==COD1_MP_TRUE?"true":
+                (ir.stage[i].selected==COD1_MP_FALSE?"false":"unknown"),
+            Cod1ME_Status(eligibility.stage[i].status),eligibility.stage[i].reason,
+            ir.stage[i].numBundles,
+            eligibility.globalBlock[0]?eligibility.globalBlock:"none");
+    }
+}
+
+/* Observe the finalized shader only after R_FindShader has completed its
+ * existing parse/fallback path. Never call image lookup or GL from here. */
+static void R_Cod1ProbeCompiled(const char *name,const char *body,int requestedLm,
+                                const shader_t *compiled,const char *result) {
+    unsigned long offset=(unsigned long)(body-s_shaderText);
+    const cod1MpSeen_t *source;
+    char report[1024],part[192];
+    const char *iterator="none";
+    int i,b;
+    if (cod1MpCompiledLogging) { ++cod1MpCompiledReentrant;return; }
+    if (!R_Cod1ProbeClaimCompiled(name,offset,requestedLm)) return;
+    source=R_Cod1ProbeSource(name,offset);
+    report[0]=0;
+    if (compiled) {
+        if (compiled->optimalStageIteratorFunc==RB_StageIteratorGeneric) iterator="generic";
+        else if (compiled->optimalStageIteratorFunc==RB_StageIteratorLightmappedMultitexture) iterator="lightmap-fast";
+        else if (compiled->optimalStageIteratorFunc==RB_StageIteratorVertexLitTexture) iterator="vertex-fast";
+        else if (compiled->optimalStageIteratorFunc==RB_StageIteratorSky) iterator="sky";
+        else iterator="other";
+        for (i=0;i<compiled->numUnfoggedPasses && i<MAX_SHADER_STAGES;++i) {
+            const shaderStage_t *stage=compiled->stages[i];
+            if (!stage) break;
+            for (b=0;b<NUM_TEXTURE_BUNDLES;++b) {
+                const image_t *im=stage->bundle[b].image[0];
+                if (!im) continue;
+                Com_sprintf(part,sizeof(part),"%ss%d:b%d:%s%s",
+                    report[0] ? ",":"",i,b,
+                    stage->bundle[b].isLightmap ? "LM:":"",
+                    im->imgName[0] ? im->imgName : "(unnamed)");
+                if (strlen(report)+strlen(part)>=sizeof(report)-8) {
+                    Q_strcat(report,sizeof(report),",...");
+                    i=MAX_SHADER_STAGES;break;
+                }
+                Q_strcat(report,sizeof(report),part);
+            }
+        }
+    }
+    cod1MpCompiledLogging=1;
+    ri.Printf(PRINT_WARNING,
+        "CoD1 material result: source=combined+%lu hash=%08x name=%s "
+        "requestedLm=%d selected=%08x unknown=%08x candidate=%08x blocked=%08x "
+        "excluded=%08x sourceIR=%s result=%s "
+        "passes=%d sort=%g lm=%d multiEnv=%d iterator=%s "
+        "r_vertexLight=%d r_lightmap=%d r_ignoreFastPath=%d compiled=[%s]; observe only\n",
+        offset,source?source->hash:0,name,requestedLm,
+        source?source->selectedMask:0,source?source->unknownMask:0,
+        source?source->candidateMask:0,source?source->blockedMask:0,
+        source?source->excludedMask:0,
+        source?(source->sourceValid?"ok":"unsupported"):"unavailable",result,
+        compiled?compiled->numUnfoggedPasses:-1,compiled?compiled->sort:-1.0f,
+        compiled?compiled->lightmapIndex:LIGHTMAP_NONE,
+        compiled?compiled->multitextureEnv:0,iterator,
+        r_vertexLight?r_vertexLight->integer:-1,
+        r_lightmap?r_lightmap->integer:-1,
+        r_ignoreFastPath?r_ignoreFastPath->integer:-1,
+        report);
+    cod1MpCompiledLogging=0;
+}
+#endif
+
+/*
 ===============
 R_FindShader
 
@@ -2440,7 +3654,290 @@ most world construction surfaces.
 
 ===============
 */
-shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImage ) {
+/* R47 replaces family guesses with the original shader-type source path. */
+
+static cod1MpTruth_t R_Cod1StypeExtension(const char *name,void *unused) {
+    (void)unused;
+    if(Cod1MP_Equal(name,"GL_ARB_texture_env_add"))
+        return glConfig.textureEnvAddAvailable?COD1_MP_TRUE:COD1_MP_FALSE;
+    /* Advertise implemented fixed-function backend, not vendor hardware. */
+    if (Cod1ME_OneOf(name,"GL_NV_texture_shader GL_NV_texture_shader2 GL_NV_texture_shader3 GL_NV_register_combiners GL_NV_register_combiners2 GL_ATI_fragment_shader"))
+        return COD1_MP_FALSE;
+    return COD1_MP_UNKNOWN;
+}
+#include "cod1_perlight_static.h"
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+#include "tr_cod1_perlight_compile.h"
+#endif
+static void R_Cod1MaterialErrorStages(void);
+static qboolean R_Cod1CompilePerlightStatic(const char *body,qboolean worldSource,
+                                           qboolean beforeLegacy) {
+    cod1PlStaticResult_t result;cod1MpCaps_t caps;cod1StResult_t auth;
+    char *projected,*cursor;int ok,i;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    cod1PerlightSnapshot_t *saved=NULL;
+    qboolean unsupported;
+#endif
+    if(!body || !worldSource || !cod1Bsp59MapActive ||
+       r_vertexLight->integer || r_lightmap->integer ||
+       shader.lightmapIndex<0 || shader.lightmapIndex>=tr.numLightmaps ||
+       !tr.lightmaps[shader.lightmapIndex])return qfalse;
+    memset(&caps,0,sizeof(caps));
+    /* Native requires tests the effective GL capability. The projection
+     * validates ordinary storage separately against its two-bundle limit;
+     * lowering this operand would incorrectly exclude selected 3-unit passes. */
+    caps.units=R_Cod1NativeTextureUnits();
+    caps.extension=R_Cod1StypeExtension;
+    projected=(char*)malloc(COD1_ST_BODY);if(!projected)return qfalse;
+    if(!Cod1PL_Prepare(body,&caps,projected,COD1_ST_BODY,&result)) {
+        free(projected);
+        /* The optional first attempt must leave unsupported historical
+         * source shapes for their existing compiler. A supported source
+         * which fails image/backend resolution still owns its failure. */
+        if(beforeLegacy)return qfalse;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+        if(R_Cod1SelectedPerlight(body,&caps)) {
+            ri.Printf(PRINT_WARNING,"CoD1 R62 perLight static preflight: %s line=%d reason=%s\n",shader.name,result.line,result.reason);
+            R_Cod1MaterialErrorStages();
+            shader.cod1MaterialRoute=COD1_MATERIAL_SCRIPT_PARSE_FAILED;
+            return qtrue;
+        }
+#endif
+        return qfalse;
+    }
+#if !defined(COD1_STAGE_BACKEND_INFRA) || !COD1_STAGE_BACKEND_INFRA
+    if(result.multiplyIdentityMask) {free(projected);return qfalse;}
+#endif
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    /* Validate both ordinary and retained stages before image lookup. */
+    if(!R_Cod1PerlightPreflight(body,&caps)) {
+        if(beforeLegacy) {free(projected);return qfalse;}
+        free(projected);R_Cod1MaterialErrorStages();
+        shader.cod1MaterialRoute=COD1_MATERIAL_SCRIPT_PARSE_FAILED;
+        return qtrue;
+    }
+#endif
+    memset(&auth,0,sizeof(auth));
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    if(beforeLegacy) {
+        saved=(cod1PerlightSnapshot_t*)malloc(sizeof(*saved));
+        if(!saved) {free(projected);return qfalse;}
+        saved->shader=shader;memcpy(saved->stages,stages,sizeof(stages));
+        for(i=0;i<MAX_SHADER_STAGES;++i) {
+            memcpy(saved->mods[i][0],texMods[i],sizeof(texMods[i]));
+            memcpy(saved->mods[i][1],cod1Bundle1TexMods[i],sizeof(texMods[i]));
+            memcpy(saved->mods[i][2],cod1Bundle2TexMods[i],sizeof(texMods[i]));
+        }
+    }
+#endif
+    for(i=0;i<result.stages && i<8;++i)auth.bundleAuth[i]=result.bundleAuth[i];
+    R_Cod1SetBundleAuth(&auth,1);cod1MultiplyIdentityStages=result.multiplyIdentityMask;
+    cursor=projected;
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+    ok=ParseShaderForSource(&cursor,worldSource);
+#else
+    ok=ParseShader(&cursor);
+#endif
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    unsupported=cod1MultiplyIdentityUnsupported;
+#endif
+    R_Cod1ClearBundleAuth();
+    free(projected);
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    if(!ok && beforeLegacy && unsupported) {
+        /* Unsupported native image codecs are outside this decoded RGBA
+         * contract. Restore the complete untouched compiler scratch
+         * before the existing source-shaped legacy path gets its attempt. */
+        shader=saved->shader;memcpy(stages,saved->stages,sizeof(stages));
+        for(i=0;i<MAX_SHADER_STAGES;++i) {
+            memcpy(texMods[i],saved->mods[i][0],sizeof(texMods[i]));
+            memcpy(cod1Bundle1TexMods[i],saved->mods[i][1],sizeof(texMods[i]));
+            memcpy(cod1Bundle2TexMods[i],saved->mods[i][2],sizeof(texMods[i]));
+        }
+        ri.Printf(PRINT_ALL,"CoD1 R65 perLight: %s image multiplier codec unsupported; legacy source compiler retained\n",shader.name);
+        free(saved);return qfalse;
+    }
+    free(saved);
+    if(ok)ok=R_Cod1CompilePerlightRuntime(body,&caps);
+#endif
+    if(!ok) {
+        /* Recognized source failed image/backend resolution. Never publish
+         * earlier passes or fall back to a guessed first-image shader. */
+        R_Cod1MaterialErrorStages();
+        shader.cod1MaterialRoute=COD1_MATERIAL_SCRIPT_PARSE_FAILED;
+        return qtrue;
+    }
+    shader.cod1NativeSurfaceFlags=result.nativeSurfaceFlags;
+    if(result.nativeSurfaceFlags&0x4u)shader.surfaceFlags|=SURF_SKY;
+    if(result.nativeSurfaceFlags&0x10u)shader.surfaceFlags|=SURF_NOIMPACT;
+    if(result.nativeSurfaceFlags&0x20u)shader.surfaceFlags|=SURF_NOMARKS;
+    if(result.nativeSurfaceFlags&0x20000u)shader.surfaceFlags|=SURF_NODLIGHT;
+    shader.cod1MaterialRoute=COD1_MATERIAL_SCRIPT_PERLIGHT_PARTIAL;
+    shader.explicitlyDefined=qtrue;
+    ri.Printf(PRINT_ALL,"CoD1 R60 perlight projection: material=%s hash=%08x status=partial_perlight selected=%08x excluded=%08x emitted=%08x omitted=%08x staticStages=%d omittedStages=%d nativeSurface=%08x ignoredSurface=%d runtimeHints=%d\n",
+        shader.name,result.hash,result.selected,result.excluded,result.emitted,result.omitted,
+        result.stages,result.omittedStages,result.nativeSurfaceFlags,result.ignoredSurfaceParms,result.ignoredRuntimeHints);
+    return qtrue;
+}
+static void R_Cod1MaterialErrorStages(void) {
+    int i;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    shader.cod1PerlightRuntime=NULL;
+    cod1PerlightCompiling=qfalse;
+#endif
+    memset(stages,0,sizeof(stages));
+    R_Cod1ClearBundleAuth();
+    for(i=0;i<MAX_SHADER_STAGES;i++) {
+        stages[i].bundle[0].texMods=texMods[i];
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+        stages[i].bundle[1].texMods=cod1Bundle1TexMods[i];
+        stages[i].bundle[2].texMods=cod1Bundle2TexMods[i];
+#endif
+    }
+    /* Explicit failure marker, never claim an unsupported material is an
+     * ordinary diffuse surface. No partially parsed pass is published. */
+    shader.defaultShader=qtrue;shader.multitextureEnv=0;
+    shader.cullType=CT_FRONT_SIDED;shader.polygonOffset=qfalse;shader.cod1PolygonOffsetMode=0;shader.isSky=qfalse;
+    shader.sort=SS_OPAQUE;shader.noMipMaps=qfalse;shader.noPicMip=qfalse;
+    shader.numDeforms=0;shader.contentFlags=0;shader.surfaceFlags=0;
+    stages[0].active=qtrue;stages[0].bundle[0].image[0]=tr.defaultImage;
+    stages[0].rgbGen=CGEN_IDENTITY;stages[0].alphaGen=AGEN_IDENTITY;
+    stages[0].stateBits=GLS_DEFAULT;
+}
+/* CoD world scripts need the same bounded selected-stage validation as a
+ * type. Legacy two-bundle scripts without requires retain their old route.
+ * Projection is private and a selected unsupported command fails atomically. */
+static qboolean R_Cod1CompileRequiredSource(const char *body,qboolean worldSource) {
+    cod1MaterialProbe_t *ir;cod1MpCaps_t caps;cod1StResult_t result;
+    char *projected=NULL,*isolated=NULL,*cursor;int i,needed=0,ok=0;
+    if(!body || !worldSource || !cod1Bsp59MapActive)return qfalse;
+    memset(&caps,0,sizeof(caps));memset(&result,0,sizeof(result));
+    caps.units=R_Cod1NativeTextureUnits();
+    caps.extension=R_Cod1StypeExtension;
+    ir=(cod1MaterialProbe_t*)calloc(1,sizeof(*ir));if(!ir)return qfalse;
+    if(!Cod1MP_Parse(body,&caps,ir)) {free(ir);return qfalse;}
+    for(i=0;i<ir->numStages;++i)
+        if(ir->stage[i].numRequires || ir->stage[i].numBundles>2)needed=1;
+    if(!needed) {free(ir);return qfalse;}
+    /* FindShader returns a pointer into the whole combined file. Copy only
+     * the parsed balanced body; later definitions are not this material. */
+    if(ir->bytes>=COD1_ST_BODY) {
+        free(ir);Cod1ST_Why(&result,0,"source body exceeds limit");goto done;
+    }
+    isolated=(char*)malloc(ir->bytes+1);
+    if(!isolated) {free(ir);Cod1ST_Why(&result,0,"allocation failed");goto done;}
+    memcpy(isolated,body,ir->bytes);isolated[ir->bytes]=0;free(ir);
+    projected=(char*)malloc(COD1_ST_BODY);
+    if(!projected) {Cod1ST_Why(&result,0,"allocation failed");goto done;}
+    if(!Cod1ST_PrepareAuth(isolated,shader.name,&caps,projected,COD1_ST_BODY,1,&result))goto done;
+    cursor=projected;R_Cod1SetBundleAuth(&result,1);
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+    ok=ParseShaderForSource(&cursor,worldSource);
+#else
+    ok=ParseShader(&cursor);
+#endif
+    R_Cod1ClearBundleAuth();
+    if(!ok)Cod1ST_Why(&result,0,"backend parse/image resolution failed");
+done:
+    R_Cod1ClearBundleAuth();free(projected);free(isolated);
+    if(!ok) {
+        R_Cod1MaterialErrorStages();shader.cod1MaterialRoute=COD1_MATERIAL_SCRIPT_PARSE_FAILED;
+    } else {
+        shader.cod1NativeSurfaceFlags=result.nativeSurfaceFlags;
+        if(result.nativeSurfaceFlags&0x4u)shader.surfaceFlags|=SURF_SKY;
+        if(result.nativeSurfaceFlags&0x10u)shader.surfaceFlags|=SURF_NOIMPACT;
+        if(result.nativeSurfaceFlags&0x20u)shader.surfaceFlags|=SURF_NOMARKS;
+        if(result.nativeSurfaceFlags&0x20000u)shader.surfaceFlags|=SURF_NODLIGHT;
+        shader.cod1MaterialRoute=COD1_MATERIAL_SCRIPT_IR;shader.explicitlyDefined=qtrue;
+    }
+    ri.Printf(ok?PRINT_ALL:PRINT_WARNING,
+        "CoD1 R61 required source: material=%s hash=%08x status=%s selected=%08x excluded=%08x stages=%d line=%d reason=%s nativeSurface=%08x ignoredSurface=%d runtimeHints=%d\n",
+        shader.name,result.hash,ok?"subset-compiled":"unsupported",result.selected,result.excluded,
+        result.stages,result.line,ok?"bounded source selection":result.reason,
+        result.nativeSurfaceFlags,result.ignoredSurfaceParms,result.ignoredRuntimeHints);
+    return qtrue;
+}
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+#include "tr_cod1_water_compile.h"
+#endif
+/* Returns a complete private candidate or a cached explicit failure. No
+ * previously published shader or source template is mutated. */
+static shader_t *R_Cod1ShaderType(qboolean mipRawImage,qboolean worldSource) {
+    cod1StResult_t result;cod1StUsage_t usage;
+    cod1MpCaps_t caps;char *raw=NULL,*expanded=NULL,*cursor;
+    int size=0,ok=0;const char *why="type IO unavailable";
+    memset(&result,0,sizeof(result));memset(&caps,0,sizeof(caps));
+    shader.cod1ShaderType=qtrue;shader.cod1ShaderTypeLightmapKey=shader.lightmapIndex;
+    shader.cod1MaterialRoute=COD1_MATERIAL_STYPE_FAILED;
+    /* LM_BY_VERTEX is a port storage convention, not a native namespace.
+     * Its model use is made explicit by R_FindCod1StaticModelShader. */
+    if(shader.cod1StaticModelSource || shader.lightmapIndex==LIGHTMAP_NONE) usage=COD1_ST_MODEL;
+    else if(shader.lightmapIndex==LIGHTMAP_2D) usage=COD1_ST_2D;
+    else if(worldSource || shader.lightmapIndex>=0 || shader.lightmapIndex==LIGHTMAP_WHITEIMAGE) usage=COD1_ST_WORLD;
+    else { why="ambiguous vertex-lit type usage";goto done; }
+    if(Cod1ST_Path(shader.name,usage,result.path,sizeof(result.path))!=1) {
+        why="invalid type path";goto done;
+    }
+    Q_strncpyz(shader.cod1ShaderTypePath,result.path,sizeof(shader.cod1ShaderTypePath));
+    if(!ri.FS_ReadFile || !ri.FS_FreeFile) goto done;
+    size=ri.FS_ReadFile(result.path,(void**)&raw);
+    if(!raw || size<=0) { why="missing/empty type source";goto done; }
+    if(size>=(int)COD1_ST_BODY) { why="type source exceeds limit";goto done; }
+    /* FS_ReadFile supplies one terminating NUL. Reject embedded NULs so a
+     * truncated prefix can never be reported as the entire authored type. */
+    if(memchr(raw,0,(size_t)size)) { why="embedded NUL in type source";goto done; }
+    expanded=(char*)malloc(COD1_ST_BODY);
+    if(!expanded) { why="expanded allocation failed";goto done; }
+    caps.units=R_Cod1NativeTextureUnits();
+    caps.extension=R_Cod1StypeExtension;
+    if(!Cod1ST_Prepare(raw,shader.name,&caps,expanded,COD1_ST_BODY,&result)) {
+        why=result.reason;goto done;
+    }
+    shader.cod1ShaderTypeHash=result.hash;
+    shader.cod1NativeSurfaceFlags=result.nativeSurfaceFlags;
+    /* Only renderer-consumed attributes are translated into RTCW flag space.
+     * Physical surface tags remain native metadata; BSP/collision flags are
+     * not overwritten by a runtime material script. */
+    if(result.nativeSurfaceFlags&0x4u)shader.surfaceFlags|=SURF_SKY;
+    if(result.nativeSurfaceFlags&0x10u)shader.surfaceFlags|=SURF_NOIMPACT;
+    if(result.nativeSurfaceFlags&0x20u)shader.surfaceFlags|=SURF_NOMARKS;
+    if(result.nativeSurfaceFlags&0x20000u)shader.surfaceFlags|=SURF_NODLIGHT;
+    shader.noMipMaps=!mipRawImage;shader.noPicMip=!mipRawImage;
+    cursor=expanded;
+    R_Cod1SetBundleAuth(&result,0);
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+    ok=ParseShaderForSource(&cursor,worldSource);
+#else
+    ok=ParseShader(&cursor);
+#endif
+    R_Cod1ClearBundleAuth();
+    if(!ok) { why="backend parse/image resolution failed";goto done; }
+    shader.cod1MaterialRoute=COD1_MATERIAL_STYPE_SUBSET;
+    shader.explicitlyDefined=qtrue;
+    why="supported fixed-function subset; native pixel parity unverified";
+done:
+    R_Cod1ClearBundleAuth();
+    if(!ok)R_Cod1MaterialErrorStages();
+    shader.cod1ShaderTypeHash=result.hash;
+    ri.Printf(ok?PRINT_ALL:PRINT_WARNING,
+        "CoD1 R48 shader type: material=%s source=%s hash=%08x status=%s selected=%08x excluded=%08x stages=%d line=%d reason=%s bakedVertexBridge=%d nativeSurface=%08x ignoredSurface=%d runtimeHints=%d\n",
+        shader.name,result.path[0]?result.path:"<invalid>",result.hash,
+        ok?"subset-compiled":"unsupported",result.selected,result.excluded,result.stages,
+        result.line,why,shader.cod1StaticModelSource,result.nativeSurfaceFlags,result.ignoredSurfaceParms,result.ignoredRuntimeHints);
+    if(raw)ri.FS_FreeFile(raw);
+    free(expanded);
+    return FinishShader();
+}
+
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+static shader_t *R_FindCachedShaderForSource( const char *name, int lightmapIndex,
+		int hash, qboolean cod1Bsp59WorldMaterialSource );
+static qhandle_t R_RegisterShaderFromImageForSource( const char *name, int lightmapIndex,
+		image_t *image, qboolean mipRawImage, qboolean cod1Bsp59WorldMaterialSource );
+#endif
+static shader_t *R_FindShaderForSource( const char *name, int lightmapIndex,
+		qboolean mipRawImage, qboolean cod1Bsp59WorldMaterialSource,
+        qboolean staticModelSource ) {
 	char strippedName[MAX_QPATH];
 	char fileName[MAX_QPATH];
 	int i, hash;
@@ -2448,7 +3945,7 @@ shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 	image_t     *image;
 	shader_t    *sh;
 
-	if ( name[0] == 0 ) {
+	if ( !name || name[0] == 0 || strlen(name)>=MAX_QPATH ) {
 		return tr.defaultShader;
 	}
 
@@ -2465,9 +3962,37 @@ shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 	//
 	// see if the shader is already loaded
 	//
+#if COD1_NATIVE_LIGHTMAP_PACK
+	if ( cod1PackedWorldShaders && lightmapIndex >= 0 && !strchr(strippedName,'@') && !staticModelSource ) {
+		for ( sh=hashTable[hash]; sh; sh=sh->next ) {
+			if ( sh->lightmapIndex != lightmapIndex ||
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+			     sh->cod1Bsp59WorldMaterialSource != cod1Bsp59WorldMaterialSource ||
+#endif
+			     Q_stricmp( sh->name, strippedName ) ) continue;
+			return sh;
+		}
+	}
+#endif
 	for ( sh = hashTable[hash]; sh; sh = sh->next ) {
+        if (sh->cod1StaticModelSource!=staticModelSource)continue;
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+        if(sh->cod1WaterProgramSource && sh->cod1WaterProgramLightmapKey!=lightmapIndex)continue;
+#endif
+        if (strchr(strippedName,'@')) {
+            if (!sh->cod1ShaderType || sh->cod1ShaderTypeLightmapKey!=lightmapIndex)continue;
+        }
 		// index by name
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+		if ( sh->cod1Bsp59WorldMaterialSource != cod1Bsp59WorldMaterialSource ) {
+			continue;
+		}
+#endif
 
+        if(sh->cod1ShaderType) {
+            if(!Q_stricmp(sh->name,strippedName))return sh;
+            continue;
+        }
 		// Ridah, modified this so we don't keep trying to load an invalid lightmap shader
 /*
 		if ( sh->lightmapIndex == lightmapIndex &&
@@ -2476,7 +4001,13 @@ shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 			return sh;
 		}
 */
-		if ( ( ( sh->lightmapIndex == lightmapIndex ) || ( sh->lightmapIndex < 0 && lightmapIndex >= 0 ) ) &&
+		if ( ( ( sh->lightmapIndex == lightmapIndex ) ||
+			( sh->lightmapIndex < 0 && lightmapIndex >= 0
+#if COD1_NATIVE_LIGHTMAP_PACK
+			  && ( !cod1PackedWorldShaders ||
+			       R_Cod1PackedLightmapFreeMatch( sh, lightmapIndex ) )
+#endif
+			) ) &&
 			 !Q_stricmp( sh->name, strippedName ) ) {
 			// match found
 			return sh;
@@ -2490,7 +4021,16 @@ shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 	}
 
 	// Ridah, check the cache
+    /* R47 type candidates must not inherit older raw-image backup variants. */
+    sh=NULL;
+    if(!staticModelSource && !strchr(strippedName,'@')) {
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+	sh = R_FindCachedShaderForSource( strippedName, lightmapIndex, hash,
+		cod1Bsp59WorldMaterialSource );
+#else
 	sh = R_FindCachedShader( strippedName, lightmapIndex, hash );
+#endif
+	}
 	if ( sh ) {
 		return sh;
 	}
@@ -2499,10 +4039,19 @@ shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 	// clear the global shader
 	memset( &shader, 0, sizeof( shader ) );
 	memset( &stages, 0, sizeof( stages ) );
+    R_Cod1ClearBundleAuth();
 	Q_strncpyz( shader.name, strippedName, sizeof( shader.name ) );
 	shader.lightmapIndex = lightmapIndex;
+    shader.cod1StaticModelSource=staticModelSource;
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+	shader.cod1Bsp59WorldMaterialSource = cod1Bsp59WorldMaterialSource;
+#endif
 	for ( i = 0 ; i < MAX_SHADER_STAGES ; i++ ) {
 		stages[i].bundle[0].texMods = texMods[i];
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+		stages[i].bundle[1].texMods = cod1Bundle1TexMods[i];
+        stages[i].bundle[2].texMods = cod1Bundle2TexMods[i];
+#endif
 	}
 
 	// FIXME: set these "need" values apropriately
@@ -2511,22 +4060,84 @@ shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 	shader.needsST2 = qtrue;
 	shader.needsColor = qtrue;
 
+    /* Native 0x4f197e-0x4f19c5: @ dispatch precedes script-name lookup. */
+    if(strchr(strippedName,'@'))return R_Cod1ShaderType(mipRawImage,cod1Bsp59WorldMaterialSource);
+
 	//
 	// attempt to define shader from an explicit parameter file
 	//
 	shaderText = FindShaderInShaderText( strippedName );
 	if ( shaderText ) {
+		char *shaderTextStart = shaderText;
+		if ( cod1Bsp59MapActive ) {
+			shader.cod1HasScriptSource = qtrue;
+			shader.cod1ScriptOffset = (unsigned)( shaderTextStart - s_shaderText );
+		}
 		// enable this when building a pak file to get a global list
 		// of all explicit shaders
 		if ( r_printShaders->integer ) {
 			ri.Printf( PRINT_ALL, "*SHADER* %s\n", name );
 		}
+		#if defined(COD1_MATERIAL_PROBE_DIAGNOSTICS) && COD1_MATERIAL_PROBE_DIAGNOSTICS
+		R_Cod1ProbeMaterial( strippedName, shaderTextStart );
+		#endif
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+        if(R_Cod1CompilePerlightStatic(shaderTextStart,cod1Bsp59WorldMaterialSource,qtrue)) {
+            sh=FinishShader();return sh;
+        }
+#endif
+		if ( cod1Bsp59MapActive && R_Cod1CompileWindowGlow2( shaderTextStart ) ) {
+			sh = FinishShader();
+			#if defined(COD1_MATERIAL_PROBE_DIAGNOSTICS) && COD1_MATERIAL_PROBE_DIAGNOSTICS
+			R_Cod1ProbeCompiled(strippedName,shaderTextStart,lightmapIndex,sh,
+				"opaque-glass-static-perlight-deferred");
+			#endif
+			return sh;
+		}
+        if(R_Cod1CompilePerlightStatic(shaderTextStart,cod1Bsp59WorldMaterialSource,qfalse)) {
+            sh=FinishShader();return sh;
+        }
+		#if defined(COD1_MATERIAL_STAGE_COMPILER) && COD1_MATERIAL_STAGE_COMPILER
+		if ( cod1Bsp59MapActive && R_Cod1CompileOneLightmappedStage( shaderTextStart ) ) {
+			sh = FinishShader();
+			#if defined(COD1_MATERIAL_PROBE_DIAGNOSTICS) && COD1_MATERIAL_PROBE_DIAGNOSTICS
+			R_Cod1ProbeCompiled(strippedName,shaderTextStart,lightmapIndex,sh,"ir-compiled");
+			#endif
+			return sh;
+		}
+		#endif
+		#if defined(COD1_WATER_FIXED2_CANDIDATE) && COD1_WATER_FIXED2_CANDIDATE
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+        if(cod1Bsp59MapActive && R_Cod1CompileWaterRuntime(shaderTextStart)) {
+            sh=FinishShader();return sh;
+        }
+#endif
+		if ( cod1Bsp59MapActive && R_Cod1CompileWaterFixed2( shaderTextStart ) ) {
+			sh = FinishShader();
+			ri.Printf( PRINT_ALL, "CoD1 fixed2 material: %s\n", strippedName );
+			return sh;
+		}
+		#endif
 
+        if(R_Cod1CompileRequiredSource(shaderTextStart,cod1Bsp59WorldMaterialSource)) {
+            sh=FinishShader();return sh;
+        }
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+		if ( !ParseShaderForSource( &shaderText, cod1Bsp59WorldMaterialSource ) ) {
+#else
 		if ( !ParseShader( &shaderText ) ) {
-			// had errors, so use default shader
-			shader.defaultShader = qtrue;
+#endif
+			/* R47: reject incomplete scripts; no first-image salvage. */
+            R_Cod1MaterialErrorStages();
+            shader.cod1MaterialRoute=COD1_MATERIAL_SCRIPT_PARSE_FAILED;
+		} else if ( cod1Bsp59MapActive ) {
+			shader.cod1MaterialRoute = COD1_MATERIAL_SCRIPT_LEGACY;
 		}
 		sh = FinishShader();
+		#if defined(COD1_MATERIAL_PROBE_DIAGNOSTICS) && COD1_MATERIAL_PROBE_DIAGNOSTICS
+		R_Cod1ProbeCompiled(strippedName,shaderTextStart,lightmapIndex,sh,
+			shader.defaultShader?"default-after-parse-failure":"explicit");
+		#endif
 		return sh;
 	}
 
@@ -2535,14 +4146,32 @@ shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 	// if not defined in the in-memory shader descriptions,
 	// look for a single TGA, BMP, or PCX
 	//
+	/*
+	 * RTCW's raw-image fallback historically assumes an extensionless shader
+	 * means .tga.  Call of Duty 1's pre-rendered UI/font atlases use the same
+	 * extensionless shader names in fontImage_*.dat, but the actual pages are
+	 * DDS (for example fonts/fontImage_0_16.dds).
+	 *
+	 * CoDA already resolves resources as: exact path -> stem.dds -> stem.tga.
+	 * Mirror that compatibility rule here rather than teaching the UI/font
+	 * code about DDS filenames.  This keeps CoD's shaderName strings intact.
+	 */
 	Q_strncpyz( fileName, name, sizeof( fileName ) );
 	COM_DefaultExtension( fileName, sizeof( fileName ), ".tga" );
-	image = R_FindImageFile( fileName, mipRawImage, mipRawImage, mipRawImage ? GL_REPEAT : GL_CLAMP );
+	image = R_FindImageFile( fileName, mipRawImage, mipRawImage, (mipRawImage?GL_REPEAT:GL_CLAMP) );
+	if ( !image ) {
+		image = R_CoD1FindImageCandidate( strippedName, mipRawImage,
+			(mipRawImage?GL_REPEAT:GL_CLAMP) );
+	}
 	if ( !image ) {
 		ri.Printf( PRINT_DEVELOPER, "Couldn't find image for shader %s\n", name );
 		shader.defaultShader = qtrue;
+		if ( cod1Bsp59MapActive ) shader.cod1MaterialRoute = COD1_MATERIAL_MISSING_IMAGE;
 		return FinishShader();
 	}
+
+    if ( cod1Bsp59MapActive ) shader.cod1MaterialRoute = COD1_MATERIAL_IMPLICIT_IMAGE;
+
 
 	//
 	// create the default shading commands
@@ -2598,8 +4227,34 @@ shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 	return FinishShader();
 }
 
+shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImage ) {
+	return R_FindShaderForSource( name, lightmapIndex, mipRawImage, qfalse, qfalse );
+}
+shader_t *R_FindCod1StaticModelShader( const char *name, qboolean mipRawImage ) {
+    return R_FindShaderForSource( name, LIGHTMAP_BY_VERTEX, mipRawImage, qfalse, qtrue );
+}
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+shader_t *R_FindCod1Bsp59WorldMaterialShader( const char *name, int lightmapIndex,
+		qboolean mipRawImage ) {
+    shader_t *result;
+    result=R_FindShaderForSource(name,lightmapIndex,mipRawImage,qtrue,qfalse);
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    /* Cached world materials must replay their captured name after a level
+     * reset. Do not load a sunfile while parser scratch arrays are active. */
+    if(result && result->cod1SunFileSeen)
+        Q_strncpyz(tr.cod1SunFile,result->cod1SunFile,sizeof(tr.cod1SunFile));
+#endif
+    return result;
+}
+#endif
 
+
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+static qhandle_t R_RegisterShaderFromImageForSource( const char *name, int lightmapIndex,
+		image_t *image, qboolean mipRawImage, qboolean cod1Bsp59WorldMaterialSource ) {
+#else
 qhandle_t RE_RegisterShaderFromImage( const char *name, int lightmapIndex, image_t *image, qboolean mipRawImage ) {
+#endif
 	int i, hash;
 	shader_t    *sh;
 
@@ -2609,6 +4264,12 @@ qhandle_t RE_RegisterShaderFromImage( const char *name, int lightmapIndex, image
 	// see if the shader is already loaded
 	//
 	for ( sh = hashTable[hash]; sh; sh = sh->next ) {
+        if(sh->cod1StaticModelSource || sh->cod1ShaderType)continue;
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+		if ( sh->cod1Bsp59WorldMaterialSource != cod1Bsp59WorldMaterialSource ) {
+			continue;
+		}
+#endif
 		// NOTE: if there was no shader or image available with the name strippedName
 		// then a default shader is created with lightmapIndex == LIGHTMAP_NONE, so we
 		// have to check all default shaders otherwise for every call to R_FindShader
@@ -2630,10 +4291,18 @@ qhandle_t RE_RegisterShaderFromImage( const char *name, int lightmapIndex, image
 	// clear the global shader
 	Com_Memset( &shader, 0, sizeof( shader ) );
 	Com_Memset( &stages, 0, sizeof( stages ) );
+    R_Cod1ClearBundleAuth();
 	Q_strncpyz( shader.name, name, sizeof( shader.name ) );
 	shader.lightmapIndex = lightmapIndex;
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+	shader.cod1Bsp59WorldMaterialSource = cod1Bsp59WorldMaterialSource;
+#endif
 	for ( i = 0 ; i < MAX_SHADER_STAGES ; i++ ) {
 		stages[i].bundle[0].texMods = texMods[i];
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+		stages[i].bundle[1].texMods = cod1Bundle1TexMods[i];
+        stages[i].bundle[2].texMods = cod1Bundle2TexMods[i];
+#endif
 	}
 
 	// FIXME: set these "need" values apropriately
@@ -2696,6 +4365,13 @@ qhandle_t RE_RegisterShaderFromImage( const char *name, int lightmapIndex, image
 	sh = FinishShader();
 	return sh->index;
 }
+
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+qhandle_t RE_RegisterShaderFromImage( const char *name, int lightmapIndex,
+		image_t *image, qboolean mipRawImage ) {
+	return R_RegisterShaderFromImageForSource( name, lightmapIndex, image, mipRawImage, qfalse );
+}
+#endif
 
 
 /*
@@ -2881,6 +4557,12 @@ void    R_ShaderList_f( void ) {
 		count++;
 	}
 	ri.Printf( PRINT_ALL, "%i total shaders\n", count );
+#if defined(COD1_MATERIAL_PROBE_DIAGNOSTICS) && COD1_MATERIAL_PROBE_DIAGNOSTICS
+	ri.Printf(PRINT_ALL,"CoD1 material probe: %u unique source/name variants, %u repeated registrations, %u overflowed entries\n",
+		cod1MpUnique,cod1MpDuplicates,cod1MpOverflow);
+	ri.Printf(PRINT_ALL,"CoD1 material result: %u unique source/name/LM variants, %u duplicates, %u overflowed, %u reentrant suppressed\n",
+		cod1MpCompiledUnique,cod1MpCompiledDuplicates,cod1MpCompiledOverflow,cod1MpCompiledReentrant);
+#endif
 	ri.Printf( PRINT_ALL, "------------------\n" );
 }
 
@@ -2919,6 +4601,9 @@ static void BuildShaderChecksumLookup( void ) {
 
 		if ( !Q_stricmp( token, "{" ) ) {
 			// skip braced section
+			/* SkipBracedSection expects to consume the opening brace itself.
+			 * Otherwise stage texture names can enter the shader-name index. */
+			p = pOld;
 			SkipBracedSection( &p );
 			continue;
 		}
@@ -2957,59 +4642,61 @@ a single large text block that can be scanned for shader names
 */
 #define MAX_SHADER_FILES    4096
 static void ScanAndLoadShaderFiles( void ) {
-	char **shaderFiles;
-	char *buffers[MAX_SHADER_FILES];
-	char *p;
-	int numShaders;
-	int i;
-
-	long sum = 0;
-	// scan for shader files
-	shaderFiles = ri.FS_ListFiles( "scripts", ".shader", &numShaders );
-
-	if ( !shaderFiles || !numShaders ) {
-		ri.Printf( PRINT_WARNING, "WARNING: no shader files found\n" );
-		return;
-	}
-
-	if ( numShaders > MAX_SHADER_FILES ) {
-		numShaders = MAX_SHADER_FILES;
-	}
-
-	// load and parse shader files
-	for ( i = 0; i < numShaders; i++ )
-	{
-		char filename[MAX_QPATH];
-
-		Com_sprintf( filename, sizeof( filename ), "scripts/%s", shaderFiles[i] );
-		ri.Printf( PRINT_ALL, "...loading '%s'\n", filename );
-		sum += ri.FS_ReadFile( filename, (void **)&buffers[i] );
-		if ( !buffers[i] ) {
-			ri.Error( ERR_DROP, "Couldn't load %s", filename );
-		}
-	}
-
-	// build single large buffer
-	s_shaderText = ri.Hunk_Alloc( sum + numShaders * 2, h_low );
-
-	// free in reverse order, so the temp files are all dumped
-	for ( i = numShaders - 1; i >= 0 ; i-- ) {
-		strcat( s_shaderText, "\n" );
-		p = &s_shaderText[strlen( s_shaderText )];
-		strcat( s_shaderText, buffers[i] );
-		ri.FS_FreeFile( buffers[i] );
-		buffers[i] = p;
-//		COM_Compress(p);
-	}
-
-	// free up memory
-	ri.FS_FreeFileList( shaderFiles );
-
-	// Ridah, optimized shader loading (18ms on a P3-500 for sfm1.bsp)
-	BuildShaderChecksumLookup();
-	// done.
+    static const char *dirs[] = { "fxshaders", "scripts" };
+    char *buffers[MAX_SHADER_FILES];
+    char **files, *cursor;
+    int count=0, fxCount=0, num, d, i, n;
+    long sum=0;
+    /* CoD keeps particle blend/alpha declarations outside scripts/.
+     * Reverse concatenation below leaves scripts overrides ahead of fxshaders,
+     * and preserves the former ordering within the scripts directory. */
+    s_shaderText=NULL;
+    memset(shaderChecksumLookup,0,sizeof(shaderChecksumLookup));
+#if defined(COD1_MATERIAL_PROBE_DIAGNOSTICS) && COD1_MATERIAL_PROBE_DIAGNOSTICS
+    memset(cod1MpSeen,0,sizeof(cod1MpSeen));
+    cod1MpUnique=cod1MpDuplicates=cod1MpOverflow=0;
+    memset(cod1MpCompiledSeen,0,sizeof(cod1MpCompiledSeen));
+    cod1MpCompiledUnique=cod1MpCompiledDuplicates=cod1MpCompiledOverflow=0;
+    cod1MpCompiledReentrant=0;cod1MpCompiledLogging=0;
+#endif
+    ri.Cvar_Get("r_cod1MuzzleQuads", "0", CVAR_ROM);
+    ri.Cvar_Set("r_cod1MuzzleQuads", "1");
+    ri.Cvar_Get("r_cod1EfxShaders", "0", CVAR_ROM);
+    ri.Cvar_Set("r_cod1EfxShaders", "0");
+    memset(buffers,0,sizeof(buffers));
+    for(d=0;d<2;++d) {
+        files=ri.FS_ListFiles(dirs[d], ".shader", &num);
+        if(!files) continue;
+        for(i=0;i<num;++i) {
+            char filename[MAX_QPATH]; char *data=NULL;
+            if(count>=MAX_SHADER_FILES) { ri.Printf(PRINT_WARNING,"WARNING: shader file limit reached\n");break; }
+            if(strlen(dirs[d])+strlen(files[i])+2>sizeof(filename)) {
+                ri.Printf(PRINT_WARNING,"WARNING: shader filename too long\n");continue;
+            }
+            Com_sprintf(filename,sizeof(filename),"%s/%s",dirs[d],files[i]);
+            n=ri.FS_ReadFile(filename,(void **)&data);
+            if(n<=0||!data||n>16*1024*1024||sum+n+2>64*1024*1024) {
+                if(data)ri.FS_FreeFile(data);
+                ri.Printf(PRINT_WARNING,"WARNING: invalid/oversized shader file %s\n",filename);continue;
+            }
+            ri.Printf(PRINT_ALL,"...loading '%s'\n",filename);
+            buffers[count++]=data;sum+=n+1;
+            if(d==0)++fxCount;
+        }
+        ri.FS_FreeFileList(files);
+    }
+    if(!count) { ri.Printf(PRINT_WARNING,"WARNING: no shader files found\n");return; }
+    s_shaderText=ri.Hunk_Alloc(sum+1,h_low);cursor=s_shaderText;
+    for(i=count-1;i>=0;--i) {
+        size_t len=strlen(buffers[i]);
+        *cursor++='\n';memcpy(cursor,buffers[i],len);cursor+=len;
+        ri.FS_FreeFile(buffers[i]);
+    }
+    *cursor=0;
+    ri.Cvar_Set("r_cod1EfxShaders",fxCount ? "1" : "0");
+    ri.Printf(PRINT_ALL,"CoD1 NATIVE_EFX_R1 renderer: %d fxshaders files, %d total shader files\n",fxCount,count);
+    BuildShaderChecksumLookup();
 }
-
 
 /*
 ====================
@@ -3022,6 +4709,7 @@ static void CreateInternalShaders( void ) {
 	// init the default shader
 	memset( &shader, 0, sizeof( shader ) );
 	memset( &stages, 0, sizeof( stages ) );
+    R_Cod1ClearBundleAuth();
 
 	Q_strncpyz( shader.name, "<default>", sizeof( shader.name ) );
 
@@ -3110,6 +4798,15 @@ void R_PurgeShaders( int count ) {
 				}
 				R_CacheShaderFree( ( *sh )->stages[j] );
 			}
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+            if((*sh)->cod1PerlightRuntime) {
+                cod1PerlightRuntime_t *program=(*sh)->cod1PerlightRuntime;
+                for(j=0;j<program->numStages;++j)for(b=0;b<NUM_TEXTURE_BUNDLES;++b)
+                    if(program->stage[j].bundle[b].texMods)
+                        R_CacheShaderFree(program->stage[j].bundle[b].texMods);
+                R_CacheShaderFree(program);
+            }
+#endif
 			R_CacheShaderFree( *sh );
 			*sh = NULL;
 
@@ -3170,6 +4867,14 @@ static qboolean R_RegisterShaderImages( shader_t *sh ) {
 			}
 		}
 	}
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    if(sh->cod1PerlightRuntime) {
+        cod1PerlightRuntime_t *program=sh->cod1PerlightRuntime;
+        for(i=0;i<program->numStages;++i)for(b=0;b<NUM_TEXTURE_BUNDLES;++b)
+            for(j=0;j<MAX_IMAGE_ANIMATIONS && program->stage[i].bundle[b].image[j];++j)
+                if(!R_TouchImage(program->stage[i].bundle[b].image[j]))return qfalse;
+    }
+#endif
 	return qtrue;
 }
 
@@ -3180,8 +4885,16 @@ R_FindCachedShader
   look for the given shader in the list of backupShaders
 ===============
 */
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+static shader_t *R_FindCachedShaderForSource( const char *name, int lightmapIndex,
+		int hash, qboolean cod1Bsp59WorldMaterialSource ) {
+#else
 shader_t *R_FindCachedShader( const char *name, int lightmapIndex, int hash ) {
+#endif
 	shader_t *sh, *shPrev;
+#if COD1_NATIVE_LIGHTMAP_PACK
+	int matchPass=0;
+#endif
 
 	if ( !r_cacheShaders->integer ) {
 		return NULL;
@@ -3195,11 +4908,35 @@ shader_t *R_FindCachedShader( const char *name, int lightmapIndex, int hash ) {
 		return NULL;
 	}
 
+#if COD1_NATIVE_LIGHTMAP_PACK
+retryCanonical:
+#endif
 	sh = backupHashTable[hash];
 	shPrev = NULL;
 	while ( sh ) {
-		if ( sh->lightmapIndex == lightmapIndex && !Q_stricmp( sh->name, name ) ) {
+		if (
+#if COD1_NATIVE_LIGHTMAP_PACK
+			( ( matchPass == 0 && sh->lightmapIndex == lightmapIndex ) ||
+			  ( matchPass == 1 && R_Cod1PackedLightmapFreeMatch( sh, lightmapIndex ) ) )
+#else
+			sh->lightmapIndex == lightmapIndex
+#endif
+			&& !sh->cod1StaticModelSource
+			&& !Q_stricmp( sh->name, name )
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+			 && sh->cod1Bsp59WorldMaterialSource == cod1Bsp59WorldMaterialSource
+#endif
+			 ) {
 
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+            if(cod1Bsp59WorldMaterialSource &&
+               (sh->cod1MaterialRoute==COD1_MATERIAL_SCRIPT_PERLIGHT_PARTIAL ||
+                sh->cod1MaterialRoute==COD1_MATERIAL_SCRIPT_IR ||
+                sh->cod1MaterialRoute==COD1_MATERIAL_SCRIPT_PARSE_FAILED))return NULL;
+#endif
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+            if(sh->cod1WaterProgramSource)return NULL;
+#endif
 			// make sure the images stay valid
 			if ( !R_RegisterShaderImages( sh ) ) {
 				return NULL;
@@ -3228,6 +4965,7 @@ shader_t *R_FindCachedShader( const char *name, int lightmapIndex, int hash ) {
 			tr.numShaders++;
 
 			SortNewShader();    // make sure it renders in the right order
+			if ( cod1Bsp59MapActive ) sh->cod1MaterialFromBackup=qtrue;
 
 			return sh;
 		}
@@ -3236,8 +4974,20 @@ shader_t *R_FindCachedShader( const char *name, int lightmapIndex, int hash ) {
 		sh = sh->next;
 	}
 
+#if COD1_NATIVE_LIGHTMAP_PACK
+	if ( matchPass == 0 && cod1PackedWorldShaders && lightmapIndex >= 0 ) {
+		matchPass=1;
+		goto retryCanonical;
+	}
+#endif
+
 	return NULL;
 }
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+shader_t *R_FindCachedShader( const char *name, int lightmapIndex, int hash ) {
+	return R_FindCachedShaderForSource( name, lightmapIndex, hash, qfalse );
+}
+#endif
 
 /*
 ===============
@@ -3285,6 +5035,8 @@ R_InitShaders
 ==================
 */
 void R_InitShaders( void ) {
+    ri.Printf(PRINT_ALL,"CoD1 R51 material map: shared axis qualifiers; authored sampler cache; water lightmap input\n");
+    ri.Printf(PRINT_ALL,"CoD1 R53 materials: shared map noopt; eager image policy; static precalc retained\n");
 
 	glfogNum = FOG_NONE;
 	ri.Cvar_Set( "r_waterFogColor", "0" );  // clear fog

@@ -30,6 +30,7 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "../game/q_shared.h"
 #include "qcommon.h"
+#include "cod1_client_trace_r241.h"
 #include <setjmp.h>
 
 #define MAXPRINTMSG 4096
@@ -38,7 +39,7 @@ If you have questions concerning this license or the applicable additional terms
 
 #define MIN_DEDICATED_COMHUNKMEGS 1
 #define MIN_COMHUNKMEGS 54      // RF, optimizing
-#define DEF_COMHUNKMEGS "72"
+#define DEF_COMHUNKMEGS "256" /* CoD viewmodel pose cache and map data */
 #define DEF_COMZONEMEGS "30"
 
 int com_argc;
@@ -51,6 +52,7 @@ jmp_buf abortframe;     // an ERR_DROP occured, exit the entire frame
 
 FILE *debuglogfile;
 static fileHandle_t logfile;
+static qboolean logNeedsFlush;
 fileHandle_t com_journalFile;               // events are written here
 fileHandle_t com_journalDataFile;           // config files are written here
 
@@ -129,6 +131,24 @@ void Com_EndRedirect( void ) {
 	rd_flush = NULL;
 }
 
+/* Keep the file stream buffered so logfile can change modes after startup.
+ * Mode 1 publishes pending text at the frame boundary. Mode 2 and errors
+ * remain immediately visible to readers, including diagnostic hunk dumps. */
+static void Com_FlushLog( void ) {
+	if ( logNeedsFlush && logfile && FS_Initialized() ) {
+		FS_Flush( logfile );
+		logNeedsFlush = qfalse;
+	}
+}
+
+static void Com_WriteLog( const char *text ) {
+	FS_Write( text, strlen( text ), logfile );
+	logNeedsFlush = qtrue;
+	if ( com_logfile->integer > 1 || com_errorEntered ) {
+		Com_FlushLog();
+	}
+}
+
 /*
 =============
 Com_Printf
@@ -190,17 +210,17 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 			}
 #endif
 			logfile = FS_FOpenFileWrite( "rtcwconsole.log" );    //----(SA)	changed name for Wolf
-			Com_Printf( "logfile opened on %s\n", asctime( newtime ) );
-			if ( com_logfile->integer > 1 ) {
-				// force it to not buffer so we get valid
-				// data even if we are crashing
-				FS_ForceFlush( logfile );
+
+			if ( logfile ) {
+				Com_Printf( "logfile opened on %s\n", asctime( newtime ) );
+			} else {
+				Sys_Print( "WARNING: cannot create rtcwconsole.log in the writable game directory\n" );
 			}
 
 			opening_qconsole = qfalse;
 		}
 		if ( logfile && FS_Initialized() ) {
-			FS_Write( msg, strlen( msg ), logfile );
+			Com_WriteLog( msg );
 		}
 	}
 }
@@ -280,6 +300,7 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 		Sys_Error( "recursive error after: %s", com_errorMessage );
 	}
 	com_errorEntered = qtrue;
+	Com_FlushLog();
 
 	va_start( argptr,fmt );
 	vsprintf( com_errorMessage,fmt,argptr );
@@ -988,19 +1009,19 @@ void Hunk_Log( void ) {
 	size = 0;
 	numBlocks = 0;
 	Com_sprintf( buf, sizeof( buf ), "\r\n================\r\nHunk log\r\n================\r\n" );
-	FS_Write( buf, strlen( buf ), logfile );
+	Com_WriteLog( buf );
 	for ( block = hunkblocks ; block; block = block->next ) {
 #ifdef HUNK_DEBUG
 		Com_sprintf( buf, sizeof( buf ), "size = %8d: %s, line: %d (%s)\r\n", block->size, block->file, block->line, block->label );
-		FS_Write( buf, strlen( buf ), logfile );
+		Com_WriteLog( buf );
 #endif
 		size += block->size;
 		numBlocks++;
 	}
 	Com_sprintf( buf, sizeof( buf ), "%d Hunk memory\r\n", size );
-	FS_Write( buf, strlen( buf ), logfile );
+	Com_WriteLog( buf );
 	Com_sprintf( buf, sizeof( buf ), "%d hunk blocks\r\n", numBlocks );
-	FS_Write( buf, strlen( buf ), logfile );
+	Com_WriteLog( buf );
 }
 
 /*
@@ -1022,7 +1043,7 @@ void Hunk_SmallLog( void ) {
 	size = 0;
 	numBlocks = 0;
 	Com_sprintf( buf, sizeof( buf ), "\r\n================\r\nHunk Small log\r\n================\r\n" );
-	FS_Write( buf, strlen( buf ), logfile );
+	Com_WriteLog( buf );
 	for ( block = hunkblocks; block; block = block->next ) {
 		if ( block->printed ) {
 			continue;
@@ -1041,15 +1062,15 @@ void Hunk_SmallLog( void ) {
 		}
 #ifdef HUNK_DEBUG
 		Com_sprintf( buf, sizeof( buf ), "size = %8d: %s, line: %d (%s)\r\n", locsize, block->file, block->line, block->label );
-		FS_Write( buf, strlen( buf ), logfile );
+		Com_WriteLog( buf );
 #endif
 		size += block->size;
 		numBlocks++;
 	}
 	Com_sprintf( buf, sizeof( buf ), "%d Hunk memory\r\n", size );
-	FS_Write( buf, strlen( buf ), logfile );
+	Com_WriteLog( buf );
 	Com_sprintf( buf, sizeof( buf ), "%d hunk blocks\r\n", numBlocks );
-	FS_Write( buf, strlen( buf ), logfile );
+	Com_WriteLog( buf );
 }
 
 /*
@@ -1173,6 +1194,7 @@ void Hunk_Clear( void ) {
 	CL_ShutdownUI();
 #endif
 	SV_ShutdownGameProgs();
+	CM_ClearMap();
 #ifndef DEDICATED
 	CIN_CloseAllVideos();
 #endif
@@ -1990,6 +2012,12 @@ void Com_Init( char *commandLine ) {
 
 	FS_InitFilesystem();
 
+	/* PATCH15: start a flushed log as soon as the write filesystem is ready. */
+	com_logfile = Cvar_Get( "logfile", "2", CVAR_TEMP );
+	Cvar_Set( "logfile", "2" );
+	Com_Printf( "CoD1 automatic console log enabled (logfile 2), fs_homepath: %s\n",
+		Cvar_VariableString( "fs_homepath" ) );
+
 	Com_InitJournaling();
 
 	Cbuf_AddText( "exec default.cfg\n" );
@@ -2028,7 +2056,9 @@ void Com_Init( char *commandLine ) {
 	com_blood = Cvar_Get( "com_blood", "1", CVAR_ARCHIVE );
 
 	com_developer = Cvar_Get( "developer", "0", CVAR_TEMP );
-	com_logfile = Cvar_Get( "logfile", "0", CVAR_TEMP );
+	/* Config files may contain logfile 0; restore automatic logging at startup. */
+	com_logfile = Cvar_Get( "logfile", "2", CVAR_TEMP );
+	Cvar_Set( "logfile", "2" );
 
 	com_timescale = Cvar_Get( "timescale", "1", CVAR_CHEAT | CVAR_SYSTEMINFO );
 	com_fixedtime = Cvar_Get( "fixedtime", "0", CVAR_CHEAT );
@@ -2282,8 +2312,11 @@ void Com_Frame( void ) {
 
 
 	if ( setjmp( abortframe ) ) {
+        Com_FlushLog();
+        CL_R241TraceAbort();
 		return;         // an ERR_DROP was thrown
 	}
+    CL_R241TraceFrameBegin(com_frameNumber);
 
 	// bk001204 - init to zero.
 	//  also:  might be clobbered by `longjmp' or `vfork'
@@ -2315,6 +2348,7 @@ void Com_Frame( void ) {
 		timeBeforeFirstEvents = Sys_Milliseconds();
 	}
 
+    CL_R241TraceMark(CT241_CAP_ENTER);
 	// we may want to spin here if things are going too fast
 	if ( !com_dedicated->integer && com_maxfps->integer > 0 && !com_timedemo->integer ) {
 		minMsec = 1000 / com_maxfps->integer;
@@ -2328,6 +2362,7 @@ void Com_Frame( void ) {
 		}
 		msec = com_frameTime - lastTime;
 	} while ( msec < minMsec );
+    CL_R241TraceMark(CT241_CAP_EXIT);
 	Cbuf_Execute();
 
 	lastTime = com_frameTime;
@@ -2343,7 +2378,9 @@ void Com_Frame( void ) {
 		timeBeforeServer = Sys_Milliseconds();
 	}
 
+    CL_R241TraceMark(CT241_SV_ENTER);
 	SV_Frame( msec );
+    CL_R241TraceMark(CT241_SV_EXIT);
 
 	// if "dedicated" has been modified, start up
 	// or shut down the client system.
@@ -2427,6 +2464,8 @@ void Com_Frame( void ) {
 	// old net chan encryption key
 	key = lastTime * 0x87243987;
 
+    Com_FlushLog();
+    CL_R241TraceFrameEnd();
 	com_frameNumber++;
 }
 
@@ -2438,6 +2477,7 @@ Com_Shutdown
 void Com_Shutdown( void ) {
 	if ( logfile ) {
 		FS_FCloseFile( logfile );
+		logNeedsFlush = qfalse;
 		logfile = 0;
 	}
 
@@ -2686,36 +2726,6 @@ skipB:
 		mov byte ptr [ebx],al
 skipA:
 	}
-}
-
-qboolean Com_Memcmp( const void *src0, const void *src1, const unsigned int count ) {
-	unsigned int i;
-	// MMX version anyone?
-
-	if ( count >= 16 ) {
-		unsigned int *dw = (unsigned int*)( src0 );
-		unsigned int *sw = (unsigned int*)( src1 );
-
-		unsigned int nm2 = count / 16;
-		for ( i = 0; i < nm2; i += 4 )
-		{
-			unsigned int tmp = ( dw[i + 0] - sw[i + 0] ) | ( dw[i + 1] - sw[i + 1] ) |
-							   ( dw[i + 2] - sw[i + 2] ) | ( dw[i + 3] - sw[i + 3] );
-			if ( tmp ) {
-				return qfalse;
-			}
-		}
-	}
-	if ( count & 15 ) {
-		byte *d = (byte*)src0;
-		byte *s = (byte*)src1;
-		for ( i = count & 0xfffffff0; i < count; i++ )
-			if ( d[i] != s[i] ) {
-				return qfalse;
-			}
-	}
-
-	return qtrue;
 }
 
 void Com_Prefetch( const void *s, const unsigned int bytes, e_prefetch type ) {

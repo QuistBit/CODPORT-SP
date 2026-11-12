@@ -240,7 +240,7 @@ PROTOCOL
 ==============================================================
 */
 
-#define PROTOCOL_VERSION    49  // TA value
+#define PROTOCOL_VERSION    COD1_STATE_PROTOCOL  // PATCH40: explicit CoD jump state
 //#define	PROTOCOL_VERSION	43	// (SA) bump this up
 
 

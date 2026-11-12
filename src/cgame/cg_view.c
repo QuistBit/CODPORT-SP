@@ -29,10 +29,141 @@ If you have questions concerning this license or the applicable additional terms
 // cg_view.c -- setup all the parameters (position, angle, etc)
 // for a 3D rendering
 #include "cg_local.h"
+#include "cg_r241_frame_trace.h"
+#include "cg_cod1_step.h"
+#include "cg_cod1_bob.h"
+#include "cg_cod1_wide.h"
+#include "../game/bg_cod1_combat.h"
+#include "../game/bg_cod1_lean.h"
+#include "cg_cod1_ads_zoom.h"
 
 //========================
 extern int notebookModel;
 //========================
+
+/* This is a client-side visual probe; no server entity or collision body is
+ * created. The actor stays where it was placed until disabled or map reload. */
+typedef struct {
+	qboolean enabled;
+	refEntity_t entity;
+	int startTime;
+} cgCod1ActorDebug_t;
+static cgCod1ActorDebug_t cgCod1ActorDebug;
+
+void CG_Cod1ActorDebugReset( void ) {
+	memset( &cgCod1ActorDebug, 0, sizeof( cgCod1ActorDebug ) );
+}
+
+/* Send a bounded request; the server independently validates it and locates
+ * the actor using its own player state. Retire local probes on placement. */
+#include "cg_cod1_foley_scene.inc"
+
+#include "cg_cod1_actor_scene_command.inc"
+
+static qboolean CG_Cod1ActorDebugDistance( const char *arg, float *distance ) {
+	char *end;
+	double value;
+	if ( !arg || !*arg ) return qfalse;
+	value = strtod( arg, &end );
+	if ( end == arg || *end || !( value >= 80.0 && value <= 512.0 ) ) return qfalse;
+	*distance = (float)value;
+	return qtrue;
+}
+
+void CG_Cod1ActorDebug_f( void ) {
+	refEntity_t ent;
+	trace_t wall, ground;
+	vec3_t forward, facing, angles, target, from, to, mins, maxs;
+	float distance = 140.f, length;
+	int argc = trap_Argc();
+	const char *mode;
+	if ( argc < 2 || argc > 3 ) goto usage;
+	mode = CG_Argv( 1 );
+	if ( !Q_stricmp( mode, "0" ) && argc == 2 ) {
+		CG_Cod1ActorDebugReset();
+		CG_Printf( "CoD1 actor debug: off\n" );
+		return;
+	}
+	if ( Q_stricmp( mode, "1" ) ||
+	     ( argc == 3 && !CG_Cod1ActorDebugDistance( CG_Argv( 2 ), &distance ) ) ) goto usage;
+	if ( !cg.snap || cg.hyperspace ) {
+		CG_Printf( "CoD1 actor debug: load a map first\n" );
+		return;
+	}
+	memset( &ent, 0, sizeof( ent ) );
+	ent.reType = RT_MODEL;
+	ent.hModel = trap_R_RegisterModel( "cod1actor/wehrmacht_mp40a" );
+	if ( !ent.hModel ) {
+		CG_Printf( "CoD1 actor debug: actor XModels/materials missing\n" );
+		return;
+	}
+	VectorCopy( cg.refdef.viewaxis[0], forward );
+	forward[2] = 0;
+	length = VectorLength( forward );
+	if ( !( length > 0.001f && length < 1000.f ) ) {
+		CG_Printf( "CoD1 actor debug: invalid camera direction\n" );
+		return;
+	}
+	VectorScale( forward, 1.f / length, forward );
+	VectorMA( cg.refdef.vieworg, distance, forward, target );
+	CG_Trace( &wall, cg.refdef.vieworg, NULL, NULL, target,
+	          cg.predictedPlayerState.clientNum, MASK_SOLID );
+	if ( wall.startsolid || wall.allsolid || !( wall.fraction >= 1.f ) ) {
+		CG_Printf( "CoD1 actor debug: wall ahead; choose a clear spot or shorter distance\n" );
+		return;
+	}
+	VectorCopy( target, from );
+	VectorCopy( target, to );
+	from[2] = cg.refdef.vieworg[2] + 96.f;
+	to[2] = cg.refdef.vieworg[2] - 384.f;
+	CG_Trace( &ground, from, NULL, NULL, to,
+	          cg.predictedPlayerState.clientNum, MASK_SOLID );
+	if ( ground.startsolid || ground.allsolid ||
+	     !( ground.fraction >= 0.f && ground.fraction < 1.f ) ||
+	     !( ground.plane.normal[2] >= 0.7f ) ||
+	     !( ground.endpos[2] > -100000.f && ground.endpos[2] < 100000.f ) ) {
+		CG_Printf( "CoD1 actor debug: no usable floor under placement point\n" );
+		return;
+	}
+	trap_R_ModelBounds( ent.hModel, mins, maxs );
+	if ( !( mins[2] >= -512.f && mins[2] < maxs[2] && maxs[2] <= 512.f ) ) {
+		CG_Printf( "CoD1 actor debug: invalid composed model bounds\n" );
+		return;
+	}
+	VectorCopy( target, ent.origin );
+	ent.origin[2] = ground.endpos[2] - mins[2] + 1.f;
+	VectorCopy( ent.origin, ent.oldorigin );
+	VectorScale( forward, -1.f, facing );
+	vectoangles( facing, angles );
+	angles[PITCH] = angles[ROLL] = 0;
+	AnglesToAxis( angles, ent.axis );
+	cgCod1ActorDebug.entity = ent;
+	cgCod1ActorDebug.startTime = cg.time;
+	cgCod1ActorDebug.enabled = qtrue;
+	/* The renderer's preview is independent. Switch it off to show one actor. */
+	trap_SendConsoleCommand( "cod1_actor_preview 0\n" );
+	CG_Printf( "CoD1 actor debug: placed on floor (%.0f %.0f %.0f)\n",
+	           ent.origin[0], ent.origin[1], ent.origin[2] );
+	return;
+usage:
+	CG_Printf( "Usage: cod1_actor_debug 1 [distance 80..512] or cod1_actor_debug 0\n" );
+}
+
+void CG_Cod1ActorDebugAdd( void ) {
+	cod1ActorAnimState_t state;
+	if ( !cgCod1ActorDebug.enabled || !cg.snap || cg.hyperspace ||
+	     ( cg.refdef.rdflags & ( RDF_NOWORLDMODEL | RDF_SKYBOXPORTAL ) ) ) return;
+	memset( &state, 0, sizeof( state ) );
+	state.version = COD1_ACTOR_STATE_VERSION;
+	state.size = sizeof( state );
+	state.clip = COD1_ACTOR_CLIP_IDLE;
+	if ( cg.time < cgCod1ActorDebug.startTime ) cgCod1ActorDebug.startTime = cg.time;
+	state.elapsedMs = cg.time - cgCod1ActorDebug.startTime;
+	if ( !trap_R_AddCod1ActorAnimated( &cgCod1ActorDebug.entity, &state ) ) {
+		CG_Cod1ActorDebugReset();
+		CG_Printf( "CoD1 actor debug: animated submission failed; check XAnim and developer log\n" );
+	}
+}
 
 /*
 =============================================================================
@@ -350,6 +481,9 @@ static void CG_OffsetThirdPersonView( void ) {
 static void CG_StepOffset( void ) {
 	int timeDelta;
 
+	cg.refdef.vieworg[2] -= CG_Cod1StepOffset(cg.cod1StepChange,
+		&cg.cod1StepTime, cg.time);
+
 	// smooth out stair climbing
 	timeDelta = cg.time - cg.stepTime;
 	// Ridah
@@ -368,7 +502,7 @@ CG_KickAngles
 ================
 */
 void CG_KickAngles( void ) {
-	const vec3_t centerSpeed = {2400, 2400, 2400};
+	vec3_t centerSpeed = {2400, 2400, 2400};
 	const float recoilCenterSpeed = 200;
 	const float recoilIgnoreCutoff = 15;
 	const float recoilMaxSpeed = 50;
@@ -376,7 +510,11 @@ void CG_KickAngles( void ) {
 	float idealCenterSpeed, kickChange;
 	int i, frametime, t;
 	float ft;
-	#define STEP 20
+	#define STEP 5
+    if(CW_Active(&cg.predictedPlayerState)) {
+        float center=(float)CW_Number(CW_PSDef(&cg.predictedPlayerState),CW_ADS(&cg.predictedPlayerState)>.5f?"adsViewKickCenterSpeed":"hipViewKickCenterSpeed");
+        for(i=0;i<3;i++)centerSpeed[i]=center;
+    }
 
 	// this code is frametime-dependant, so split it up into small chunks
 	//cg.kickAngles[PITCH] = 0;
@@ -548,12 +686,9 @@ CG_OffsetFirstPersonView
 static void CG_OffsetFirstPersonView( void ) {
 	float           *origin;
 	float           *angles;
-	float bob;
 	float ratio;
 	float delta;
-	float speed;
 	float f;
-	vec3_t predictedVelocity;
 	int timeDelta;
 
 	if ( cg.snap->ps.pm_type == PM_INTERMISSION ) {
@@ -565,6 +700,7 @@ static void CG_OffsetFirstPersonView( void ) {
 
 	// if dead, fix the angle and don't add any kick
 	if ( cg.snap->ps.stats[STAT_HEALTH] <= 0 ) {
+		cg.cod1Posture.valid=0;
 		angles[ROLL] = 40;
 		angles[PITCH] = -15;
 		angles[YAW] = cg.snap->ps.stats[STAT_DEAD_YAW];
@@ -597,66 +733,43 @@ static void CG_OffsetFirstPersonView( void ) {
 		}
 	}
 
-	// add pitch based on fall kick
-#if 0
-	ratio = ( cg.time - cg.landTime ) / FALL_TIME;
-	if ( ratio < 0 ) {
-		ratio = 0;
-	}
-	angles[PITCH] += ratio * cg.fall_value;
-#endif
 
-	// add angles based on velocity
-	VectorCopy( cg.predictedPlayerState.velocity, predictedVelocity );
-
-	delta = DotProduct( predictedVelocity, cg.refdef.viewaxis[0] );
-	angles[PITCH] += delta * cg_runpitch.value;
-
-	delta = DotProduct( predictedVelocity, cg.refdef.viewaxis[1] );
-	angles[ROLL] -= delta * cg_runroll.value;
-
-	// add angles based on bob
-
-	// make sure the bob is visible even at low speeds
-	speed = cg.xyspeed > 200 ? cg.xyspeed : 200;
-
-	delta = cg.bobfracsin * cg_bobpitch.value * speed;
-	if ( cg.predictedPlayerState.pm_flags & PMF_DUCKED ) {
-		delta *= 3;     // crouching
-	}
-	angles[PITCH] += delta;
-	delta = cg.bobfracsin * cg_bobroll.value * speed;
-	if ( cg.predictedPlayerState.pm_flags & PMF_DUCKED ) {
-		delta *= 3;     // crouching accentuates roll
-	}
-	if ( cg.bobcycle & 1 ) {
-		delta = -delta;
-	}
-	angles[ROLL] += delta;
+	/* PATCH22: no RTCW velocity tilt or gait pitch/roll. */
 
 //===================================
 
-	// add view height
-	origin[2] += cg.predictedPlayerState.viewheight;
+    /* PATCH37: one posture curve; do not stack RTCW duck smoothing on it. */
+    if(CW_Get(0) && cg.predictedPlayerState.pm_type==PM_NORMAL &&
+       !(cg.predictedPlayerState.eFlags & EF_MG42_ACTIVE)) {
+        int stance=(cg.predictedPlayerState.pm_flags & PMF_COD1_PRONE)?2:
+            (cg.predictedPlayerState.pm_flags & PMF_DUCKED)?1:0;
+        float eye=cg.predictedPlayerState.cod1EyeTarget ?
+            cg.predictedPlayerState.cod1EyeHeight : COD1_EyeTarget(stance);
+        /* Shared command-time state: no second client-local transition clock. */
+        cg.cod1Posture.valid=1;cg.cod1Posture.height=eye;
+        origin[2] += cg.predictedPlayerState.viewheight + eye-COD1_EyeTarget(stance);
+    } else {
+        cg.cod1Posture.valid=0;
+        origin[2] += cg.predictedPlayerState.viewheight;
+        timeDelta=cg.time-cg.duckTime;
+        if(timeDelta<0)cg.duckTime=cg.time-DUCK_TIME;
+        if(timeDelta<DUCK_TIME)origin[2]-=cg.duckChange*(DUCK_TIME-timeDelta)/DUCK_TIME;
+    }
 
-	// smooth out duck height changes
-	timeDelta = cg.time - cg.duckTime;
-	if ( timeDelta < 0 ) { // Ridah
-		cg.duckTime = cg.time - DUCK_TIME;
-	}
-	if ( timeDelta < DUCK_TIME ) {
-		cg.refdef.vieworg[2] -= cg.duckChange
-								* ( DUCK_TIME - timeDelta ) / DUCK_TIME;
-	}
-
-	// add bob height
-	bob = cg.bobfracsin * cg.xyspeed * cg_bobup.value;
-	if ( bob > 6 ) {
-		bob = 6;
-	}
-
-	origin[2] += bob;
-
+	/* PATCH42: original scalar bob and camera-right translation. */
+    if(CG_Cod1BobActive(&cg.predictedPlayerState)) {
+        const cwDef_t *def=CW_PSDef(&cg.predictedPlayerState);
+        float phase=cod_bob_phase(cg.predictedPlayerState.bobCycle);
+        float ads=CW_ADS(&cg.predictedPlayerState),factor=(float)CW_Number(def,"adsViewBobMult");
+        float horizontal;vec3_t right;int stance=CG_Cod1BobStance(&cg.predictedPlayerState);
+        if(ads && factor) {
+            angles[PITCH]-=ads*factor*cod_bob_vertical(stance,phase,cg.xyspeed,45);
+            angles[YAW]-=ads*factor*cod_bob_horizontal(stance,phase,cg.xyspeed,45);
+        }
+        origin[2]+=cod_bob_vertical(stance,phase,cg.xyspeed,8);
+        horizontal=cod_bob_horizontal(stance,phase,cg.xyspeed,8);
+        AngleVectors(angles,NULL,right,NULL);VectorMA(origin,horizontal,right,origin);
+    }
 
 	// add fall height
 	delta = cg.time - cg.landTime;
@@ -678,7 +791,9 @@ static void CG_OffsetFirstPersonView( void ) {
 	CG_ZoomSway();
 
 	// adjust for 'lean'
-	if ( cg.predictedPlayerState.leanf != 0 ) {
+    if(BG_Cod1LeanActive(&cg.predictedPlayerState)) {
+        COD1_LeanOffset(cg.refdef.vieworg,cg.refdefViewAngles[YAW],cg.predictedPlayerState.leanf,16,20);
+    } else if ( cg.predictedPlayerState.leanf != 0 ) {
 		//add leaning offset
 		vec3_t right;
 		cg.refdefViewAngles[2] += cg.predictedPlayerState.leanf / 2.0f;
@@ -690,18 +805,18 @@ static void CG_OffsetFirstPersonView( void ) {
 
 	VectorAdd( origin, cg.kick_origin, origin );
 
-	// pivot the eye based on a neck length
-#if 0
-	{
-#define NECK_LENGTH     8
-		vec3_t forward, up;
+    /* Keep the interpolated eye out of a low ceiling while the physics body
+     * has already crouched/proned. Only a presentation trace; no body movement. */
+    if(cg.cod1Posture.valid && cg.cod1Posture.duration) {
+        trace_t tr;
+        vec3_t actual,lo={-2,-2,-2},hi={2,2,2};
+        VectorCopy(cg.predictedPlayerState.origin,actual);
+        actual[2]+=cg.predictedPlayerState.viewheight;
+        CG_Trace(&tr,actual,lo,hi,origin,cg.predictedPlayerState.clientNum,MASK_SOLID);
+        if(tr.startsolid || tr.allsolid)VectorCopy(actual,origin);
+        else if(tr.fraction<1)VectorCopy(tr.endpos,origin);
+    }
 
-		cg.refdef.vieworg[2] -= NECK_LENGTH;
-		AngleVectors( cg.refdefViewAngles, forward, NULL, up );
-		VectorMA( cg.refdef.vieworg, 3, forward, cg.refdef.vieworg );
-		VectorMA( cg.refdef.vieworg, NECK_LENGTH, up, cg.refdef.vieworg );
-	}
-#endif
 }
 
 //======================================================================
@@ -815,6 +930,7 @@ static int CG_CalcFov( void ) {
 	qboolean dead;
 
 	CG_Zoom();
+	CG_Cod1UpdateADSZoom();
 
 	if ( cg.predictedPlayerState.stats[STAT_HEALTH] <= 0 ) {
 		dead = qtrue;
@@ -895,6 +1011,10 @@ static int CG_CalcFov( void ) {
 		fov_x = 55;
 	}
 
+    if(CW_Active(&cg.predictedPlayerState) && cg.predictedPlayerState.stats[STAT_HEALTH]>0 && !cg.predictedPlayerState.persistant[PERS_HWEAPON_USE]) {
+        fov_x=CG_Cod1ADSFov(&cg.predictedPlayerState,fov_x);
+    }
+	fov_x = CG_Cod1WideFov(fov_x, cg.refdef.width, cg.refdef.height);
 	x = cg.refdef.width / tan( fov_x / 360 * M_PI );
 	fov_y = atan2( cg.refdef.height, x );
 	fov_y = fov_y * 360 / M_PI;
@@ -942,6 +1062,11 @@ static int CG_CalcFov( void ) {
 	} else {
 		cg.zoomSensitivity = cg.refdef.fov_y / 75.0;
 	}
+
+    if(CW_Active(&cg.predictedPlayerState) && !cg.predictedPlayerState.persistant[PERS_HWEAPON_USE]) {
+        float base=cg_fov.value;if(base<1)base=90;
+        cg.zoomSensitivity=CG_Cod1ADSFov(&cg.predictedPlayerState,base)/base;
+    }
 
 	return inwater;
 }
@@ -1115,8 +1240,8 @@ static int CG_CalcViewValues( void ) {
 
 	cg.bobcycle = ( ps->bobCycle & 128 ) >> 7;
 	cg.bobfracsin = fabs( sin( ( ps->bobCycle & 127 ) / 127.0 * M_PI ) );
-	cg.xyspeed = sqrt( ps->velocity[0] * ps->velocity[0] +
-					   ps->velocity[1] * ps->velocity[1] );
+	/* PATCH54: the native scalar feeds both camera and viewmodel bob. */
+	cg.xyspeed = CG_Cod1BobSpeed( ps, cg.time );
 
 
 	VectorCopy( ps->origin, cg.refdef.vieworg );
@@ -1159,6 +1284,7 @@ static int CG_CalcViewValues( void ) {
 
 	if ( cg.renderingThirdPerson ) {
 		// back away from character
+		cg.cod1Posture.valid=0;
 		CG_OffsetThirdPersonView();
 	} else {
 		// offset for local bobbing and kicks
@@ -1399,7 +1525,8 @@ void CG_DrawSkyBoxPortal( void ) {
 			fov_x = 55;
 		}
 
-		x = cg.refdef.width / tan( fov_x / 360 * M_PI );
+		fov_x = CG_Cod1WideFov(fov_x, cg.refdef.width, cg.refdef.height);
+	x = cg.refdef.width / tan( fov_x / 360 * M_PI );
 		fov_y = atan2( cg.refdef.height, x );
 		fov_y = fov_y * 360 / M_PI;
 
@@ -1450,10 +1577,11 @@ CG_DrawActiveFrame
 Generates and draws a game scene and status information at the given time.
 =================
 */
-void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demoPlayback ) {
+static void CG_DrawActiveFrameUntracedR241( int serverTime, stereoFrame_t stereoView, qboolean demoPlayback ) {
 	int inwater;
 
 	cg.cld = 0;         // NERVE - SMF - reset clientDamage
+    trap_Cod1SetWeaponAngles(0,0,0); /* Clear stale aim on loading/early returns. */
 
 #ifdef DEBUGTIME_ENABLED
 	int dbgTime = trap_Milliseconds(),elapsed;
@@ -1461,6 +1589,7 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 #endif
 
 	cg.time = serverTime;
+	CG_Cod1AmbientFrame();
 	cg.demoPlayback = demoPlayback;
 
 	// update cvars
@@ -1506,9 +1635,14 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 	// if we haven't received any snapshots yet, all
 	// we can draw is the information screen
 	if ( !cg.snap || ( cg.snap->snapFlags & SNAPFLAG_NOT_ACTIVE ) ) {
+		CG_Cod1LoopSoundSuspend();
 		CG_DrawInformation();
 		return;
 	}
+    CG_Cod1FoleySceneFrame();
+    CG_Cod1VoiceFrame();
+    CG_Cod1LoopSoundFrame();
+
 
 	if ( cg.weaponSelect == WP_FG42SCOPE || cg.weaponSelect == WP_SNOOPERSCOPE || cg.weaponSelect == WP_SNIPERRIFLE ) {
 		float spd;
@@ -1557,6 +1691,8 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 
 	CG_CalcShakeCamera();
 	CG_ApplyShakeCamera();
+    CG_Cod1ScriptQuakeApply();
+    CG_R241TraceView();
 
 	DEBUGTIME
 
@@ -1581,6 +1717,7 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 	// build the render lists
 	if ( !cg.hyperspace ) {
 		CG_AddPacketEntities();         // adter calcViewValues, so predicted player state is correct
+		CG_Cod1ActorDebugAdd();
 		CG_AddMarks();
 
 		DEBUGTIME
@@ -1591,13 +1728,20 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 
 		DEBUGTIME
 
+		CG_Cod1EfxAdd();
 		CG_AddLocalEntities();
+        CG_Cod1DebugTextAdd();
+        CG_Cod1DebugLineAdd();
 
 		DEBUGTIME
 	}
 
 
-	CG_AddViewWeapon( &cg.predictedPlayerState );
+	CG_Cod1EfxBeginView();
+    CG_Cod1BrassBeginView();
+    CG_AddViewWeapon( &cg.predictedPlayerState );
+    CG_Cod1EfxAddView();
+    CG_Cod1BrassAdd();
 
 
 	DEBUGTIME
@@ -1637,6 +1781,7 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 
 	// let the client system know what our weapon, holdable item and zoom settings are
 	trap_SetUserCmdValue( cg.weaponSelect, cg.holdableSelect, cg.zoomSensitivity, cg.cld );
+    CG_Cod1SendWeaponAim();
 
 	// actually issue the rendering calls
 	CG_DrawActive( stereoView );
@@ -1653,3 +1798,9 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 	DEBUGTIME
 }
 
+#include "cg_r241_frame_trace.inc"
+void CG_DrawActiveFrame(int serverTime,stereoFrame_t stereoView,qboolean demoPlayback){
+    CG_R241TraceBegin(serverTime,stereoView);
+    CG_DrawActiveFrameUntracedR241(serverTime,stereoView,demoPlayback);
+    CG_R241TraceEnd();
+}

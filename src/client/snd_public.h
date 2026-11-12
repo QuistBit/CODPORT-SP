@@ -33,6 +33,18 @@ extern "C" {
 #endif
 #endif  ///// (SA) DOOMSOUND
 
+struct cod1MusicPlayback_s;
+int S_Cod1ScriptMusic(const struct cod1MusicPlayback_s *);
+struct cod1AmbientPlayback_s;
+int S_Cod1ScriptAmbient(const struct cod1AmbientPlayback_s *);
+void S_Cod1AmbientModuleReset(void);
+struct cod1VoiceRequest_s;
+int S_Cod1VoiceStream(const struct cod1VoiceRequest_s *);
+void S_Cod1VoiceModuleReset(void);
+struct cod1LoopStreamRequest_s;
+int S_Cod1LoopStream(const struct cod1LoopStreamRequest_s *);
+void S_Cod1LoopModuleReset(void);
+
 void S_Init( void );
 void S_Shutdown( void );
 void S_UpdateThread( void );
@@ -40,6 +52,10 @@ void S_UpdateThread( void );
 // if origin is NULL, the sound will be dynamically sourced from the entity
 void S_StartSound( vec3_t origin, int entnum, int entchannel, sfxHandle_t sfx );
 void S_StartSoundEx( vec3_t origin, int entnum, int entchannel, sfxHandle_t sfx, int flags );
+int S_Cod1SoundDuration(sfxHandle_t sfx,float pitch);
+struct cod1AliasSlaveRequest_s;
+void S_Cod1AliasSlave(const struct cod1AliasSlaveRequest_s *);
+int S_StartSoundCod1( vec3_t origin, int entnum, int entchannel, sfxHandle_t sfx, float gain, float pitch, float distMin, float distMax );
 void S_StartLocalSound( sfxHandle_t sfx, int channelNum );
 
 void S_StartBackgroundTrack( const char *intro, const char *loop, int fadeupTime );
@@ -103,3 +119,4 @@ int S_GetVoiceAmplitude( int entityNum );
 }
 #endif
 #endif  ///// (SA) DOOMSOUND
+

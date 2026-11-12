@@ -26,7 +26,13 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
+#include "cod1_collision.h"
 #include "cm_local.h"
+#include <float.h>
+#include "../game/bg_cod1_impact.h"
+#include "cod1_collision.h"
+
+void CM_Cod1DiagTriangleQuery(qboolean merged, qboolean selectedHit);
 
 // always use bbox vs. bbox collision and never capsule vs. bbox or vice versa
 #define ALWAYS_BBOX_VS_BBOX
@@ -127,31 +133,21 @@ float CM_DistanceFromLineSquared( vec3_t p, vec3_t lp1, vec3_t lp2, vec3_t dir )
 
 /*
 ================
-CM_VectorDistanceSquared
-================
-*/
-float CM_VectorDistanceSquared( vec3_t p1, vec3_t p2 ) {
-	vec3_t dir;
-
-	VectorSubtract( p2, p1, dir );
-	return VectorLengthSquared( dir );
-}
-
-/*
-================
 SquareRootFloat
 ================
 */
 float SquareRootFloat( float number ) {
-	long i;
+	int32_t i;
 	float x, y;
 	const float f = 1.5F;
 
 	x = number * 0.5F;
 	y  = number;
-	i  = *( long * ) &y;
+	/* The original bit approximation uses a 32-bit signed word. Native long
+	 * is 64-bit on LP64; memcpy also avoids type-punning aliasing violations. */
+	memcpy( &i, &y, sizeof( i ) );
 	i  = 0x5f3759df - ( i >> 1 );
-	y  = *( float * ) &i;
+	memcpy( &y, &i, sizeof( y ) );
 	y  = y * ( f - ( x * y * y ) );
 	y  = y * ( f - ( x * y * y ) );
 	return number * y;
@@ -266,7 +262,7 @@ void CM_TestInLeaf( traceWork_t *tw, cLeaf_t *leaf ) {
 		}
 		b->checkcount = cm.checkcount;
 
-		if ( !( b->contents & tw->contents ) ) {
+		if ( !tw->geometryOnly && !( b->contents & tw->contents ) ) {
 			continue;
 		}
 
@@ -280,7 +276,7 @@ void CM_TestInLeaf( traceWork_t *tw, cLeaf_t *leaf ) {
 #ifdef BSPC
 	if ( 1 ) {
 #else
-	if ( !cm_noCurves->integer ) {
+	if ( tw->geometryOnly || !cm_noCurves->integer ) {
 #endif //BSPC
 		for ( k = 0 ; k < leaf->numLeafSurfaces ; k++ ) {
 			patch = cm.surfaces[ cm.leafsurfaces[ leaf->firstLeafSurface + k ] ];
@@ -292,7 +288,7 @@ void CM_TestInLeaf( traceWork_t *tw, cLeaf_t *leaf ) {
 			}
 			patch->checkcount = cm.checkcount;
 
-			if ( !( patch->contents & tw->contents ) ) {
+			if ( !tw->geometryOnly && !( patch->contents & tw->contents ) ) {
 				continue;
 			}
 
@@ -406,7 +402,9 @@ void CM_TestBoundingBoxInCapsule( traceWork_t *tw, clipHandle_t model ) {
 	VectorSet( tw->sphere.offset, 0, 0, size[1][2] - tw->sphere.radius );
 
 	// replace the capsule with the bounding box
-	h = CM_TempBoxModel( tw->size[0], tw->size[1], qfalse );
+	h = tw->nativeTempModel
+		? CM_TempBoxModelContents( tw->size[0], tw->size[1], qfalse, tw->tempModelContents )
+		: CM_TempBoxModel( tw->size[0], tw->size[1], qfalse );
 	// calculate collision
 	cmod = CM_ClipHandleToModel( h );
 	CM_TestInLeaf( tw, &cmod->leaf );
@@ -481,6 +479,7 @@ void CM_TraceThroughPatch( traceWork_t *tw, cPatch_t *patch ) {
 
 	if ( tw->trace.fraction < oldFrac ) {
 		tw->trace.surfaceFlags = patch->surfaceFlags;
+        if(patch->cod1SurfaceKnown)CI_TraceSurface(&tw->trace,patch->cod1SurfaceFlags);
 		tw->trace.contents = patch->contents;
 	}
 }
@@ -660,6 +659,8 @@ void CM_TraceThroughBrush( traceWork_t *tw, cbrush_t *brush ) {
 			tw->trace.fraction = enterFrac;
 			tw->trace.plane = *clipplane;
 			tw->trace.surfaceFlags = leadside->surfaceFlags;
+            if (leadside->cod1SurfaceKnown)
+                CI_TraceSurface(&tw->trace, leadside->cod1SurfaceFlags);
 			tw->trace.contents = brush->contents;
 		}
 	}
@@ -686,7 +687,7 @@ void CM_TraceThroughLeaf( traceWork_t *tw, cLeaf_t *leaf ) {
 		}
 		b->checkcount = cm.checkcount;
 
-		if ( !( b->contents & tw->contents ) ) {
+		if ( !tw->geometryOnly && !( b->contents & tw->contents ) ) {
 			continue;
 		}
 
@@ -700,7 +701,7 @@ void CM_TraceThroughLeaf( traceWork_t *tw, cLeaf_t *leaf ) {
 #ifdef BSPC
 	if ( 1 ) {
 #else
-	if ( !cm_noCurves->integer ) {
+	if ( tw->geometryOnly || !cm_noCurves->integer ) {
 #endif
 		for ( k = 0 ; k < leaf->numLeafSurfaces ; k++ ) {
 			patch = cm.surfaces[ cm.leafsurfaces[ leaf->firstLeafSurface + k ] ];
@@ -712,7 +713,7 @@ void CM_TraceThroughLeaf( traceWork_t *tw, cLeaf_t *leaf ) {
 			}
 			patch->checkcount = cm.checkcount;
 
-			if ( !( patch->contents & tw->contents ) ) {
+			if ( !tw->geometryOnly && !( patch->contents & tw->contents ) ) {
 				continue;
 			}
 
@@ -744,6 +745,7 @@ void CM_TraceThroughSphere( traceWork_t *tw, vec3_t origin, float radius, vec3_t
 	if ( l1 < Square( radius ) ) {
 		tw->trace.fraction = 0;
 		tw->trace.startsolid = qtrue;
+		if (tw->nativeTempModel) tw->trace.contents = tw->tempModelContents;
 		// test for allsolid
 		VectorSubtract( end, origin, dir );
 		l1 = VectorLengthSquared( dir );
@@ -802,7 +804,7 @@ void CM_TraceThroughSphere( traceWork_t *tw, vec3_t origin, float radius, vec3_t
 			VectorCopy( dir, tw->trace.plane.normal );
 			VectorAdd( tw->modelOrigin, intersection, intersection );
 			tw->trace.plane.dist = DotProduct( tw->trace.plane.normal, intersection );
-			tw->trace.contents = CONTENTS_BODY;
+			tw->trace.contents = tw->tempModelContents;
 		}
 	} else if ( d == 0 )     {
 		//t1 = (- b ) / 2;
@@ -837,6 +839,7 @@ void CM_TraceThroughVerticalCylinder( traceWork_t *tw, vec3_t origin, float radi
 		if ( l1 < Square( radius ) ) {
 			tw->trace.fraction = 0;
 			tw->trace.startsolid = qtrue;
+			if (tw->nativeTempModel) tw->trace.contents = tw->tempModelContents;
 			VectorSubtract( end2d, org2d, dir );
 			l1 = VectorLengthSquared( dir );
 			if ( l1 < Square( radius ) ) {
@@ -903,7 +906,7 @@ void CM_TraceThroughVerticalCylinder( traceWork_t *tw, vec3_t origin, float radi
 				VectorCopy( dir, tw->trace.plane.normal );
 				VectorAdd( tw->modelOrigin, intersection, intersection );
 				tw->trace.plane.dist = DotProduct( tw->trace.plane.normal, intersection );
-				tw->trace.contents = CONTENTS_BODY;
+				tw->trace.contents = tw->tempModelContents;
 			}
 		}
 	} else if ( d == 0 )     {
@@ -1007,7 +1010,9 @@ void CM_TraceBoundingBoxThroughCapsule( traceWork_t *tw, clipHandle_t model ) {
 	VectorSet( tw->sphere.offset, 0, 0, size[1][2] - tw->sphere.radius );
 
 	// replace the capsule with the bounding box
-	h = CM_TempBoxModel( tw->size[0], tw->size[1], qfalse );
+	h = tw->nativeTempModel
+		? CM_TempBoxModelContents( tw->size[0], tw->size[1], qfalse, tw->tempModelContents )
+		: CM_TempBoxModel( tw->size[0], tw->size[1], qfalse );
 	// calculate collision
 	cmod = CM_ClipHandleToModel( h );
 	CM_TraceThroughLeaf( tw, &cmod->leaf );
@@ -1149,15 +1154,14 @@ void CM_TraceThroughTree( traceWork_t *tw, int num, float p1f, float p2f, vec3_t
 CM_Trace
 ==================
 */
-void CM_Trace( trace_t *results, const vec3_t start, const vec3_t end,
+static void CM_TraceInternal( trace_t *results, const vec3_t start, const vec3_t end,
 			   const vec3_t mins, const vec3_t maxs,
-			   clipHandle_t model, const vec3_t origin, int brushmask, int capsule, sphere_t *sphere ) {
+			   clipHandle_t model, const vec3_t origin, int brushmask, int capsule, sphere_t *sphere,
+			   qboolean geometryOnly, qboolean nativeRaw ) {
 	int i;
 	traceWork_t tw;
 	vec3_t offset;
 	cmodel_t    *cmod;
-
-	cmod = CM_ClipHandleToModel( model );
 
 	cm.checkcount++;        // for multi-check avoidance
 
@@ -1165,14 +1169,18 @@ void CM_Trace( trace_t *results, const vec3_t start, const vec3_t end,
 
 	// fill in a default trace
 	Com_Memset( &tw, 0, sizeof( tw ) );
+	tw.geometryOnly = geometryOnly;
 	tw.trace.fraction = 1;  // assume it goes the entire distance until shown otherwise
 	VectorCopy( origin, tw.modelOrigin );
 
 	if ( !cm.numNodes ) {
+		VectorCopy( end, tw.trace.endpos );
+		tw.trace.entityNum = ENTITYNUM_NONE;
 		*results = tw.trace;
 
 		return; // map not loaded, shouldn't happen
 	}
+	cmod = CM_ClipHandleToModel( model );
 
 	// allow NULL to be passed in for 0,0,0
 	if ( !mins ) {
@@ -1184,6 +1192,10 @@ void CM_Trace( trace_t *results, const vec3_t start, const vec3_t end,
 
 	// set basic parms
 	tw.contents = brushmask;
+	tw.tempModelContents = ( model == BOX_MODEL_HANDLE || model == CAPSULE_MODEL_HANDLE )
+		? CM_TempModelContents() : CONTENTS_BODY;
+	tw.nativeTempModel = ( model == BOX_MODEL_HANDLE || model == CAPSULE_MODEL_HANDLE ) &&
+		CM_TempModelHasNativeContents();
 
 	// adjust so that mins and maxs are always symetric, which
 	// avoids some complications with plane expanding of rotated
@@ -1266,11 +1278,71 @@ void CM_Trace( trace_t *results, const vec3_t start, const vec3_t end,
 		}
 	}
 
+    /* CoD1 world point traces need both authored collision volumes and the
+     * render/collision triangles retained by the early port.  Neither source
+     * is a strict superset of the other: native V59 brushes/curves catch
+     * invisible/clip volumes while the triangle adapter still contains mesh
+     * contacts absent from the native point query.  Merge only the zero-size
+     * world point path and keep the earliest contact. */
+    if ( !nativeRaw && !model && !capsule && !sphere &&
+         mins[0] == 0 && mins[1] == 0 && mins[2] == 0 &&
+         maxs[0] == 0 && maxs[1] == 0 && maxs[2] == 0 &&
+         ( brushmask & CONTENTS_SOLID ) && cm.cod1Triangles && cm.cod1NumTriangles > 0 ) {
+        trace_t nativeTrace, triangleTrace;
+        qboolean haveNative, nativeSelected;
+        Com_Memset( &nativeTrace, 0, sizeof( nativeTrace ) );
+        nativeTrace.fraction = 1;
+        VectorCopy( end, nativeTrace.endpos );
+        haveNative = CM_TraceV59( &nativeTrace, start, end, mins, maxs,
+                model, brushmask, capsule, sphere );
+        Com_Memset( &triangleTrace, 0, sizeof( triangleTrace ) );
+        triangleTrace.fraction = 1;
+        VectorCopy( end, triangleTrace.endpos );
+        COD1_CollisionTraceShape( cm.cod1Triangles, cm.cod1NumTriangles,
+                start, end, mins, maxs, &triangleTrace, capsule );
+        nativeSelected = haveNative && ( nativeTrace.startsolid || nativeTrace.allsolid ||
+                nativeTrace.fraction < triangleTrace.fraction );
+        if ( nativeSelected ) {
+            tw.trace = nativeTrace;
+        } else {
+            tw.trace = triangleTrace;
+        }
+        CM_Cod1DiagTriangleQuery(qtrue, !nativeSelected &&
+            (triangleTrace.fraction < 1 || triangleTrace.startsolid || triangleTrace.allsolid));
+        goto cod1_trace_done;
+    }
+
+    if (!geometryOnly && (nativeRaw
+            ? CM_TraceV59Raw(&tw.trace,start,end,mins,maxs,model,brushmask,capsule,sphere)
+            : CM_TraceV59(&tw.trace,start,end,mins,maxs,model,brushmask,capsule,sphere)))
+        goto cod1_trace_done;
+
+	/* Non-capsule CoD1 queries retain the legacy render-triangle fallback.
+       A CoD1 world has no native RTCW node/brush tree yet.  Dispatch the
+	   world trace to the triangle-soup adapter and keep the normal endpos
+	   finalization below so callers see an ordinary RTCW trace_t. */
+	if ( !model && ( brushmask & CONTENTS_SOLID ) &&
+		 cm.cod1Triangles && cm.cod1NumTriangles > 0 ) {
+		COD1_CollisionTraceShape( cm.cod1Triangles, cm.cod1NumTriangles,
+				start, end, mins, maxs, &tw.trace, capsule );
+		CM_Cod1DiagTriangleQuery(qfalse,
+			tw.trace.fraction < 1 || tw.trace.startsolid || tw.trace.allsolid);
+		goto cod1_trace_done;
+	}
+
 	//
 	// check for position test special case
 	//
 	if ( start[0] == end[0] && start[1] == end[1] && start[2] == end[2] ) {
 		if ( model ) {
+			/* The private native lane must honor its selected primitive.
+			 * Keep the historical forced-bbox policy for every legacy call. */
+			if ( nativeRaw && model == CAPSULE_MODEL_HANDLE ) {
+				if ( tw.sphere.use ) CM_TestCapsuleInCapsule( &tw, model );
+				else CM_TestBoundingBoxInCapsule( &tw, model );
+			} else if ( nativeRaw && model == BOX_MODEL_HANDLE ) {
+				CM_TestInLeaf( &tw, &cmod->leaf );
+			} else
 #ifdef ALWAYS_BBOX_VS_BBOX
 			if ( model == BOX_MODEL_HANDLE || model == CAPSULE_MODEL_HANDLE ) {
 				tw.sphere.use = qfalse;
@@ -1313,6 +1385,12 @@ void CM_Trace( trace_t *results, const vec3_t start, const vec3_t end,
 		// general sweeping through world
 		//
 		if ( model ) {
+			if ( nativeRaw && model == CAPSULE_MODEL_HANDLE ) {
+				if ( tw.sphere.use ) CM_TraceCapsuleThroughCapsule( &tw, model );
+				else CM_TraceBoundingBoxThroughCapsule( &tw, model );
+			} else if ( nativeRaw && model == BOX_MODEL_HANDLE ) {
+				CM_TraceThroughLeaf( &tw, &cmod->leaf );
+			} else
 #ifdef ALWAYS_BBOX_VS_BBOX
 			if ( model == BOX_MODEL_HANDLE || model == CAPSULE_MODEL_HANDLE ) {
 				tw.sphere.use = qfalse;
@@ -1339,6 +1417,7 @@ void CM_Trace( trace_t *results, const vec3_t start, const vec3_t end,
 		}
 	}
 
+cod1_trace_done:
 	// generate endpos from the original, unmodified start/end
 	if ( tw.trace.fraction == 1 ) {
 		VectorCopy( end, tw.trace.endpos );
@@ -1349,6 +1428,13 @@ void CM_Trace( trace_t *results, const vec3_t start, const vec3_t end,
 	}
 
 	*results = tw.trace;
+}
+
+void CM_Trace( trace_t *results, const vec3_t start, const vec3_t end,
+    const vec3_t mins, const vec3_t maxs, clipHandle_t model,
+    const vec3_t origin, int brushmask, int capsule, sphere_t *sphere ) {
+    CM_TraceInternal(results, start, end, mins, maxs, model, origin,
+        brushmask, capsule, sphere, qfalse, qfalse);
 }
 
 /*
@@ -1370,10 +1456,11 @@ Handles offseting and rotation of the end points for moving and
 rotating entities
 ==================
 */
-void CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
+static void CM_TransformedBoxTraceInternal( trace_t *results, const vec3_t start, const vec3_t end,
 							 const vec3_t mins, const vec3_t maxs,
 							 clipHandle_t model, int brushmask,
-							 const vec3_t origin, const vec3_t angles, int capsule ) {
+							 const vec3_t origin, const vec3_t angles, int capsule,
+							 qboolean geometryOnly, qboolean nativeRaw ) {
 	trace_t trace;
 	vec3_t start_l, end_l;
 	qboolean rotated;
@@ -1443,7 +1530,7 @@ void CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t 
 	}
 
 	// sweep the box through the model
-	CM_Trace( &trace, start_l, end_l, symetricSize[0], symetricSize[1], model, origin, brushmask, capsule, &sphere );
+	CM_TraceInternal( &trace, start_l, end_l, symetricSize[0], symetricSize[1], model, origin, brushmask, capsule, &sphere, geometryOnly, nativeRaw );
 
 	// if the bmodel was rotated and there was a collision
 	if ( rotated && trace.fraction != 1.0 ) {
@@ -1459,4 +1546,47 @@ void CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t 
 	trace.endpos[2] = start[2] + trace.fraction * ( end[2] - start[2] );
 
 	*results = trace;
+}
+
+void CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
+    const vec3_t mins, const vec3_t maxs, clipHandle_t model, int brushmask,
+    const vec3_t origin, const vec3_t angles, int capsule ) {
+    CM_TransformedBoxTraceInternal(results, start, end, mins, maxs, model,
+        brushmask, origin, angles, capsule, qfalse, qfalse);
+}
+
+void CM_Cod1NativeTransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
+    const vec3_t mins, const vec3_t maxs, clipHandle_t model, int mask,
+    const vec3_t origin, const vec3_t angles, int capsule ) {
+    CM_TransformedBoxTraceInternal(results,start,end,mins,maxs,model,mask,
+        origin,angles,capsule,qfalse,qtrue);
+}
+
+static qboolean CM_UseFiniteVector(const vec3_t value) {
+    int i;
+    if (!value) return qfalse;
+    for (i = 0; i < 3; ++i)
+        if (!(value[i] >= -FLT_MAX && value[i] <= FLT_MAX)) return qfalse;
+    return qtrue;
+}
+
+void CM_TraceUseInlineModel(trace_t *results, const vec3_t start, const vec3_t end,
+    clipHandle_t model, const vec3_t origin, const vec3_t angles) {
+    trace_t trace;
+    if (!results) return;
+    Com_Memset(results, 0, sizeof(*results));
+    results->fraction = 1.0f;
+    results->entityNum = ENTITYNUM_NONE;
+    if (CM_UseFiniteVector(end)) VectorCopy(end, results->endpos);
+    if (!CM_HasV59() || model <= 0 || model >= cm.numSubModels ||
+        model >= CAPSULE_MODEL_HANDLE || !CM_UseFiniteVector(start) ||
+        !CM_UseFiniteVector(end) || !CM_UseFiniteVector(origin) ||
+        !CM_UseFiniteVector(angles)) return;
+    CM_TransformedBoxTraceInternal(&trace, start, end, vec3_origin, vec3_origin,
+        model, -1, origin, angles, qfalse, qtrue, qfalse);
+    if (!(trace.fraction >= 0.0f && trace.fraction <= 1.0f) ||
+        !CM_UseFiniteVector(trace.endpos) ||
+        !CM_UseFiniteVector(trace.plane.normal)) return;
+    trace.entityNum = ENTITYNUM_NONE;
+    *results = trace;
 }

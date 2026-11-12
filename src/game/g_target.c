@@ -694,6 +694,14 @@ void Use_target_fog( gentity_t *ent, gentity_t *other, gentity_t *activator ) {
 //		density
 //		r,g,b
 //		time to complete
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	/* On a verified CoD BSP59, a tagged direct-fog target owns this slot.
+	 * RTCW target_fog is a different producer; do not let its numeric
+	 * configstring erase a set, clear, or quarantined tagged value. */
+	if ( G_Cod1DirectFogRetainedActive() ) {
+		return;
+	}
+#endif
 	trap_SetConfigstring( CS_FOGVARS, va( "%f %f %f %f %f %f %i", ent->accuracy, ent->random, 1.0f, (float)ent->dl_color[0], (float)ent->dl_color[1], (float)ent->dl_color[2], ent->s.time ) );
 }
 

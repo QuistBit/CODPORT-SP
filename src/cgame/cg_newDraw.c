@@ -456,7 +456,7 @@ static void CG_DrawCursorhint( rectDef_t *rect ) {
 		break;
 	case HINT_CHAIR:
 		// only show 'pickupable' if you're not armed, or are armed with a single handed weapon
-		if ( cg.predictedPlayerState.weapon && !( WEAPS_ONE_HANDED & ( 1 << ( cg.predictedPlayerState.weapon ) ) ) ) { // (SA) this was backwards
+		if ( cg.predictedPlayerState.weapon && !( BG_IsOneHandedWeapon(cg.predictedPlayerState.weapon) ) ) { // (SA) this was backwards
 			icon = cgs.media.hintShaders[HINT_NOACTIVATE];
 		}
 		break;
@@ -905,51 +905,6 @@ static void CG_DrawHoldableItem( rectDef_t *rect, int font, float scale, qboolea
 		}
 	}
 }
-
-void flubfoo() {
-	int value;
-	gitem_t *item;
-
-	if ( !cg.holdableSelect ) {
-		return;
-	}
-
-	item    = BG_FindItemForHoldable( cg.holdableSelect );
-
-	if ( !item ) {
-		return;
-	}
-
-	value   = cg.predictedPlayerState.holdable[cg.holdableSelect];
-
-	if ( value ) {
-
-		trap_R_SetColor( NULL );
-
-		CG_RegisterItemVisuals( item - bg_itemlist );
-
-		if ( cg.holdableSelect == HI_WINE ) {
-			if ( value > 3 ) {
-				value = 3;  // 3 stages to icon, just draw full if beyond 'full'
-
-			}
-			//----(SA)	trying smaller text
-			//----(SA)	and off to the right side of the HUD
-//			CG_DrawPic( 100, (SCREEN_HEIGHT-ICON_SIZE)-8, ICON_SIZE/2, ICON_SIZE, cg_items[item - bg_itemlist].icons[2-(value-1)] );
-			CG_DrawPic( 606, 366, 24, 48, cg_items[item - bg_itemlist].icons[2 - ( value - 1 )] );
-
-		} else {
-//			CG_DrawPic( 100, (SCREEN_HEIGHT-ICON_SIZE)-8, ICON_SIZE/2, ICON_SIZE, cg_items[item - bg_itemlist].icons[0] );
-			CG_DrawPic( 606, 366, 24, 48, cg_items[item - bg_itemlist].icons[0] );
-
-		}
-
-		// draw the selection box so it's not just floating in space
-		CG_DrawPic( 606 - 4, 366 - 4, 32, 56, cgs.media.selectShader );
-	}
-}
-
-
 
 static void CG_DrawPlayerItem( rectDef_t *rect, int font, float scale, qboolean draw2D ) {
 	int value;
@@ -2496,19 +2451,6 @@ void CG_HideTeamMenu() {
 
 /*
 ==================
-CG_ShowTeamMenus
-==================
-
-*/
-void CG_ShowTeamMenu() {
-	Menus_OpenByName( "teamMenu" );
-}
-
-
-
-
-/*
-==================
 CG_EventHandling
 ==================
  type 0 - no event handling
@@ -2521,7 +2463,6 @@ void CG_EventHandling( int type ) {
 	if ( type == CGAME_EVENT_NONE ) {
 		CG_HideTeamMenu();
 	} else if ( type == CGAME_EVENT_TEAMMENU ) {
-		//CG_ShowTeamMenu();
 	} else if ( type == CGAME_EVENT_SCOREBOARD ) {
 	}
 
@@ -2560,22 +2501,6 @@ void CG_KeyEvent( int key, qboolean down ) {
 	}
 }
 
-int CG_ClientNumFromName( const char *p ) {
-	int i;
-	for ( i = 0; i < cgs.maxclients; i++ ) {
-		if ( cgs.clientinfo[i].infoValid && Q_stricmp( cgs.clientinfo[i].name, p ) == 0 ) {
-			return i;
-		}
-	}
-	return -1;
-}
-
-void CG_ShowResponseHead() {
-	Menus_OpenByName( "voiceMenu" );
-	trap_Cvar_Set( "cl_conXOffset", "72" );
-	cg.voiceTime = cg.time;
-}
-
 void CG_RunMenuScript( char **args ) {
 }
 
@@ -2595,4 +2520,3 @@ void CG_GetTeamColor( vec4_t *color ) {
 		( *color )[3] = .25f;
 	}
 }
-

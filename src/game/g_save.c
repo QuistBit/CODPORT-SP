@@ -32,6 +32,11 @@ If you have questions concerning this license or the applicable additional terms
  */
 
 #include "../game/g_local.h"
+#include "g_cod1_gsc_test.h"
+#include "g_cod1_player_lifetime.h"
+#include "g_cod1_author_fog.h"
+#include "../game/bg_cod1_actor_runtime.h"
+#include "../game/g_cod1_actor_save.h"
 #include "../game/q_shared.h"
 #include "../game/botlib.h"      //bot lib interface
 #include "../game/be_aas.h"
@@ -250,6 +255,10 @@ typedef struct {
 #endif
 //-----------------
 
+/* PATCH39a: extractfuncs emits cod_step/cod_slide declarations but does not
+ * bring their typedefs into this save-function table's translation unit. */
+#include "cod_step.h"
+#include "cod_jump_land.h"
 #include "g_func_decs.h" // declare all game functions
 
 funcList_t funcList[] = {
@@ -576,7 +585,7 @@ void G_Save_Decode( byte *in, int insize, byte *out, int outsize ) {
 
 //=========================================================
 
-byte clientBuf[ 2 * sizeof( gentity_t ) ];
+byte clientBuf[ 2 * sizeof( gclient_t ) ];
 
 /*
 ===============
@@ -1083,6 +1092,45 @@ char *G_Save_DateStr( void ) {
 
 static char infoString[SAVE_INFOSTRING_LENGTH];
 
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+/* Both length-prefixed fields share this buffer. The fog writer has one
+ * historical exception: an empty string is length 0 followed by four
+ * literal bytes, "none". Consume those bytes before reading game skill. */
+static qboolean G_ReadBoundedInfoString( fileHandle_t f, qboolean fogField ) {
+	int length = -1;
+	char emptyFog[4];
+
+	trap_FS_Read( &length, sizeof( length ), f );
+	if ( length < 0 || length >= (int)sizeof( infoString ) ) {
+		trap_FS_FCloseFile( f );
+		G_Error( "G_LoadGame: invalid %s string length %i\n",
+			fogField ? "fog" : "info", length );
+		return qfalse;
+	}
+	if ( fogField && !length ) {
+		memset( emptyFog, 0, sizeof( emptyFog ) );
+		trap_FS_Read( emptyFog, sizeof( emptyFog ), f );
+		if ( memcmp( emptyFog, "none", sizeof( emptyFog ) ) ) {
+			trap_FS_FCloseFile( f );
+			G_Error( "G_LoadGame: invalid empty fog sentinel\n" );
+			return qfalse;
+		}
+	}
+	if ( length ) {
+		memset( infoString, 0, length );
+		trap_FS_Read( infoString, length, f );
+		if ( memchr( infoString, '\0', length ) ) {
+			trap_FS_FCloseFile( f );
+			G_Error( "G_LoadGame: embedded NUL in %s string\n",
+				fogField ? "fog" : "info" );
+			return qfalse;
+		}
+	}
+	infoString[length] = '\0';
+	return qtrue;
+}
+#endif
+
 
 #define SA_MOVEDSTUFF   15  // moved time/music/skill in ver 15
 #define SA_ADDEDMUSIC   8   //
@@ -1113,15 +1161,22 @@ qboolean G_SaveGame( char *username ) {
 	cast_state_t    *cs;
 	int playtime, minutes;
 
+	/* A raw RTCW snapshot has no GSC VM/Session serialization. Refuse
+	 * before playtime, counters, filesystem or save metadata are changed. */
+	if (G_Cod1GscTestBlocksRawSave()||G_Cod1AuthorFogBlocksRawSave()) {
+		G_Printf("CoD1 save refused: GSC VM/Session state is not serialized\n");
+		return qfalse;
+	}
+
 	//if (reloading)
 	//	return qtrue;	// actually this should be qtrue, but we should make it silent during reloading
 
 	if ( g_entities[0].health <= 0 ) { // no save when dead
-		return qtrue;
+		return qfalse;
 	}
 
 	if ( g_gametype.integer != GT_SINGLE_PLAYER ) {    // don't allow saves in MP
-		return qtrue;
+		return qfalse;
 	}
 
 	G_DPrintf( "G_SaveGame '%s'\n", username );
@@ -1137,7 +1192,7 @@ qboolean G_SaveGame( char *username ) {
 	for ( i = 0; i < strlen( username ); i++ ) {
 		if ( !Q_isforfilename( username[i] ) && username[i] != '\\' ) { // (allow '\\' so games can be saved in subdirs)
 			G_Printf( "G_SaveGame: '%s'.  Invalid character (%c) in filename. Must use alphanumeric characters only.\n", username, username[i] );
-			return qtrue;
+			return qfalse;
 		}
 	}
 
@@ -1290,7 +1345,9 @@ qboolean G_SaveGame( char *username ) {
 	for ( i = 0 ; i < level.num_entities ; i++ )
 	{
 		ent = &g_entities[i];
-		if ( !ent->inuse || ent->s.number == ENTITYNUM_WORLD ) {
+		/* Console spawned visual probes never become part of a saved map. */
+		if ( !ent->inuse || ent->s.number == ENTITYNUM_WORLD ||
+		     G_Cod1ActorSkipSave( ent ) ) {
 			continue;
 		}
 		if ( !G_SaveWrite( &i, sizeof( i ), f ) ) {
@@ -1374,6 +1431,14 @@ qboolean G_SaveGame( char *username ) {
 	trap_FS_CopyFile( mapstr, "save\\current.svg" );
 
 #endif
+	// The file is now present with the expected size. Use a virtual path that
+	// the menu can check and that loadgame can consume on the next launch.
+	for ( i = 0; mapstr[i]; i++ ) {
+		if ( mapstr[i] == '\\' ) {
+			mapstr[i] = '/';
+		}
+	}
+	trap_Cvar_Set( "g_lastSaveGame", mapstr );
 
 	return qtrue;
 }
@@ -1407,6 +1472,8 @@ void G_LoadGame( char *filename ) {
 		return;
 	}
 
+	G_Cod1GscTestBeforeLoad();
+
 	G_DPrintf( "G_LoadGame '%s'\n", filename );
 
 	// enforce the "current" savegame, since that is used for all loads
@@ -1422,9 +1489,9 @@ void G_LoadGame( char *filename ) {
 	// TTimo
 	// show_bug.cgi?id=434
 	// 17 is the only version actually out in the wild
-	if ( i != SAVE_VERSION && i != 17 && i != 13 && i != 14 && i != 15 ) {    // 13 is beta7, 14 is pre "SA_MOVEDSTUFF"
+	if ( i != SAVE_VERSION ) { /* R100 changes playerState/gclient layout; reject old raw clients. */
 		trap_FS_FCloseFile( f );
-		G_Error( "G_LoadGame: savegame '%s' is wrong version (%i, should be %i)\n", filename, i, SAVE_VERSION );
+		G_Error( "Inventory: savegame '%s' has version %i; expected %i. Start the map again; old saves are preserved.\n", filename, i, SAVE_VERSION );
 	}
 	ver = i;
 
@@ -1459,10 +1526,16 @@ void G_LoadGame( char *filename ) {
 	// NOTE: do not change the above order without also changing the server code
 
 	// read the info string length
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	if ( !G_ReadBoundedInfoString( f, qfalse ) ) {
+		return;
+	}
+#else
 	trap_FS_Read( &i, sizeof( i ), f );
 
 	// read the info string
 	trap_FS_Read( infoString, i, f );
+#endif
 
 	if ( ver >= SA_MOVEDSTUFF ) {
 		if ( ver > SA_ADDEDMUSIC ) {
@@ -1488,11 +1561,27 @@ void G_LoadGame( char *filename ) {
 			char *p;
 			int k;
 
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+			if ( !G_ReadBoundedInfoString( f, qtrue ) ) {
+				return;
+			}
+#else
 			// get length
 			trap_FS_Read( &i, sizeof( i ), f );
 			// get fog string
 			trap_FS_Read( infoString, i, f );
 			infoString[i] = 0;
+#endif
+
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+			/* The existing save field holds the tagged latest CoD target. A
+			 * restored live client needs a direct `fog` command; a loading/late
+			 * client will instead read the configstring after world load. */
+			if ( G_Cod1DirectFogRestoreCache( infoString ) ) {
+				trap_Cvar_Set( "r_savegameFogColor", "0" );
+			} else
+#endif
+			{
 
 			// set the configstring so the 'savegame current' has good fog
 
@@ -1506,6 +1595,13 @@ void G_LoadGame( char *filename ) {
 						k++;
 					}
 					if ( k == 6 ) {  // the last parameter
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+						if ( p >= infoString + sizeof( infoString ) - 2 ) {
+							trap_FS_FCloseFile( f );
+							G_Error( "G_LoadGame: legacy fog string too long\n" );
+							return;
+						}
+#endif
 						infoString[p - infoString + 1] = '0';
 						infoString[p - infoString + 2] = 0;
 						break;
@@ -1515,6 +1611,7 @@ void G_LoadGame( char *filename ) {
 			}
 
 			trap_SetConfigstring( CS_FOGVARS, infoString );
+			}
 		}
 //----(SA)	end
 
@@ -1578,6 +1675,11 @@ void G_LoadGame( char *filename ) {
 	// read the client structures
 	trap_FS_Read( &i, sizeof( i ), f );
 	size = i;
+	if ( size != sizeof( gclient_t ) ) {
+		trap_FS_FCloseFile( f );
+		G_Error( "PATCH41: savegame client layout mismatch (%i != %i). Start the map again.\n", size, (int)sizeof( gclient_t ) );
+		return;
+	}
 	while ( 1 )
 	{
 		trap_FS_Read( &i, sizeof( i ), f );
@@ -1665,6 +1767,19 @@ void G_LoadGame( char *filename ) {
 	}
 
 	level.lastLoadTime = leveltime;
+
+	// Preserve the selected save rather than the working copy current.svg.
+	// A missing filename means the engine loaded its current checkpoint.
+	trap_Cvar_VariableStringBuffer( "savegame_filename", mapname, sizeof( mapname ) );
+	if ( !mapname[0] ) {
+		Q_strncpyz( mapname, "save/current.svg", sizeof( mapname ) );
+	}
+	for ( i = 0; mapname[i]; i++ ) {
+		if ( mapname[i] == '\\' ) {
+			mapname[i] = '/';
+		}
+	}
+	trap_Cvar_Set( "g_lastSaveGame", mapname );
 
 /*
 	// always save to the "current" savegame
@@ -1894,10 +2009,14 @@ void G_LoadPersistant( void ) {
 	}
 
 	// read the entity structure
+	G_Cod1PlayerLifetimeActivity( &g_entities[0] );
 	PersReadEntity( f, &g_entities[0] );
+	G_Cod1PlayerLifetimeActivity( &g_entities[0] );
 
 	// read the client structure
+	G_Cod1PlayerLifetimeActivity( &g_entities[0] );
 	PersReadClient( f, &level.clients[0] );
+	G_Cod1PlayerLifetimeActivity( &g_entities[0] );
 
 	// read the cast_state structure
 	PersReadCastState( f, AICast_GetCastState( 0 ) );

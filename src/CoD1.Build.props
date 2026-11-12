@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Accepted BSP59 profile. IDE and command-line builds use one definition. -->
+  <PropertyGroup>
+    <COD1BuildProfile Condition="'$(COD1BuildProfile)'==''">water50</COD1BuildProfile>
+    <COD1GscTestBuild Condition="'$(COD1GscTestBuild)'=='' and '$(COD1BuildProfile)'=='base'">false</COD1GscTestBuild>
+    <COD1GscTestBuild Condition="'$(COD1GscTestBuild)'==''">true</COD1GscTestBuild>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(COD1BuildProfile)'=='base'">
+    <_Cod1ProfileDefinitions>COD1_BSP59_EXACT_VERTEX_ALPHA=1</_Cod1ProfileDefinitions>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(COD1BuildProfile)'=='scene'">
+    <_Cod1ProfileDefinitions>COD1_BSP59_EXACT_VERTEX_ALPHA=1;COD1_NATIVE_STAGE_FOG_COLOR_WIP=1;COD1_DIRECT_FOG_WIP=1</_Cod1ProfileDefinitions>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(COD1BuildProfile)'=='water'">
+    <_Cod1ProfileDefinitions>COD1_BSP59_EXACT_VERTEX_ALPHA=1;COD1_NATIVE_STAGE_FOG_COLOR_WIP=1;COD1_DIRECT_FOG_WIP=1;COD1_STAGE_BACKEND_INFRA=1;COD1_MATERIAL_STAGE_COMPILER=1;COD1_WATER_FIXED2_CANDIDATE=1;COD1_WATER_FIXED2_CONSTLIGHT_SCALE=1.0f;COD1_BSP59_SORT_ADDITIVE_CANDIDATE=1</_Cod1ProfileDefinitions>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(COD1BuildProfile)'=='water50'">
+    <_Cod1ProfileDefinitions>COD1_WATER_RUNTIME_R50=1;COD1_BSP59_EXACT_VERTEX_ALPHA=1;COD1_NATIVE_STAGE_FOG_COLOR_WIP=1;COD1_DIRECT_FOG_WIP=1;COD1_STAGE_BACKEND_INFRA=1;COD1_MATERIAL_STAGE_COMPILER=1;COD1_WATER_FIXED2_CANDIDATE=1;COD1_WATER_FIXED2_CONSTLIGHT_SCALE=1.0f;COD1_BSP59_SORT_ADDITIVE_CANDIDATE=1</_Cod1ProfileDefinitions>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(COD1BuildProfile)'=='packed'">
+    <_Cod1ProfileDefinitions>COD1_BSP59_EXACT_VERTEX_ALPHA=1;COD1_NATIVE_STAGE_FOG_COLOR_WIP=1;COD1_DIRECT_FOG_WIP=1;COD1_STAGE_BACKEND_INFRA=1;COD1_MATERIAL_STAGE_COMPILER=1;COD1_WATER_FIXED2_CANDIDATE=1;COD1_WATER_FIXED2_CONSTLIGHT_SCALE=1.0f;COD1_BSP59_SORT_ADDITIVE_CANDIDATE=1;COD1_NATIVE_LIGHTMAP_RGB=1;COD1_NATIVE_LIGHTMAP_GL=1;COD1_NATIVE_LIGHTMAP_PACK=1</_Cod1ProfileDefinitions>
+  </PropertyGroup>
+  <!-- The isolated fog script is runtime opt-in. Other projects keep their
+       accepted BSP profile definitions; base still builds without direct fog. -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)'=='game' and '$(COD1GscTestBuild)'=='true'">
+    <_Cod1ProfileDefinitions>$(_Cod1ProfileDefinitions);COD1_GSC_TEST_WIP=1</_Cod1ProfileDefinitions>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>$(_Cod1ProfileDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <Target Name="ValidateCod1BuildProfile" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(COD1BuildProfile)'!='base' and '$(COD1BuildProfile)'!='scene' and '$(COD1BuildProfile)'!='water' and '$(COD1BuildProfile)'!='water50' and '$(COD1BuildProfile)'!='packed'"
+           Text="Unknown CoD1 build profile: $(COD1BuildProfile). Use base, scene, water, water50 or packed." />
+    <Message Condition="'$(MSBuildProjectName)'=='renderer'" Importance="High" Text="CoD1 build profile: $(COD1BuildProfile)" />
+    <Error Condition="'$(COD1GscTestBuild)'!='true' and '$(COD1GscTestBuild)'!='false'"
+           Text="COD1GscTestBuild must be true or false." />
+    <Error Condition="'$(COD1GscTestBuild)'=='true' and '$(COD1BuildProfile)'=='base'"
+           Text="The GSC fog test requires scene, water, water50 or packed. For base use COD1GscTestBuild=false." />
+    <Message Condition="'$(MSBuildProjectName)'=='game' and '$(COD1GscTestBuild)'=='true'" Importance="High" Text="GSC fog test runtime compiled; g_cod1GscTest defaults to 0." />
+  </Target>
+</Project>

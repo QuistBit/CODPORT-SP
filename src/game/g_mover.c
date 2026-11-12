@@ -35,6 +35,9 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "g_local.h"
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+#include "g_cod1_yaw_motion.h"
+#endif
 
 char *hintStrings[] = {
 	"",                  // HINT_NONE
@@ -661,6 +664,9 @@ void G_RunMover( gentity_t *ent ) {
 	if ( ent->s.pos.trType != TR_STATIONARY || ent->s.apos.trType != TR_STATIONARY ) {
 		G_MoverTeam( ent );
 	}
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+	G_Cod1YawMotionFinish(ent);
+#endif
 
 	// check think function
 	G_RunThink( ent );

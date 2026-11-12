@@ -1849,7 +1849,9 @@ float AICast_GetWeaponSoundRange( int weapon ) {
 		return 64;
 	case    WP_GRENADE_LAUNCHER:
 	case    WP_GRENADE_PINEAPPLE:
+    case WP_MK1:case WP_RGD33:
 		return 1500;
+    case WP_STALINGRAD_AMMO:return 0;
 	case    WP_GARAND:
 	case    WP_SNOOPERSCOPE:
 		return 128;
@@ -1866,8 +1868,23 @@ float AICast_GetWeaponSoundRange( int weapon ) {
 
 	case    WP_MP40:
 	case    WP_THOMPSON:
+	case    WP_PPSH:
 		return 1000;
 
+	/* CoD inventory slots still use RTCW's hearing backend. Cover the added
+	 * rifles/machine guns with its existing rifle radius; do not abort a
+	 * player's shot because these slots were absent from the old switch.
+	 * These are compatibility values, not reconstructed CoD AI acoustics. */
+	case WP_KAR98K:
+	case WP_ENFIELD:
+	case WP_MOSIN:
+	case WP_KAR98KSCOPE:
+	case WP_MOSINSCOPE:
+	case WP_SPRINGFIELD:
+	case    WP_MP44:
+	case    WP_BAR:
+	case    WP_BREN:
+	case    WP_M1CARBINE:
 	case    WP_FG42:
 	case    WP_FG42SCOPE:
 		return 1500;

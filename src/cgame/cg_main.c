@@ -4,7 +4,7 @@
 Return to Castle Wolfenstein single player GPL Source Code
 Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company. 
 
-This file is part of the Return to Castle Wolfenstein single player GPL Source Code (RTCW SP Source Code).  
+This file is part of the Return to Castle Wolfenstein single player GPL Source Code (Р вЂ™РІР‚СљRTCW SP Source CodeР вЂ™РІР‚Сњ).  
 
 RTCW SP Source Code is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -35,6 +35,11 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include "cg_local.h"
+#include "cg_r241_frame_trace.h"
+#include "../game/bg_cod1_ambient.h"
+#include "../game/bg_cod1_script_hud.h"
+#include "../game/bg_cod1_weapon_io.h"
+#include "../qcommon/cod1_bsp.h"
 #include "../ui/ui_shared.h"
 
 displayContextDef_t cgDC;
@@ -69,7 +74,16 @@ int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int a
 	case CG_EVENT_HANDLING:
 		CG_EventHandling( arg0 );
 		return 0;
+	case CG_COD1_KEYBINDING_QUERY:
+        return CG_Cod1KeyBindingQueryNative(arg0,arg1);
+	case CG_COD1_STATE_ABI:
+		return arg0 == sizeof(playerState_t) && arg1 == sizeof(usercmd_t) ? COD1_ACTOR_CGAME_ABI : -1;
 	case CG_INIT:
+		{ char protocol[16];
+		  trap_Cvar_VariableStringBuffer("protocol", protocol, sizeof(protocol));
+		  if (atoi(protocol) != COD1_STATE_PROTOCOL)
+		      CG_Error("R129: matching WolfSP.exe is required (protocol 57)");
+		}
 		CG_Init( arg0, arg1 );
 		return 0;
 	case CG_SHUTDOWN:
@@ -102,6 +116,7 @@ cgs_t cgs;
 centity_t cg_entities[MAX_GENTITIES];
 weaponInfo_t cg_weapons[MAX_WEAPONS];
 itemInfo_t cg_items[MAX_ITEMS];
+#include "cg_cod1_keybinding.inc"
 
 
 vmCvar_t cg_railTrailTime;
@@ -125,6 +140,23 @@ vmCvar_t cg_drawCrosshair;
 vmCvar_t cg_drawCrosshairNames;
 vmCvar_t cg_drawCrosshairPickups;
 vmCvar_t cg_hudAlpha;
+vmCvar_t cg_hudDamageIconWidth;
+vmCvar_t cg_hudDamageIconHeight;
+vmCvar_t cg_hudDamageIconOffset;
+vmCvar_t cg_hudDamageIconTime;
+vmCvar_t cg_hudDamageIconInScope;
+vmCvar_t cg_hudCompassSize;
+vmCvar_t cg_hudCompassMaxRange;
+vmCvar_t cg_hudCompassMinRange;
+vmCvar_t cg_hudCompassMinRadius;
+vmCvar_t cg_hudCompassSpringyPointers;
+vmCvar_t cg_hudObjectiveMaxRange;
+vmCvar_t cg_hudObjectiveMinAlpha;
+vmCvar_t cg_hudObjectiveMaxHeight;
+vmCvar_t cg_hudObjectiveMinHeight;
+vmCvar_t cg_hudObjectiveRingSize;
+vmCvar_t cg_hudObjectiveRingTime;
+vmCvar_t cg_hudObjectiveNumRings;
 vmCvar_t cg_weaponCycleDelay;       //----(SA)	added
 vmCvar_t cg_cycleAllWeaps;
 vmCvar_t cg_useWeapsForZoom;
@@ -132,6 +164,7 @@ vmCvar_t cg_drawAllWeaps;
 vmCvar_t cg_drawRewards;
 vmCvar_t cg_crosshairSize;
 vmCvar_t cg_crosshairAlpha;     //----(SA)	added
+vmCvar_t cg_crosshairAlphaMin;
 vmCvar_t cg_crosshairX;
 vmCvar_t cg_crosshairY;
 vmCvar_t cg_crosshairHealth;
@@ -149,11 +182,13 @@ vmCvar_t cg_nopredict;
 vmCvar_t cg_noPlayerAnims;
 vmCvar_t cg_showmiss;
 vmCvar_t cg_footsteps;
+vmCvar_t cg_r196FoleyScene;
 vmCvar_t cg_markTime;
 vmCvar_t cg_brassTime;
 vmCvar_t cg_viewsize;
 vmCvar_t cg_letterbox;
 vmCvar_t cg_drawGun;
+vmCvar_t cg_crosshairNoGun;
 vmCvar_t cg_drawFPGun;
 vmCvar_t cg_drawGamemodels;
 vmCvar_t cg_cursorHints;
@@ -287,11 +322,12 @@ cvarTable_t cvarTable[] = {
 	{ &cg_ignore, "cg_ignore", "0", 0 },  // used for debugging
 	{ &cg_autoswitch, "cg_autoswitch", "2", CVAR_ARCHIVE },
 	{ &cg_drawGun, "cg_drawGun", "1", CVAR_ARCHIVE },
+	{ &cg_crosshairNoGun, "cg_crosshairNoGun", "gfx/reticle/hud@center_ads.tga", CVAR_ARCHIVE },
 	{ &cg_drawGamemodels, "cg_drawGamemodels", "1", CVAR_CHEAT },
 	{ &cg_drawFPGun, "cg_drawFPGun", "1", CVAR_ARCHIVE },
 	{ &cg_gun_frame, "cg_gun_frame", "0", CVAR_TEMP },
-	{ &cg_cursorHints, "cg_cursorHints", "1", CVAR_ARCHIVE },
-	{ &cg_hintFadeTime, "cg_hintFadeTime", "500", CVAR_ARCHIVE }, //----(SA)	added
+	{ &cg_cursorHints, "cg_cursorHints", "3", CVAR_ARCHIVE },
+	{ &cg_hintFadeTime, "cg_hintFadeTime", "100", CVAR_ARCHIVE }, //----(SA)	added
 	{ &cg_zoomFov, "cg_zoomfov", "22.5", CVAR_ARCHIVE },
 	{ &cg_zoomDefaultBinoc, "cg_zoomDefaultBinoc", "22.5", CVAR_ARCHIVE },
 	{ &cg_zoomDefaultSniper, "cg_zoomDefaultSniper", "15", CVAR_ARCHIVE },
@@ -322,13 +358,32 @@ cvarTable_t cvarTable[] = {
 	{ &cg_drawCrosshairNames, "cg_drawCrosshairNames", "1", CVAR_ARCHIVE },
 	{ &cg_drawCrosshairPickups, "cg_drawCrosshairPickups", "1", CVAR_ARCHIVE },
 	{ &cg_drawRewards, "cg_drawRewards", "1", CVAR_ARCHIVE },
-	{ &cg_hudAlpha, "cg_hudAlpha", "0.8", CVAR_ARCHIVE },
+	{ &cg_hudAlpha, "cg_hudAlpha", "1.0", CVAR_ARCHIVE },
+	{ &cg_hudDamageIconWidth, "cg_hudDamageIconWidth", "128", CVAR_ARCHIVE },
+	{ &cg_hudDamageIconHeight, "cg_hudDamageIconHeight", "64", CVAR_ARCHIVE },
+	{ &cg_hudDamageIconOffset, "cg_hudDamageIconOffset", "32", CVAR_ARCHIVE },
+	{ &cg_hudDamageIconTime, "cg_hudDamageIconTime", "2000", CVAR_ARCHIVE },
+	{ &cg_hudDamageIconInScope, "cg_hudDamageIconInScope", "0", CVAR_ARCHIVE },
+	{ &cg_hudCompassSize, "cg_hudCompassSize", "1", CVAR_ARCHIVE },
+	{ &cg_hudCompassMaxRange, "cg_hudCompassMaxRange", "1024", CVAR_ARCHIVE },
+	{ &cg_hudCompassMinRange, "cg_hudCompassMinRange", "0", CVAR_ARCHIVE },
+	{ &cg_hudCompassMinRadius, "cg_hudCompassMinRadius", "0", CVAR_ARCHIVE },
+	{ &cg_hudCompassSpringyPointers, "cg_hudCompassSpringyPointers", "0", CVAR_ARCHIVE },
+	{ &cg_hudObjectiveMaxRange, "cg_hudObjectiveMaxRange", "2048", CVAR_ARCHIVE },
+	{ &cg_hudObjectiveMinAlpha, "cg_hudObjectiveMinAlpha", "1", CVAR_ARCHIVE },
+	{ &cg_hudObjectiveMaxHeight, "cg_hudObjectiveMaxHeight", "70", CVAR_ARCHIVE },
+	{ &cg_hudObjectiveMinHeight, "cg_hudObjectiveMinHeight", "-70", CVAR_ARCHIVE },
+	{ &cg_hudObjectiveRingSize, "cg_hudObjectiveRingSize", "64", CVAR_ARCHIVE },
+	{ &cg_hudObjectiveRingTime, "cg_hudObjectiveRingTime", "10000", CVAR_ARCHIVE },
+	{ &cg_hudObjectiveNumRings, "cg_hudObjectiveNumRings", "10", CVAR_ARCHIVE },
 	{ &cg_useWeapsForZoom,  "cg_useWeapsForZoom", "1", CVAR_ARCHIVE },
 	{ &cg_weaponCycleDelay, "cg_weaponCycleDelay", "150", CVAR_ARCHIVE }, //----(SA)	added
 	{ &cg_cycleAllWeaps,    "cg_cycleAllWeaps", "1", CVAR_ARCHIVE },
 	{ &cg_drawAllWeaps,     "cg_drawAllWeaps",   "1", CVAR_ARCHIVE },
 	{ &cg_crosshairSize, "cg_crosshairSize", "24", CVAR_ARCHIVE },
+	/* Retail CoD1 cgame registers 1.0; archived user overrides still apply. */
 	{ &cg_crosshairAlpha, "cg_crosshairAlpha", "0.5", CVAR_ARCHIVE }, //----(SA)	added
+	{ &cg_crosshairAlphaMin, "cg_crosshairAlphaMin", "0.7", CVAR_ARCHIVE },
 	{ &cg_crosshairHealth, "cg_crosshairHealth", "1", CVAR_ARCHIVE },
 	{ &cg_crosshairX, "cg_crosshairX", "0", CVAR_ARCHIVE },
 	{ &cg_crosshairY, "cg_crosshairY", "0", CVAR_ARCHIVE },
@@ -378,6 +433,7 @@ cvarTable_t cvarTable[] = {
 	{ &cg_noPlayerAnims, "cg_noplayeranims", "0", CVAR_CHEAT },
 	{ &cg_showmiss, "cg_showmiss", "0", 0 },
 	{ &cg_footsteps, "cg_footsteps", "1", CVAR_CHEAT },
+    { &cg_r196FoleyScene,"cg_r196FoleyScene","0",CVAR_CHEAT },
 	{ &cg_tracerChance, "cg_tracerchance", "0.4", CVAR_CHEAT },
 	{ &cg_tracerWidth, "cg_tracerwidth", "0.8", CVAR_CHEAT },
 	{ &cg_tracerSpeed, "cg_tracerSpeed", "4500", CVAR_CHEAT },
@@ -473,6 +529,18 @@ cvarTable_t cvarTable[] = {
 };
 int cvarTableSize = sizeof( cvarTable ) / sizeof( cvarTable[0] );
 
+/* CoD cgame uses full crosshair opacity when its HUD resources are present.
+ * Keep RTCW defaults for an RTCW-only resource set and honor archived values. */
+static qboolean CG_Cod1HudResourcesForCvar(void) {
+	fileHandle_t f;
+	int fontBytes = trap_FS_FOpenFile( "fonts/fontImage_16.dat", &f, FS_READ );
+	int hudBytes;
+	if ( f ) trap_FS_FCloseFile( f );
+	hudBytes = trap_FS_FOpenFile( "gfx/hud/hud@compassback.tga", &f, FS_READ );
+	if ( f ) trap_FS_FCloseFile( f );
+	return fontBytes == 20552 || hudBytes > 0;
+}
+
 /*
 =================
 CG_RegisterCvars
@@ -487,7 +555,8 @@ void CG_RegisterCvars( void ) {
 
 	for ( i = 0, cv = cvarTable ; i < cvarTableSize ; i++, cv++ ) {
 		trap_Cvar_Register( cv->vmCvar, cv->cvarName,
-							cv->defaultString, cv->cvarFlags );
+							cv->vmCvar == &cg_crosshairAlpha && CG_Cod1HudResourcesForCvar() ?
+							"1.0" : cv->defaultString, cv->cvarFlags );
 	}
 
 	// see if we are also running the server on this machine
@@ -697,7 +766,9 @@ static void CG_RegisterItemSounds( int itemNum ) {
 
 	item = &bg_itemlist[ itemNum ];
 
-	if ( item->pickup_sound ) {
+	if ( CG_Cod1WeaponPickupItem(itemNum) ) return;
+
+	if ( item->pickup_sound && !CG_Cod1AliasPickupItem(itemNum) ) {
 		trap_S_RegisterSound( item->pickup_sound );
 	}
 
@@ -852,7 +923,6 @@ static void CG_RegisterSounds( void ) {
 	cgs.media.n_health = trap_S_RegisterSound( "sound/items/n_health.wav" );
 	cgs.media.noFireUnderwater = trap_S_RegisterSound( "sound/weapons/underwaterfire.wav" ); //----(SA)	added
 
-	cgs.media.snipersound = trap_S_RegisterSound( "sound/weapons/mauser/mauserf1.wav" );
 	cgs.media.tracerSound = trap_S_RegisterSound( "sound/weapons/machinegun/buletby1.wav" );
 	cgs.media.selectSound = trap_S_RegisterSound( "sound/weapons/change.wav" );
 	cgs.media.wearOffSound = trap_S_RegisterSound( "sound/items/wearoff.wav" );
@@ -1022,8 +1092,6 @@ static void CG_RegisterSounds( void ) {
 	cgs.media.sfx_dynamiteexpDist = trap_S_RegisterSound( "sound/weapons/dynamite/dynamite_exp_dist.wav" );   //----(SA)	added
 
 
-	cgs.media.sfx_spearhit = trap_S_RegisterSound( "sound/weapons/speargun/spearhit.wav" );
-
 	cgs.media.sfx_knifehit[0] = trap_S_RegisterSound( "sound/weapons/knife/knife_hit1.wav" ); // hitting player
 	cgs.media.sfx_knifehit[1] = trap_S_RegisterSound( "sound/weapons/knife/knife_hit2.wav" );
 	cgs.media.sfx_knifehit[2] = trap_S_RegisterSound( "sound/weapons/knife/knife_hit3.wav" );
@@ -1080,6 +1148,15 @@ CG_RegisterGraphics
 This function may execute for a couple of minutes with a slow disk.
 =================
 */
+void CG_Cod1RegisterScriptShaders(void) {
+    int i;
+    /* Original client scans every slot, including entries beyond holes. */
+    for (i=1;i<MAX_COD1_SHADERS;++i) {
+        const char *name=CG_ConfigString(CS_COD1_SHADERS+i);
+        cgs.cod1GameShaders[i]=name[0]?trap_R_RegisterShaderNoMip(name):0;
+    }
+}
+
 static void CG_RegisterGraphics( void ) {
 	char name[1024];
 
@@ -1158,8 +1235,6 @@ static void CG_RegisterGraphics( void ) {
 	cgs.media.bloodTrailShader = trap_R_RegisterShader( "bloodTrail" );
 	cgs.media.lagometerShader = trap_R_RegisterShader( "lagometer" );
 	cgs.media.connectionShader = trap_R_RegisterShader( "disconnected" );
-
-	cgs.media.nailPuffShader = trap_R_RegisterShader( "nailtrail" );
 
 
 //	cgs.media.reticleShaderSimple = trap_R_RegisterShader( "gfx/misc/reticlesimple" );		// TODO: remove
@@ -1263,7 +1338,6 @@ static void CG_RegisterGraphics( void ) {
 	CG_LoadingString( " - models" );
 
 	cgs.media.machinegunBrassModel = trap_R_RegisterModel( "models/weapons2/shells/m_shell.md3" );
-	cgs.media.panzerfaustBrassModel = trap_R_RegisterModel( "models/weapons2/shells/pf_shell.md3" );
 	cgs.media.smallgunBrassModel = trap_R_RegisterModel( "models/weapons2/shells/sm_shell.md3" );
 
 	cgs.media.debBlock[0] = trap_R_RegisterModel( "models/mapobjects/debris/brick1.md3" );
@@ -1309,8 +1383,6 @@ static void CG_RegisterGraphics( void ) {
 	//cgs.media.waterSplashModel = trap_R_RegisterModel("models/weaphits/bullet.md3");
 	//cgs.media.waterSplashShader = trap_R_RegisterShader( "waterSplash" );
 	//----(SA)	end
-
-	//cgs.media.spearModel = trap_R_RegisterModel("models/weaphits/spear.md3");	//----(SA)
 
 	//cgs.media.bulletFlashModel = trap_R_RegisterModel("models/weaphits/bullet.md3");
 	//cgs.media.ringFlashModel = trap_R_RegisterModel("models/weaphits/ring02.md3");
@@ -1390,8 +1462,6 @@ static void CG_RegisterGraphics( void ) {
 
 	cgs.media.planemuzzleflash = trap_R_RegisterModel( "models/mapobjects/vehicles/gunflare.md3" );
 
-	cgs.media.crowbar = trap_R_RegisterModel( "models/weapons2/wrench/wrench.md3" );
-
 	// Rafael shards
 	cgs.media.shardGlass1 = trap_R_RegisterModel( "models/shards/glass1.md3" );
 	cgs.media.shardGlass2 = trap_R_RegisterModel( "models/shards/glass2.md3" );
@@ -1415,26 +1485,12 @@ static void CG_RegisterGraphics( void ) {
 
 	memset( cg_items, 0, sizeof( cg_items ) );
 	memset( cg_weapons, 0, sizeof( cg_weapons ) );
+    CG_Cod1ResetViewWeapons();
 
 	CG_LoadTranslateStrings();  //----(SA)	added.  for localization, read on-screen print names from text file
 
-// TODO: FIXME:  REMOVE REGISTRATION OF EACH MODEL FOR EVERY LEVEL LOAD
-
-
-	//----(SA)	okay, new stuff to intialize rather than doing it at level load time (or "give all" time)
-	//			(I'm certainly not against being efficient here, but I'm tired of the rocket launcher effect only registering
-	//			sometimes and want it to work for sure for this demo)
-
-///////////
-// code is almost complete for doing this correctly.  will remove when that is complete.
-	CG_LoadingString( " - weapons" );
-	for ( i = WP_KNIFE; i < WP_GAUNTLET; i++ ) {
-//		CG_LoadingString( va("   - %d", i) );
-		CG_RegisterWeapon( i );
-	}
-///////////
-// END
-
+/* CoD1 cleanup: weapon media are registered from CS_ITEMS or on demand by
+ * view/event paths.  Do not preload the entire RTCW arsenal every map load. */
 
 	// only register the items that the server says we need
 	strcpy( items, CG_ConfigString( CS_ITEMS ) );
@@ -1477,6 +1533,11 @@ static void CG_RegisterGraphics( void ) {
 
 	// register the inline models
 	cgs.numInlineModels = trap_CM_NumInlineModels();
+	if ( cgs.numInlineModels < 1 || cgs.numInlineModels > MAX_INLINE_MODELS ) {
+		CG_Error( "Map has %d inline models; supported count is 1..%d",
+			cgs.numInlineModels, MAX_INLINE_MODELS );
+		return;
+	}
 	for ( i = 1 ; i < cgs.numInlineModels ; i++ ) {
 		char name[10];
 		vec3_t mins, maxs;
@@ -2288,19 +2349,63 @@ Called after every level change or subsystem restart
 Will perform callbacks to make the loading info screen update.
 =================
 */
+static qboolean CG_Cod1MapHasV59Header(const char *mapname) {
+	fileHandle_t f=0;
+	unsigned char header[8]={0};
+	int length=trap_FS_FOpenFile(mapname,&f,FS_READ);
+	qboolean isCod1=qfalse;
+	if (f && length >= (int)sizeof(header)) {
+		trap_FS_Read(header,sizeof(header),f);
+		isCod1=!memcmp(header,"IBSP",4) &&
+			header[4]==COD1_BSP_VERSION && !header[5] && !header[6] && !header[7];
+	}
+	if (f) trap_FS_FCloseFile(f);
+	return isCod1;
+}
+
 void CG_Init( int serverMessageNum, int serverCommandSequence ) {
+    CG_R241TraceReset();
+    CG_Cod1SubtitleReset();
+    CG_Cod1TurretActorReset();
 	const char  *s;
+    CG_Cod1FootstepsReset();
+    CG_Cod1FoleySceneReset();
+    CG_Printf("CoD1 R216: CGAME original grenade pickup checkpoint build (game acceptance pending)\n");
+    CG_Cod1ItemPrecacheReset();
+    CG_Cod1AmbientReset(qtrue);
+    CG_Cod1DebugLineReset(qtrue);
+    CG_Cod1HudElementsReset(qtrue);
+    CG_Cod1DebugTextReset(qtrue);
 
 	// clear everything
 	memset( &cgs, 0, sizeof( cgs ) );
 	memset( &cg, 0, sizeof( cg ) );
+    CG_Cod1KeyBindingReset(qtrue);
+	CG_Cod1ActorDebugReset();
+	CG_Cod1HudReset();
+	CG_Cod1LocaleReset();
+	CG_Cod1ObjectivesReset();
+    CG_Cod1ScriptQuakeReset(qtrue);
+    CG_Cod1ScriptFxReset(qtrue);
 	memset( cg_entities, 0, sizeof( cg_entities ) );
 	memset( cg_weapons, 0, sizeof( cg_weapons ) );
+    CG_Cod1ResetViewWeapons();
 	memset( cg_items, 0, sizeof( cg_items ) );
 
 	// RF, init the anim scripting
 	cgs.animScriptData.soundIndex = CG_SoundScriptPrecache;
 	cgs.animScriptData.playSound = CG_SoundPlayIndexedScript;
+
+	/*
+	 * Keep bg_animation.c's module-local pointer valid even before any RTCW
+	 * wolfanim.script has been parsed.  CoD1's XAnim bootstrap skips that
+	 * parser, and the server may issue an early "mvspd" command while the
+	 * loading screen is still active.
+	 */
+	{
+		extern animScriptData_t *globalScriptData;
+		globalScriptData = &cgs.animScriptData;
+	}
 
 	cgs.processedSnapshotNum = serverMessageNum;
 	cgs.serverCommandSequence = serverCommandSequence;
@@ -2329,6 +2434,12 @@ void CG_Init( int serverMessageNum, int serverCommandSequence ) {
 
 	// get the gamestate from the client system
 	trap_GetGameState( &cgs.gameState );
+	CG_Cod1ObjectivesInit();
+    CG_Cod1ScriptQuakeConfigChanged(CS_COD1_SCRIPT_EFFECTS);
+    CG_Cod1ScriptFxConfigChanged(CS_COD1_SCRIPT_FX_METADATA);
+    CG_Cod1DebugTextConfigChanged(CS_COD1_DEBUG_TEXT_METADATA);
+    CG_Cod1DebugLineConfigChanged(CS_COD1_DEBUG_LINE_METADATA);
+    CG_Cod1HudElementsConfigChanged(CS_COD1_SCRIPT_HUD);
 
 	// check version
 	s = CG_ConfigString( CS_GAME_VERSION );
@@ -2340,6 +2451,11 @@ void CG_Init( int serverMessageNum, int serverCommandSequence ) {
 	cgs.levelStartTime = atoi( s );
 
 	CG_ParseServerinfo();
+	cgs.cod1MapEntities=CG_Cod1MapHasV59Header(cgs.mapname);
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	CG_Cod1DirectFogMapInit();
+#endif
+	CW_InitEngineWeapons();
 
 	// load the new map
 	CG_LoadingString( "collision map" );
@@ -2352,11 +2468,18 @@ void CG_Init( int serverMessageNum, int serverCommandSequence ) {
 
 	CG_LoadingString( "sounds" );
 
+	CG_Cod1PickupSoundsInit();
 	CG_RegisterSounds();
 
 	CG_LoadingString( "graphics" );
 
 	CG_RegisterGraphics();
+	CG_Cod1RegisterScriptShaders();
+    /* The graphics bootstrap clears legacy weapon handles. Consume the
+     * independent native item state only after that lifetime boundary. */
+    CG_Cod1ItemPrecacheInit();
+    CG_Cod1PrecacheConsumableMedia();
+    CG_Cod1TurretShotInit();
 
 	CG_LoadingString( "flamechunks" );
 
@@ -2368,6 +2491,11 @@ void CG_Init( int serverMessageNum, int serverCommandSequence ) {
 
 	CG_AssetCache();
 	CG_LoadHudMenu();      // load new hud stuff
+	/* The first playable frame needs these materials. Register them after
+	 * the weapon definitions and HUD menu fonts are available for this map. */
+	if ( cgs.cod1MapEntities && cgs.gametype == GT_SINGLE_PLAYER ) {
+		CG_Cod1HudEnabled();
+	}
 
 	cg.loading = qfalse;    // future players will be deferred
 
@@ -2394,6 +2522,7 @@ void CG_Init( int serverMessageNum, int serverCommandSequence ) {
 
 	// RF, clear all sounds, so we dont hear anything after level load
 	trap_S_ClearLoopingSounds( 2 );
+    CG_Cod1AmbientConfigChanged(CS_COD1_AMBIENT_METADATA);
 
 	// start level load music
 	// too late...
@@ -2419,9 +2548,25 @@ Called before every level change or subsystem restart
 =================
 */
 void CG_Shutdown( void ) {
+    CG_R241TraceReset();
+    CG_Cod1SubtitleReset();
+    CG_Cod1TurretActorReset();
+    CG_Cod1PickupSoundsReset();
+    CG_Cod1TurretShotReset();
+    CG_Cod1HudElementsReset(qtrue);
+    CG_Cod1FootstepsReset();
+    CG_Cod1FoleySceneReset();
+    CG_Cod1KeyBindingReset(qfalse);
+    CG_Cod1ItemPrecacheReset();
+    CG_Cod1AmbientReset(qtrue);
+    CG_Cod1DebugLineReset(qtrue);
+    CG_Cod1DebugTextReset(qtrue);
+    CG_Cod1ObjectivesReset();
+    CG_Cod1ScriptQuakeReset(qtrue);
+    CG_Cod1ScriptFxReset(qtrue);
+    CG_Cod1EfxShutdown();
+    CG_Cod1BrassShutdown();
 
 	// some mods may need to do cleanup work here,
 	// like closing files or archiving session data
 }
-
-

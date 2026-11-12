@@ -35,6 +35,7 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include "cg_local.h"
+#include "cg_r241_frame_trace.h"
 #include "../ui/ui_shared.h"
 
 
@@ -93,6 +94,12 @@ static void CG_Viewpos_f( void ) {
 
 
 static void CG_ScoresDown_f( void ) {
+	/* CoD SP's +scores is the mission sheet, and requires no multiplayer
+	 * score request. Leave RTCW's command and cache intact on RTCW maps. */
+	if ( CG_Cod1HudEnabled() ) {
+		cg.showScores = qtrue;
+		return;
+	}
 	if ( cg.scoresRequestTime + 2000 < cg.time ) {
 		// the scores are more than two seconds out of data,
 		// so request new ones
@@ -316,6 +323,13 @@ static void CG_Camera_f( void ) {
 	CG_StartCamera( name, qfalse );
 }
 
+/* Only the genuine pregame Start script sends this paired command.
+ * Ordinary fade remains unchanged; an already owned opaque script HUD
+ * supplies its own original alpha/clock instead of an extra RTCW overlay. */
+static void CG_Cod1PregameStart_f(void) {
+    CG_Fade(0,0,0,0,cg.time,CG_Cod1HudElementsOwnsPregameFade()?0:3000);
+}
+
 static void CG_Fade_f( void ) {
 	int r, g, b, a;
 	float duration;
@@ -419,8 +433,20 @@ typedef struct {
 } consoleCommand_t;
 
 static consoleCommand_t commands[] = {
+    { "cod1_fx_test", CG_Cod1EfxTest_f },
+    { "cod1_fx_info", CG_Cod1EfxInfo_f },
+    { "cod1_muzzle_info", CG_Cod1MuzzleInfo_f },
+    { "cod1_impact_info", CG_Cod1ImpactInfo_f },
+    { "cod1_impact_test", CG_Cod1ImpactTest_f },
+    { "cod1_rocket_info", CG_Cod1RocketInfo_f },
+    { "cod1_rocket_test", CG_Cod1RocketTest_f },
+    { "cod1_fx_clear", CG_Cod1EfxClear },
+    { "cod1_brass_info", CG_Cod1BrassInfo_f },
+    { "cod1_brass_clear", CG_Cod1BrassClear },
 	{ "testgun", CG_TestGun_f },
 	{ "testmodel", CG_TestModel_f },
+	{ "cod1_actor_debug", CG_Cod1ActorDebug_f },
+	{ "cod1_actor_server", CG_Cod1ActorServer_f },
 	{ "nextframe", CG_TestModelNextFrame_f },
 	{ "prevframe", CG_TestModelPrevFrame_f },
 	{ "nextskin", CG_TestModelNextSkin_f },
@@ -444,6 +470,7 @@ static consoleCommand_t commands[] = {
 	{ "weapalt", CG_AltWeapon_f },
 	{ "weapon", CG_Weapon_f },
 	{ "weaponbank", CG_WeaponBank_f },
+    { "weaponslot", CG_WeaponSlot_f },
 	{ "itemnext", CG_NextItem_f },
 	{ "itemprev", CG_PrevItem_f },
 	{ "item", CG_Item_f },
@@ -454,6 +481,7 @@ static consoleCommand_t commands[] = {
 	{ "loaddeferred", CG_LoadDeferredPlayers },  // spelling fixed (SA)
 	{ "camera", CG_Camera_f },   // duffy
 	{ "fade", CG_Fade_f },   // duffy
+    { "cod1pregamestart", CG_Cod1PregameStart_f },
 
 	// NERVE - SMF
 	{ "mp_QuickMessage", CG_QuickMessage_f },
@@ -477,6 +505,7 @@ qboolean CG_ConsoleCommand( void ) {
 	int i;
 
 	cmd = CG_Argv( 0 );
+    if(!Q_stricmp(cmd,"r241_trace"))return CG_R241TraceCommand();
 
 	for ( i = 0 ; i < sizeof( commands ) / sizeof( commands[0] ) ; i++ ) {
 		if ( !Q_stricmp( cmd, commands[i].cmd ) ) {

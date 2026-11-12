@@ -245,6 +245,13 @@ int CM_PointContents( const vec3_t p, clipHandle_t model ) {
 	if ( !cm.numNodes ) { // map not loaded
 		return 0;
 	}
+	/* IBSP59 world leaves contain native brush indices, while the RTCW
+	 * adapter's brush array contains only inline models. Query the checked
+	 * native brush table for world and real inline model handles. */
+	if ( CM_PointContentsV59( p, model, &contents ) ) {
+		if ( !model ) c_pointcontents++;
+		return contents;
+	}
 
 	if ( model ) {
 		clipm = CM_ClipHandleToModel( model );
@@ -483,4 +490,3 @@ int CM_WriteAreaBits( byte *buffer, int area ) {
 
 	return bytes;
 }
-

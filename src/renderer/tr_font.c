@@ -96,9 +96,46 @@ If you have questions concerning this license or the applicable additional terms
 FT_Library ftLibrary = NULL;
 #endif
 
-#define MAX_FONTS 6
+#define MAX_FONTS 10
 static int registeredFontCount = 0;
 static fontInfo_t registeredFont[MAX_FONTS];
+
+/* CoD ships the same proportional typeface in several bitmap resolutions.
+ * Keep the requested size as the cache key, but sample the larger original
+ * atlas when the 640x480 UI is displayed on a taller screen.  The 18-point
+ * console and 30-point bold fonts are different faces and must not be swapped.
+ * In particular, the client's unnamed 16-point console font stays intact. */
+static int R_Cod1FontAtlasSize( const char *fontName, int pointSize ) {
+	static const int sizes[] = { 16, 24, 32 };
+	int target, first, i;
+	char path[MAX_QPATH];
+
+	if ( glConfig.vidHeight <= 480 || !fontName ||
+		( Q_stricmp( fontName, "fonts/smallFont" ) &&
+		  Q_stricmp( fontName, "fonts/normalFont" ) &&
+		  Q_stricmp( fontName, "fonts/bigFont" ) ) ||
+		( pointSize != 12 && pointSize != 16 && pointSize != 24 ) ) {
+		return pointSize;
+	}
+	target = (int)( pointSize * (float)glConfig.vidHeight / 480.0f + 0.999f );
+	first = (int)( sizeof( sizes ) / sizeof( sizes[0] ) ) - 1;
+	for ( i = 0; i < (int)( sizeof( sizes ) / sizeof( sizes[0] ) ); i++ ) {
+		if ( sizes[i] >= target ) { first = i; break; }
+	}
+	/* Prefer the closest usable resolution above the target, then back off
+	 * toward the requested atlas if that resource is not installed. */
+	for ( i = first; i < (int)( sizeof( sizes ) / sizeof( sizes[0] ) ); i++ ) {
+		if ( sizes[i] <= pointSize ) continue;
+		Com_sprintf( path, sizeof( path ), "fonts/fontImage_%i.dat", sizes[i] );
+		if ( ri.FS_ReadFile( path, NULL ) == 20552 ) return sizes[i];
+	}
+	for ( i = first - 1; i >= 0; i-- ) {
+		if ( sizes[i] <= pointSize ) continue;
+		Com_sprintf( path, sizeof( path ), "fonts/fontImage_%i.dat", sizes[i] );
+		if ( ri.FS_ReadFile( path, NULL ) == 20552 ) return sizes[i];
+	}
+	return pointSize;
+}
 
 #ifdef BUILD_FREETYPE
 void R_GetGlyphInfo( FT_GlyphSlot glyph, int *left, int *right, int *width, int *top, int *bottom, int *height, int *pitch ) {
@@ -345,8 +382,8 @@ void RE_RegisterFont( const char *fontName, int pointSize, fontInfo_t *font ) {
 	float max;
 #endif
 	void *faceData;
-	int i, len;
-	char name[1024];
+	int i, len, atlasSize;
+	char name[1024], cacheName[MAX_QPATH];
 	float dpi = 72;                                         //
 	float glyphScale =  72.0f / dpi;        // change the scale to be relative to 1 based on 72 dpi ( so dpi of 144 means a scale of .5 )
 
@@ -359,20 +396,82 @@ void RE_RegisterFont( const char *fontName, int pointSize, fontInfo_t *font ) {
 	// make sure the render thread is stopped
 	R_SyncRenderThread();
 
+	Com_sprintf( name, sizeof( name ), "fonts/fontImage_%i.dat",pointSize );
+	len = ri.FS_ReadFile( name, NULL );
+	atlasSize = len == 20552 ? R_Cod1FontAtlasSize( fontName, pointSize ) : pointSize;
+	/* The console registers unnamed font 16 before the menu registers its
+	 * normal font 16.  Distinguish their atlases in the cache at high DPI. */
+	if ( atlasSize != pointSize )
+		Com_sprintf( cacheName, sizeof( cacheName ), "fonts/fontImage_%i@%i", pointSize, atlasSize );
+	else
+		Q_strncpyz( cacheName, name, sizeof( cacheName ) );
+	for ( i = 0; i < registeredFontCount; i++ ) {
+		if ( Q_stricmp( cacheName, registeredFont[i].name ) == 0 ) {
+			memcpy( font, &registeredFont[i], sizeof( fontInfo_t ) );
+			return;
+		}
+	}
 	if ( registeredFontCount >= MAX_FONTS ) {
 		ri.Printf( PRINT_ALL, "RE_RegisterFont: Too many fonts registered already.\n" );
 		return;
 	}
 
-	Com_sprintf( name, sizeof( name ), "fonts/fontImage_%i.dat",pointSize );
-	for ( i = 0; i < registeredFontCount; i++ ) {
-		if ( Q_stricmp( name, registeredFont[i].name ) == 0 ) {
-			memcpy( font, &registeredFont[i], sizeof( fontInfo_t ) );
-			return;
+	/* Call of Duty 1 uses the same 256 x 80-byte glyph table concept as
+	 * RTCW, but its glyph record layout differs and the .dat has four
+	 * trailing bytes (20552 bytes total).  Accept it here and translate
+	 * the metrics into RTCW's fontInfo_t so the existing UI renderer can
+	 * consume original CoD fontImage_*.dat files directly. */
+	if ( len == 20552 ) {
+		char atlasName[MAX_QPATH];
+		Com_sprintf( atlasName, sizeof( atlasName ), "fonts/fontImage_%i.dat", atlasSize );
+		ri.FS_ReadFile( atlasName, &faceData );
+		if ( !faceData ) return;
+		fdFile = faceData;
+		for ( i = 0; i < GLYPHS_PER_FONT; i++ ) {
+			int p = i * 80;
+			float top, left, advance;
+			int w, hgt;
+			fdOffset = p + 8;  top = readFloat();
+			fdOffset = p + 12; left = readFloat();
+			fdOffset = p + 16; advance = readFloat();
+			fdOffset = p + 20; w = readInt();
+			fdOffset = p + 24; hgt = readInt();
+
+			font->glyphs[i].height = hgt;
+			/* CoDA mapping: +8 top, +12 left, +16 advance, +20/+24 size, +28 UV.
+			 * RTCW glyphInfo_t has no left-bearing field; retain top/advance/size/UV
+			 * here and handle left-bearing later if visual comparison requires it. */
+			font->glyphs[i].top = (int)top;
+			font->glyphs[i].bottom = (int)top - hgt;
+			font->glyphs[i].pitch = w;
+			font->glyphs[i].xSkip = (int)advance;
+			font->glyphs[i].imageWidth = w;
+			font->glyphs[i].imageHeight = hgt;
+			fdOffset = p + 28;
+			font->glyphs[i].s = readFloat();
+			font->glyphs[i].t = readFloat();
+			font->glyphs[i].s2 = readFloat();
+			font->glyphs[i].t2 = readFloat();
+			font->glyphs[i].glyph = 0;
+			memcpy( font->glyphs[i].shaderName, &fdFile[p + 48], 32 );
+			font->glyphs[i].shaderName[31] = '\0';
 		}
+		fdOffset = 20480;
+		font->glyphScale = readFloat();
+		Q_strncpyz( font->name, cacheName, sizeof( font->name ) );
+		for ( i = GLYPH_START; i < GLYPH_END; i++ ) {
+			if ( font->glyphs[i].shaderName[0] ) {
+				font->glyphs[i].glyph = RE_RegisterShaderNoMip( font->glyphs[i].shaderName );
+			}
+		}
+		ri.FS_FreeFile( faceData );
+		memcpy( &registeredFont[registeredFontCount++], font, sizeof( fontInfo_t ) );
+		ri.Printf( PRINT_ALL, "Loaded CoD font %s from %s (%d bytes), glyph A shader='%s' handle=%d uv=%g,%g..%g,%g\n",
+			name, atlasName, len, font->glyphs['A'].shaderName, font->glyphs['A'].glyph,
+			font->glyphs['A'].s, font->glyphs['A'].t, font->glyphs['A'].s2, font->glyphs['A'].t2 );
+		return;
 	}
 
-	len = ri.FS_ReadFile( name, NULL );
 	if ( len == sizeof( fontInfo_t ) ) {
 		ri.FS_ReadFile( name, &faceData );
 		fdOffset = 0;
@@ -547,4 +646,3 @@ void R_DoneFreeType() {
 #endif
 	registeredFontCount = 0;
 }
-

@@ -28,6 +28,7 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include "g_local.h"
+#include "g_cod1_player_lifetime.h"
 
 #include "ai_cast_fight.h"   // need these for avoidance
 
@@ -591,6 +592,18 @@ void ClientEvents( gentity_t *ent, int oldEventSequence ) {
 		eventParm = client->ps.eventParms[ i & ( MAX_EVENTS - 1 ) ];
 
 		switch ( event ) {
+        case EV_COD1_MELEE_HIT:
+            if(eventParm>0)G_Cod1MeleeAttack(ent,eventParm-1);
+            break;
+        case EV_COD1_MELEE_START:
+            break;
+		case EV_COD1_FALL_DAMAGE:
+			if (ent->s.eType != ET_PLAYER || (g_dmflags.integer & DF_NO_FALLING)) break;
+			damage = eventParm;
+			if (damage < 1 || damage > 100) break;
+			ent->pain_debounce_time = level.time + 200;
+			G_Damage(ent, NULL, NULL, NULL, NULL, damage, 0, MOD_FALLING);
+			break;
 		case EV_FALL_NDIE:
 		case EV_FALL_DMG_10:
 		case EV_FALL_DMG_15:
@@ -664,7 +677,7 @@ void ClientEvents( gentity_t *ent, int oldEventSequence ) {
 		case EV_FIRE_WEAPON:
 		case EV_FIRE_WEAPONB:
 		case EV_FIRE_WEAPON_LASTSHOT:
-			FireWeapon( ent );
+			if(!G_Cod1FireWeaponEvent(ent,event,eventParm))FireWeapon( ent );
 			break;
 
 		case EV_GRENADE_SUICIDE:
@@ -795,6 +808,7 @@ void ClientThink_real( gentity_t *ent ) {
 	// Rafael wolfkick
 	int validkick;
 	static int wolfkicktimer = 0;
+	G_Cod1PlayerLifetimeActivity( ent );
 
 	client = ent->client;
 
@@ -1416,6 +1430,7 @@ void ClientThink( int clientNum ) {
 	gentity_t *ent;
 
 	ent = g_entities + clientNum;
+	G_Cod1PlayerLifetimeActivity( ent );
 	ent->client->pers.oldcmd = ent->client->pers.cmd;
 	trap_GetUsercmd( clientNum, &ent->client->pers.cmd );
 
@@ -1437,6 +1452,7 @@ void ClientThink( int clientNum ) {
 
 
 void G_RunClient( gentity_t *ent ) {
+	G_Cod1PlayerLifetimeActivity( ent );
 	if ( !g_syncronousClients.integer ) {
 		return;
 	}
@@ -1566,6 +1582,7 @@ while a slow client may have multiple ClientEndFrame between ClientThink.
 void ClientEndFrame( gentity_t *ent ) {
 	int i;
 	clientPersistant_t  *pers;
+	G_Cod1PlayerLifetimeActivity( ent );
 
 	if ( ( ent->client->sess.sessionTeam == TEAM_SPECTATOR ) || ( ent->client->ps.pm_flags & PMF_LIMBO ) ) { // JPW NERVE
 		SpectatorClientEndFrame( ent );
@@ -1589,12 +1606,6 @@ void ClientEndFrame( gentity_t *ent ) {
 	}
 
 	// save network bandwidth
-#if 0
-	if ( !g_synchronousClients->integer && ent->client->ps.pm_type == PM_NORMAL ) {
-		// FIXME: this must change eventually for non-sync demo recording
-		VectorClear( ent->client->ps.viewangles );
-	}
-#endif
 
 	//
 	// If the end of unit layout is displayed, don't give

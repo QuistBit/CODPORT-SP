@@ -28,6 +28,9 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include "tr_local.h"
+#include "tr_cod1_actor_capture.h"
+#include "cod1_actor_xanim14.h"
+#include "../game/bg_cod1_actor_runtime.h"
 
 int r_firstSceneDrawSurf;
 
@@ -48,6 +51,101 @@ int r_numpolyverts;
 int skyboxportal;
 int drawskyboxportal;
 
+/* A renderer-local visual probe. The actor remains at the first eligible
+ * camera position after enabling, so the player can walk around it. It does
+ * not change game/network state or require a character entity bridge. */
+typedef struct {
+	qboolean enabled, pending;
+	qboolean animated;
+	qhandle_t model;
+	ca14ActorClip clip;
+	int startTime;
+	float distance, height;
+	refEntity_t entity;
+} cod1ActorPreview_t;
+static cod1ActorPreview_t cod1ActorPreview;
+static ca14ActorClip cod1ActorBridgeClip;
+static ca14ActorClip cod1FoleyBridgeClip;
+static void R_Cod1FoleyGestureReset(void);
+
+void R_Cod1ActorPreviewReset(void) {
+	CA14_ActorClipFree(&cod1ActorPreview.clip);
+	CA14_ActorClipFree(&cod1ActorBridgeClip);
+    CA14_ActorClipFree(&cod1FoleyBridgeClip);
+    R_Cod1FoleyGestureReset();
+	memset(&cod1ActorPreview,0,sizeof(cod1ActorPreview));
+	cod1ActorPreview.distance=140.f;
+	cod1ActorPreview.height=-56.f;
+}
+
+static int R_Cod1ActorPreviewNumber(const char *value,float lo,float hi,float *out) {
+	char *end;
+	double parsed;
+	if(!value || !*value)return 0;
+	parsed=strtod(value,&end);
+	if(end==value || *end || !(parsed>=lo && parsed<=hi))return 0;
+	*out=(float)parsed;
+	return 1;
+}
+
+void R_Cod1ActorPreview_f(void) {
+	const char *mode;
+	void *clipData=NULL;
+	int clipBytes,clipRead=-1;
+	ca14ActorClip loaded;
+	float distance=140.f,height=-56.f;
+	int count=ri.Cmd_Argc();
+	memset(&loaded,0,sizeof(loaded));
+	if(count<2 || count>4)goto usage;
+	mode=ri.Cmd_Argv(1);
+	if(!strcmp(mode,"0") && count==2) {
+		cod1ActorPreview.enabled=qfalse;
+		cod1ActorPreview.pending=qfalse;
+		cod1ActorPreview.animated=qfalse;
+		CA14_ActorClipFree(&cod1ActorPreview.clip);
+		ri.Printf(PRINT_ALL,"CoD1 actor preview: off\n");
+		return;
+	}
+	if(strcmp(mode,"1") && strcmp(mode,"2"))goto usage;
+	if(count>=3 && !R_Cod1ActorPreviewNumber(ri.Cmd_Argv(2),80.f,512.f,&distance))goto usage;
+	if(count>=4 && !R_Cod1ActorPreviewNumber(ri.Cmd_Argv(3),-160.f,160.f,&height))goto usage;
+	if(!tr.registered || !tr.world) {
+		ri.Printf(PRINT_ALL,"CoD1 actor preview: load a map first\n");
+		return;
+	}
+	cod1ActorPreview.model=RE_RegisterModel("cod1actor/wehrmacht_mp40a");
+	if(!cod1ActorPreview.model) {
+		cod1ActorPreview.enabled=qfalse;
+		ri.Printf(PRINT_WARNING,"CoD1 actor preview: pilot XModels/materials missing; check developer 1 diagnostics\n");
+		return;
+	}
+	if(!strcmp(mode,"2") && !cod1ActorPreview.clip.boneData) {
+		clipBytes=ri.FS_ReadFile("xanim/stand_aim_straight_loop1",NULL);
+		if(clipBytes>0 && (size_t)clipBytes<=CA14_ACTOR_CLIP_LIMIT)
+			clipRead=ri.FS_ReadFile("xanim/stand_aim_straight_loop1",&clipData);
+		if(clipRead!=clipBytes || !clipData ||
+		   !CA14_ActorClipLoad(clipData,(size_t)clipRead,&loaded) ||
+		   loaded.rootRotationKeys || loaded.rootTranslationKeys) {
+			CA14_ActorClipFree(&loaded);
+			if(clipData)ri.FS_FreeFile(clipData);
+			ri.Printf(PRINT_WARNING,"CoD1 actor preview: missing or invalid xanim/stand_aim_straight_loop1; static mode 1 remains available\n");
+			return;
+		}
+		ri.FS_FreeFile(clipData);
+		cod1ActorPreview.clip=loaded;
+	}
+	if(!strcmp(mode,"1"))CA14_ActorClipFree(&cod1ActorPreview.clip);
+	cod1ActorPreview.animated=!strcmp(mode,"2");
+	cod1ActorPreview.distance=distance;
+	cod1ActorPreview.height=height;
+	cod1ActorPreview.pending=qtrue;
+	cod1ActorPreview.enabled=qtrue;
+	ri.Printf(PRINT_ALL,"CoD1 actor preview: placing %ssoldier in front of camera (distance %.0f, height %.0f)\n",cod1ActorPreview.animated?"animated ":"",distance,height);
+	return;
+usage:
+	ri.Printf(PRINT_ALL,"Usage: cod1_actor_preview 1|2 [distance 80..512] [height -160..160] or cod1_actor_preview 0 (1 bind pose, 2 idle animation)\n");
+}
+
 /*
 ====================
 R_ToggleSmpFrame
@@ -64,6 +162,11 @@ void R_ToggleSmpFrame( void ) {
 	}
 
 	backEndData[tr.smpFrame]->commands.used = 0;
+	CNS_Reset( &backEndData[tr.smpFrame]->cod1NativeArena );
+	backEndData[tr.smpFrame]->cod1NativeOverflowReported = qfalse;
+	CNS_Reset( &backEndData[tr.smpFrame]->cod1ActorArena );
+	CNS_Reset( &backEndData[tr.smpFrame]->cod1TurretArena );
+	backEndData[tr.smpFrame]->cod1ActorOverflowReported = qfalse;
 
 	r_firstSceneDrawSurf = 0;
 
@@ -301,11 +404,138 @@ void RE_AddRefEntityToScene( const refEntity_t *ent ) {
 	if ( ent->reType < 0 || ent->reType >= RT_MAX_REF_ENTITY_TYPE ) {
 		ri.Error( ERR_DROP, "RE_AddRefEntityToScene: bad reType %i", ent->reType );
 	}
+	if ( ent->reType == RT_MODEL &&
+	     (R_GetModelByHandle( ent->hModel )->type == MOD_COD1_ACTOR_XMODEL ||
+          R_GetModelByHandle(ent->hModel)->type==MOD_COD1_TURRET_XMODEL || R_GetModelByHandle(ent->hModel)->type==MOD_COD1_TURRET_ACTOR) ) {
+		/* Generic entities have no animation state. Avoid drawing a shared
+		 * bind pose without a per-instance snapshot. */
+		return;
+	}
 
 	backEndData[tr.smpFrame]->entities[r_numentities].e = *ent;
 	backEndData[tr.smpFrame]->entities[r_numentities].lightingCalculated = qfalse;
+	backEndData[tr.smpFrame]->entities[r_numentities].cod1ModelLighting.valid = 0;
+	backEndData[tr.smpFrame]->entities[r_numentities].cod1NativeSubmission = NULL;
+	backEndData[tr.smpFrame]->entities[r_numentities].cod1ActorSubmission = NULL;
+	backEndData[tr.smpFrame]->entities[r_numentities].cod1TurretSubmission=NULL;
+	if ( ent->reType == RT_MODEL ) {
+		model_t *model = R_GetModelByHandle( ent->hModel );
+		if ( model->type == MOD_COD1_XMODEL ) {
+			backEndData_t *frame = backEndData[tr.smpFrame];
+			frame->entities[r_numentities].cod1NativeSubmission =
+				R_Cod1NativeCapture( model, &frame->cod1NativeArena );
+			if ( !frame->entities[r_numentities].cod1NativeSubmission && !frame->cod1NativeOverflowReported ) {
+				ri.Printf( PRINT_WARNING, "CoD1 native: frame snapshot exhausted; skipping model\n" );
+				frame->cod1NativeOverflowReported = qtrue;
+			}
+		}
+	}
 
 	r_numentities++;
+}
+
+/* One request produces both the queued model and its attachment tags from
+ * the same immutable, frame-owned pose. Keep the existing refexport_t entry
+ * for the fixed Native-1 path and all other models exactly as it was. */
+int RE_AddCod1NativeView( const refEntity_t *ent,
+                          const cod1NativeAnimState_t *state,
+                          cod1NativeViewTags_t *tags ) {
+	model_t *model;
+	backEndData_t *frame;
+	cod1NativeSubmission_t *snapshot;
+	trRefEntity_t *submitted;
+	qboolean draw;
+
+	if ( tags ) {
+		memset( tags, 0, sizeof( *tags ) );
+		tags->flashIndex = tags->brassIndex = -1;
+	}
+	if ( !tr.registered || !ent || !state || !tags ||
+		 state->version != COD1_NATIVE_STATE_VERSION ||
+		 state->size != (int)sizeof( *state ) ||
+		 ( state->flags & ~COD1_NATIVE_DRAW_VIEW ) ||
+		 ent->reType != RT_MODEL || ent->hModel < 1 ||
+		 ent->hModel >= tr.numModels ) {
+		return 0;
+	}
+	draw = ( state->flags & COD1_NATIVE_DRAW_VIEW ) != 0;
+	if ( draw && r_numentities >= ENTITYNUM_WORLD ) {
+		return 0;
+	}
+	model = R_GetModelByHandle( ent->hModel );
+	if ( model->type != MOD_COD1_XMODEL || !model->cod1Native ) {
+		return 0;
+	}
+
+	frame = backEndData[tr.smpFrame];
+	snapshot = R_Cod1NativeCaptureAnimated( model, &frame->cod1NativeArena, state );
+	if ( !snapshot ) {
+		return 0;
+	}
+	R_Cod1NativeSubmissionTags( snapshot, tags );
+	if ( draw ) {
+		submitted = &frame->entities[r_numentities];
+		submitted->e = *ent;
+		submitted->lightingCalculated = qfalse;
+	submitted->cod1ModelLighting.valid = 0;
+		submitted->cod1NativeSubmission = snapshot;
+		submitted->cod1ActorSubmission = NULL;
+    submitted->cod1TurretSubmission=NULL;
+		r_numentities++;
+	}
+	return 1;
+}
+
+/* Internal renderer seam for a later character entity bridge. Success means
+ * the pose and tags entered the frame; a later view may still skip drawing
+ * if its separate LOD skin snapshot exhausts the frame budget. A caller
+ * supplies a decoded named-bone pose; this function does not guess CoD1
+ * root-motion semantics or expose a new public refexport ABI. */
+#include "tr_cod1_actor_submission.inc"
+
+/* Submit only to the ordinary world scene. A skybox scene can be rendered
+ * before the main view, but must neither place nor duplicate the actor. */
+int R_Cod1ActorPreviewSubmit(const refdef_t *fd) {
+	refEntity_t ent;
+	cod1ActorPilotTags_t tags;
+	cv14Pose bindPose;
+	vec3_t forward,facing,angles;
+	float length;
+	model_t *model;
+	if(!cod1ActorPreview.enabled || !fd || !tr.registered || !tr.world ||
+	   (fd->rdflags&(RDF_NOWORLDMODEL|RDF_SKYBOXPORTAL)))return 0;
+	if(cod1ActorPreview.model<1 || cod1ActorPreview.model>=tr.numModels)return 0;
+	model=R_GetModelByHandle(cod1ActorPreview.model);
+	if(!model || model->type!=MOD_COD1_ACTOR_XMODEL || !model->cod1Actor)return 0;
+	if(cod1ActorPreview.pending) {
+		forward[0]=fd->viewaxis[0][0];
+		forward[1]=fd->viewaxis[0][1];
+		forward[2]=0;
+		length=VectorLength(forward);
+		if(!(length>.001f && length<1000.f))return 0;
+		VectorScale(forward,1.f/length,forward);
+		memset(&ent,0,sizeof(ent));
+		ent.reType=RT_MODEL;
+		ent.hModel=cod1ActorPreview.model;
+		VectorMA(fd->vieworg,cod1ActorPreview.distance,forward,ent.origin);
+		ent.origin[2]=fd->vieworg[2]+cod1ActorPreview.height;
+		VectorScale(forward,-1.f,facing);
+		vectoangles(facing,angles);
+		angles[PITCH]=angles[ROLL]=0;
+		AnglesToAxis(angles,ent.axis);
+	} else ent=cod1ActorPreview.entity;
+	memset(&bindPose,0,sizeof(bindPose));
+	if(cod1ActorPreview.animated) {
+		int elapsed=cod1ActorPreview.pending?0:fd->time-cod1ActorPreview.startTime;
+		if(!CA14_ActorClipSample(&cod1ActorPreview.clip,elapsed,&bindPose))return 0;
+	}
+	if(!RE_AddCod1ActorPilot(&ent,&bindPose,&tags))return 0;
+	if(cod1ActorPreview.pending) {
+		cod1ActorPreview.entity=ent;
+		cod1ActorPreview.pending=qfalse;
+		cod1ActorPreview.startTime=fd->time;
+	}
+	return 1;
 }
 
 // Ridah, added support for overdraw field
@@ -317,6 +547,28 @@ RE_AddLightToScene
 */
 void RE_AddLightToScene( const vec3_t org, float intensity, float r, float g, float b, int overdraw ) {
 	dlight_t    *dl;
+
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	if ( cod1Bsp59MapActive ) {
+		/* Native 0x4ded10 queues point inputs before scene-mode selection.
+		 * The x87 radius predicate accepts greater or unordered: preserve
+		 * that queue policy; the perLight consumer keeps its finite bound.
+		 * Radius/RGB/origin are copied verbatim, without RTCW scale or
+		 * overdraw/custom-shader policy. Prepared record fields are a
+		 * separate producer and are not fabricated in this adapter. */
+		if ( !tr.registered || r_numdlights >= MAX_DLIGHTS || intensity <= 0.0f ) {
+			return;
+		}
+		dl = &backEndData[tr.smpFrame]->dlights[r_numdlights++];
+		memset( dl, 0, sizeof( *dl ) );
+		memcpy( dl->origin, org, sizeof( dl->origin ) );
+		memcpy( &dl->radius, &intensity, sizeof( dl->radius ) );
+		memcpy( &dl->color[0], &r, sizeof( r ) );
+		memcpy( &dl->color[1], &g, sizeof( g ) );
+		memcpy( &dl->color[2], &b, sizeof( b ) );
+		return;
+	}
+#endif
 
 	if ( !tr.registered ) {
 		return;
@@ -423,6 +675,7 @@ void RE_RenderScene( const refdef_t *fd ) {
 	if ( !tr.world && !( fd->rdflags & RDF_NOWORLDMODEL ) ) {
 		ri.Error( ERR_DROP, "R_RenderScene: NULL worldmodel" );
 	}
+	R_Cod1ActorPreviewSubmit(fd);
 
 	memcpy( tr.refdef.text, fd->text, sizeof( tr.refdef.text ) );
 
@@ -484,6 +737,8 @@ void RE_RenderScene( const refdef_t *fd ) {
 
 	tr.refdef.num_dlights = r_numdlights - r_firstSceneDlight;
 	tr.refdef.dlights = &backEndData[tr.smpFrame]->dlights[r_firstSceneDlight];
+	tr.refdef.cod1PreparedDlightCount = 0;
+	tr.refdef.cod1PreparedDlights = NULL;
 
 	tr.refdef.num_coronas = r_numcoronas - r_firstSceneCorona;
 	tr.refdef.coronas = &backEndData[tr.smpFrame]->coronas[r_firstSceneCorona];
@@ -491,6 +746,20 @@ void RE_RenderScene( const refdef_t *fd ) {
 	tr.refdef.numPolys = r_numpolys - r_firstScenePoly;
 	tr.refdef.polys = &backEndData[tr.smpFrame]->polys[r_firstScenePoly];
 
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	if ( cod1Bsp59MapActive ) {
+		/* Native 4df0d9..4df110 preserves the current complete scene slice
+		 * for entity preparation at every nonzero mode. World/inline replay
+		 * publishes num_dlights only for mode 1. */
+		if ( r_dynamiclight->integer != 0 ) {
+			tr.refdef.cod1PreparedDlightCount = tr.refdef.num_dlights;
+			tr.refdef.cod1PreparedDlights = tr.refdef.dlights;
+		}
+		if ( r_dynamiclight->integer != 1 ) {
+			tr.refdef.num_dlights = 0;
+		}
+	} else
+#endif
 	// turn off dynamic lighting globally by clearing all the
 	// dlights if it needs to be disabled or if vertex lighting is enabled
 	if ( /*r_dynamiclight->integer == 0 ||*/    // RF, disabled so we can force things like lightning dlights
@@ -540,3 +809,6 @@ void RE_RenderScene( const refdef_t *fd ) {
 
 	tr.frontEndMsec += ri.Milliseconds() - startTime;
 }
+
+#include "tr_cod1_turret_submission.inc"
+#include "tr_cod1_turret_actor_submission.inc"

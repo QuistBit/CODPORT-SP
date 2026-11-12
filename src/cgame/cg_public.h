@@ -216,7 +216,24 @@ typedef enum {
 	CG_INGAME_CLOSEPOPUP,   // NERVE - SMF
 	CG_LIMBOCHAT,           // NERVE - SMF
 
-	CG_GETMODELINFO
+	CG_GETMODELINFO,
+    CG_COD1_SETWEAPONANGLES, /* PATCH56; appended to preserve prior imports. */
+    CG_COD1_FS_GETFILELIST, /* IMPACT_R1, capability-gated; no old IDs shift. */
+    CG_COD1_STARTALIASESOUND, /* STABILIZATION: native alias gain/pitch/range metadata; appended. */
+    CG_COD1_NATIVE_VIEW, /* Native XAnim: typed pose and tags for one viewmodel submission. */
+    CG_COD1_ACTOR_ANIM, /* Typed cgame actor submission; appended, no old import ID shifts. */
+    CG_COD1_SCRIPT_MUSIC, /* R107: typed fixed-gain music; previous IDs unchanged. */
+    CG_COD1_SCRIPT_AMBIENT, /* R120: separate typed ambience; appended import. */
+    CG_COD1_KEYBINDING_SCAN,
+    CG_COD1_KEYBINDING_CONTEXT,
+    CG_COD1_SOUND_DURATION, /* R227 append only: loaded mixer samples/pitch. */
+    CG_COD1_VOICE_STREAM, /* R230 typed owned PCM stream; previous IDs unchanged. */
+    CG_COD1_TURRET /* R232 typed current turret geometry; append only. */,
+    CG_COD1_TURRET_ACTOR_REGISTER,
+    CG_COD1_TURRET_ACTOR_ADD,
+    CG_COD1_TURRET_TAG_FLASH,
+    CG_COD1_ALIAS_SLAVE, /* R234 per-invocation original slave cap. */
+    CG_COD1_LOOP_STREAM /* Appended paired persistent PCM API. */
 } cgameImport_t;
 
 
@@ -271,6 +288,8 @@ typedef enum {
 	CG_GET_TAG,
 //	qboolean CG_GetTag( int clientNum, char *tagname, orientation_t *or );
 
+	CG_COD1_STATE_ABI,
+    CG_COD1_KEYBINDING_QUERY,
 	MAX_CGAME_EXPORT
 
 } cgameExport_t;

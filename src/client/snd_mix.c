@@ -36,6 +36,7 @@ If you have questions concerning this license or the applicable additional terms
  *****************************************************************************/
 
 #include "snd_local.h"
+#include "snd_cod1_alias.h"
 
 portable_samplepair_t paintbuffer[PAINTBUFFER_SIZE];
 static int snd_vol;
@@ -565,6 +566,31 @@ static void S_PaintChannelFrom16( channel_t *ch, const sfx_t *sc, int count, int
 	}
 }
 
+
+/* CoD soundalias pitch is per playback instance. Registered one-shot sounds
+ * are uncompressed in this tree; interpolate the loaded PCM at a fractional
+ * source position without mutating the shared sfx buffer. */
+static void S_PaintChannelFrom16Cod1( channel_t *ch, const sfx_t *sc, int count, int sampleOffset, int bufferOffset ) {
+    portable_samplepair_t *samp=&paintbuffer[bufferOffset];
+    sndBuffer *chunk=sc->soundData,*next;int chunkBase=0,i,idx;float pos,frac;
+    int leftvol=ch->leftvol*snd_vol,rightvol=ch->rightvol*snd_vol;
+    if(!chunk||ch->cod1Pitch<=0)return;
+    pos=S_Cod1AliasSourcePosition(sampleOffset,ch->cod1Pitch);idx=(int)floorf(pos);
+    while(idx>=chunkBase+SND_CHUNK_SIZE && chunk->next){chunk=chunk->next;chunkBase+=SND_CHUNK_SIZE;}
+    for(i=0;i<count;i++,pos+=ch->cod1Pitch){
+        int a,b;short sa,sb;
+        idx=(int)floorf(pos);if(idx<0||idx>=sc->soundLength)break;
+        while(idx>=chunkBase+SND_CHUNK_SIZE && chunk->next){chunk=chunk->next;chunkBase+=SND_CHUNK_SIZE;}
+        a=idx-chunkBase;sa=chunk->sndChunk[a];
+        if(idx+1<sc->soundLength){
+            if(a+1<SND_CHUNK_SIZE)sb=chunk->sndChunk[a+1];
+            else {next=chunk->next;sb=next?next->sndChunk[0]:sa;}
+        }else sb=sa;
+        frac=pos-(float)idx;b=S_Cod1AliasLerp16(sa,sb,frac);
+        samp[i].left+=(b*leftvol)>>8;samp[i].right+=(b*rightvol)>>8;
+    }
+}
+
 /*
 ===================
 S_PaintChannelFromWavelet
@@ -754,11 +780,10 @@ void S_PaintChannels( int endtime ) {
 
 	//Com_Printf ("%i to %i\n", s_paintedtime, endtime);
 	while ( s_paintedtime < endtime ) {
-		// if paintbuffer is smaller than DMA buffer
-		// we may need to fill it multiple times
+		// The mixahead interval may exceed this workspace (the DMA ring is
+		// larger). Split it into bounded chunks; this is normal mixing.
 		end = endtime;
 		if ( endtime - s_paintedtime > PAINTBUFFER_SIZE ) {
-			Com_DPrintf( "endtime exceeds PAINTBUFFER_SIZE %i\n", endtime - s_paintedtime );
 			end = s_paintedtime + PAINTBUFFER_SIZE;
 		}
 
@@ -842,7 +867,10 @@ void S_PaintChannels( int endtime ) {
 
 			sampleOffset = ltime - ch->startSample;
 			count = end - ltime;
-			if ( sampleOffset + count > sc->soundLength ) {
+            if(ch->cod1Alias) {
+                int remain=S_Cod1AliasSamplesRemaining(sc->soundLength,sampleOffset,ch->cod1Pitch);
+                if(count>remain)count=remain;
+            } else if ( sampleOffset + count > sc->soundLength ) {
 				count = sc->soundLength - sampleOffset;
 			}
 
@@ -870,7 +898,9 @@ void S_PaintChannels( int endtime ) {
 					}
 				}
 #endif
-				if ( sc->soundCompressionMethod == 1 ) {
+                if(ch->cod1Alias && sc->soundCompressionMethod==0) {
+                    S_PaintChannelFrom16Cod1(ch,sc,count,sampleOffset,ltime-s_paintedtime);
+				} else if ( sc->soundCompressionMethod == 1 ) {
 					S_PaintChannelFromADPCM( ch, sc, count, sampleOffset, ltime - s_paintedtime );
 				} else if ( sc->soundCompressionMethod == 2 ) {
 					S_PaintChannelFromWavelet( ch, sc, count, sampleOffset, ltime - s_paintedtime );
@@ -945,6 +975,7 @@ void S_PaintChannels( int endtime ) {
 		}
 
 		// transfer out according to DMA format
+        if(ALab_Active())S_AL_RenderBlock(paintbuffer,end-s_paintedtime);
 		S_TransferPaintBuffer( end );
 		s_paintedtime = end;
 		firstPass = qfalse;

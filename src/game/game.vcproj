@@ -25,6 +25,8 @@
 			>
 			<Tool
 				Name="VCPreBuildEventTool"
+				Description="Building game function table before compilation..."
+				CommandLine="call &quot;$(ProjectDir)..\extractfuncs\extractfuncs.bat&quot;"
 			/>
 			<Tool
 				Name="VCCustomBuildTool"
@@ -69,8 +71,6 @@
 			/>
 			<Tool
 				Name="VCPreLinkEventTool"
-				Description="Building game function table..."
-				CommandLine="..\extractfuncs\extractfuncs.bat"
 			/>
 			<Tool
 				Name="VCLinkerTool"
@@ -125,6 +125,8 @@
 			>
 			<Tool
 				Name="VCPreBuildEventTool"
+				Description="Building game function table before compilation..."
+				CommandLine="call &quot;$(ProjectDir)..\extractfuncs\extractfuncs.bat&quot;"
 			/>
 			<Tool
 				Name="VCCustomBuildTool"
@@ -169,8 +171,6 @@
 			/>
 			<Tool
 				Name="VCPreLinkEventTool"
-				Description="Building game function table..."
-				CommandLine="..\extractfuncs\extractfuncs.bat"
 			/>
 			<Tool
 				Name="VCLinkerTool"
@@ -1398,7 +1398,9 @@
 			Filter="ico;cur;bmp;dlg;rc2;rct;bin;cnt;rtf;gif;jpg;jpeg;jpe"
 			>
 		</Filter>
-	</Files>
+	<File RelativePath="cod_step.c" />
+	<File RelativePath="cod_jump_land.c" />
+</Files>
 	<Globals>
 	</Globals>
 </VisualStudioProject>

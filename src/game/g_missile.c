@@ -27,6 +27,10 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "g_local.h"
+#include "bg_cod1_inventory.h"
+#include "g_cod1_grenade.h"
+#include "g_cod1_entity_host.h"
+#include "bg_cod1_rocket.h"
 
 #define MISSILE_PRESTEP_TIME    50
 
@@ -61,6 +65,8 @@ qboolean G_BounceMissile( gentity_t *ent, trace_t *trace ) {
 		return qfalse;
 	}
 */
+    if(G_Cod1Grenade(ent))return G_Cod1BounceGrenade(ent,trace);
+
 	contents = trap_PointContents( ent->s.origin, -1 );
 
 	// reflect the velocity on the trace plane
@@ -165,7 +171,7 @@ void G_MissileImpact( gentity_t *ent, trace_t *trace, int impactDamage, vec3_t d
 	}
 
 	// check for bounce
-	if ( !other->takedamage &&
+	if ( (!other->takedamage || G_Cod1Grenade(ent)) &&
 		 ( ent->s.eFlags & ( EF_BOUNCE | EF_BOUNCE_HALF ) ) ) {
 		if ( G_BounceMissile( ent, trace ) && !trace->startsolid ) {  // no bounce, no bounce sound
 			int flags = 0;
@@ -216,7 +222,14 @@ void G_MissileImpact( gentity_t *ent, trace_t *trace, int impactDamage, vec3_t d
 	// is it cheaper in bandwidth to just remove this ent and create a new
 	// one, rather than changing the missile into the explosion?
 
-	if ( other->takedamage && other->client ) {
+	if ( ent->cod1ExplosionType == 1 && ent->cod1ImpactExplode ) {
+		int bits = CI_TraceBits( trace );
+		qboolean noMarks = (qboolean)( ( bits & CI_NOMARKS ) || ( trace->surfaceFlags & SURF_NOMARKS ) );
+		G_AddEvent( ent, noMarks ? EV_COD1_ROCKET_EXPLODE_NOMARKS : EV_COD1_ROCKET_EXPLODE,
+			DirToByte( trace->plane.normal ) );
+		CR_WriteEvent( &ent->s, trace );
+		ent->s.otherEntityNum = other->s.number;
+	} else if ( other->takedamage && other->client ) {
 		G_AddEvent( ent, EV_MISSILE_HIT, DirToByte( trace->plane.normal ) );
 		ent->s.otherEntityNum = other->s.number;
 	} else {
@@ -240,8 +253,14 @@ void G_MissileImpact( gentity_t *ent, trace_t *trace, int impactDamage, vec3_t d
 
 	// splash damage (doesn't apply to person directly hit)
 	if ( ent->splashDamage ) {
-		if ( G_RadiusDamage( trace->endpos, ent->parent, ent->splashDamage, ent->splashRadius,
-							 other, ent->splashMethodOfDeath ) ) {
+		qboolean radiusHit;
+		if ( ent->cod1ExplosionType == 1 )
+			radiusHit = G_Cod1RadiusDamage( trace->endpos, ent->parent, ent->splashDamage,
+				(float)ent->cod1ExplosionOuterDamage, (float)ent->splashRadius, other, ent->splashMethodOfDeath );
+		else
+			radiusHit = G_RadiusDamage( trace->endpos, ent->parent, ent->splashDamage, ent->splashRadius,
+				other, ent->splashMethodOfDeath );
+		if ( radiusHit ) {
 			if ( !hitClient && g_entities[ent->r.ownerNum].client ) {
 				g_entities[ent->r.ownerNum].client->ps.persistant[PERS_ACCURACY_HITS]++;
 			}
@@ -250,6 +269,11 @@ void G_MissileImpact( gentity_t *ent, trace_t *trace, int impactDamage, vec3_t d
 
 	trap_LinkEntity( ent );
 
+	/* CoD projectile explosions own their complete smoke/debris presentation
+	 * through rocket_explode EFX; do not append RTCW's Msmoke entity. */
+	if ( ent->cod1ExplosionType == 1 ) {
+		return;
+	}
 
 	// weapons with no default smoke business
 	if ( etype == ET_MISSILE ) {
@@ -443,7 +467,14 @@ void G_ExplodeMissile( gentity_t *ent ) {
 
 	ent->s.eType = ET_GENERAL;
 
-	if ( !Q_stricmp( ent->classname, "props_explosion" ) ) {
+	/* CoD projectile lifetime expiry has no physical surface/material. Keep
+	 * Panzerfaust in the native rocket event path with default material and
+	 * no marks instead of falling back to RTCW EV_MISSILE_MISS. */
+	if ( ent->cod1ExplosionType == 1 ) {
+		G_AddEvent( ent, EV_COD1_ROCKET_EXPLODE_NOMARKS, DirToByte( dir ) );
+		CR_WriteExpiryEvent( &ent->s, dir );
+	}
+	else if ( !Q_stricmp( ent->classname, "props_explosion" ) ) {
 		G_AddEvent( ent, EV_MISSILE_MISS_SMALL, DirToByte( dir ) );
 		small = qtrue;
 	}
@@ -471,7 +502,13 @@ void G_ExplodeMissile( gentity_t *ent ) {
 
 	// splash damage
 	if ( ent->splashDamage ) {
-		if ( G_RadiusDamage( ent->r.currentOrigin, ent->parent, ent->splashDamage, ent->splashRadius, ent, ent->splashMethodOfDeath ) ) {    //----(SA)
+		qboolean radiusHit;
+		if ( ent->cod1ExplosionType == 1 )
+			radiusHit = G_Cod1RadiusDamage( ent->r.currentOrigin, ent->parent, ent->splashDamage,
+				(float)ent->cod1ExplosionOuterDamage, (float)ent->splashRadius, ent, ent->splashMethodOfDeath );
+		else
+			radiusHit = G_RadiusDamage( ent->r.currentOrigin, ent->parent, ent->splashDamage, ent->splashRadius, ent, ent->splashMethodOfDeath );
+		if ( radiusHit ) {    //----(SA)
 			if ( g_entities[ent->r.ownerNum].client ) {
 				g_entities[ent->r.ownerNum].client->ps.persistant[PERS_ACCURACY_HITS]++;
 			}
@@ -480,8 +517,20 @@ void G_ExplodeMissile( gentity_t *ent ) {
 
 	trap_LinkEntity( ent );
 
+	/* rocket_explode owns the complete Panzerfaust expiry presentation too. */
+	if ( ent->cod1ExplosionType == 1 ) {
+		return;
+	}
+
 	if ( !zombiespit ) {
 		gentity_t *Msmoke;
+
+		/* CoD grenade event now owns its visible smoke on the client. Keep
+		 * the old concussion, but do not emit a second RTCW EV_SMOKE cloud. */
+		if (G_Cod1Grenade(ent)) {
+			Concussive_fx(ent->r.currentOrigin);
+			return;
+		}
 
 		Msmoke = G_Spawn();
 		VectorCopy( ent->r.currentOrigin, Msmoke->s.origin );
@@ -563,6 +612,10 @@ void G_RunMissile( gentity_t *ent ) {
 	vec3_t origin, dir;         // 'dir' is 'deltaMove'
 	trace_t tr;
 	int impactDamage;
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+    vec3_t cod1SegmentStart;GscEntityRef cod1Shot;int cod1Captured=G_Cod1MapEntities()&&G_Cod1EntityCapture(ent,&cod1Shot);
+    VectorCopy(ent->r.currentOrigin,cod1SegmentStart);
+#endif
 
 	// Ridah, make AI aware of this danger
 	// DHM - Nerve :: Only in single player
@@ -590,6 +643,9 @@ void G_RunMissile( gentity_t *ent ) {
 	}
 
 	trap_LinkEntity( ent );
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+    if(cod1Captured&&(!G_Cod1EntitySameAllocation(&cod1Shot)||!G_Cod1GrenadeDamageTriggers(cod1SegmentStart,tr.endpos,ent)))return;
+#endif
 
 	if ( tr.fraction != 1 ) {
 		// never explode or bounce on sky
@@ -830,46 +886,6 @@ void G_RunSpit( gentity_t *ent ) {
 }
 
 
-void G_RunCrowbar( gentity_t *ent ) {
-	vec3_t origin;
-	trace_t tr;
-
-	// get current position
-	BG_EvaluateTrajectory( &ent->s.pos, level.time, origin );
-
-	// trace a line from the previous position to the current position,
-	// ignoring interactions with the missile owner
-	trap_Trace( &tr, ent->r.currentOrigin, ent->r.mins, ent->r.maxs, origin,
-				ent->r.ownerNum, ent->clipmask );
-
-	VectorCopy( tr.endpos, ent->r.currentOrigin );
-
-	if ( tr.startsolid ) {
-		tr.fraction = 0;
-	}
-
-	trap_LinkEntity( ent );
-
-	if ( tr.fraction != 1 ) {
-		// never explode or bounce on sky
-		if  (   tr.surfaceFlags & SURF_NOIMPACT ) {
-			// If grapple, reset owner
-			if ( ent->parent && ent->parent->client->hook == ent ) {
-				ent->parent->client->hook = NULL;
-			}
-			G_FreeEntity( ent );
-			return;
-		}
-
-		if ( ent->s.eType != ET_MISSILE ) {
-			return;     // exploded
-		}
-	}
-
-	// check think function after bouncing
-	G_RunThink( ent );
-}
-
 //=============================================================================
 
 //----(SA) removed unused quake3 weapons.
@@ -887,14 +903,50 @@ fire_grenade
 
 =================
 */
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+static qboolean G_Cod1RngGrenadeLease(const GscEntityRef *ref,uint64_t epoch) {
+    return ref && epoch && ref->epoch==epoch &&
+        G_Cod1RngOwnerReady() && epoch==G_Cod1EntityMapEpoch() &&
+        G_Cod1EntitySameAllocation(ref);
+}
+#endif
+
 gentity_t *fire_grenade( gentity_t *self, vec3_t start, vec3_t dir, int grenadeWPID ) {
 	gentity_t   *bolt, *hit; // JPW NERVE
 	qboolean noExplode = qfalse;
 	vec3_t mins, maxs;      // JPW NERVE
 	static vec3_t range = { 40, 40, 52 };   // JPW NERVE
 	int i,num,touch[MAX_GENTITIES];         // JPW NERVE
+	int cod1FreshLaunch=G_Cod1GrenadeWeapon(grenadeWPID) &&
+		G_Cod1RngOwnerPolicy()==COD1_RNG_POLICY_FRESH_SP;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	GscEntityRef cod1LaunchRef;
+	uint64_t cod1LaunchEpoch=0;
+	int cod1LaunchCaptured=0;
+#endif
 
+	/* A formerly admitted fresh map cannot silently borrow the CRT stream. */
+	if(cod1FreshLaunch && !G_Cod1RngOwnerReady()) {
+		G_Error("R132: fresh GAME RNG owner unavailable before grenade allocation");
+		return NULL; /* actual trap_Error is nonlocal; returning stubs are unsupported */
+	}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if(cod1FreshLaunch)cod1LaunchEpoch=G_Cod1EntityMapEpoch();
+#endif
 	bolt = G_Spawn();
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if(cod1FreshLaunch) {
+		cod1LaunchCaptured=G_Cod1EntityCapture(bolt,&cod1LaunchRef);
+		if(!cod1LaunchCaptured || cod1LaunchEpoch!=G_Cod1EntityMapEpoch() ||
+		   cod1LaunchRef.epoch!=cod1LaunchEpoch || !G_Cod1RngOwnerReady()) {
+			/* Only the original current allocation can be cleaned up. */
+			if(cod1LaunchCaptured && cod1LaunchRef.epoch==cod1LaunchEpoch &&
+			   G_Cod1EntitySameAllocation(&cod1LaunchRef))G_FreeEntity(bolt);
+			G_Error("R132: grenade allocation lost fresh GAME map identity");
+			return NULL;
+		}
+	}
+#endif
 
 	// no self->client for shooter_grenade's
 	if ( self->client && self->client->ps.grenadeTimeLeft ) {
@@ -979,12 +1031,28 @@ gentity_t *fire_grenade( gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 		// oh, this is /so/ cheap...
 		// you need to pick up new code ;)
 		trap_SendServerCommand( self - g_entities, va( "dp %d", ( bolt->nextthink - level.time ) / 1000 ) );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+		if(cod1FreshLaunch && (!cod1LaunchCaptured ||
+		   !G_Cod1RngGrenadeLease(&cod1LaunchRef,cod1LaunchEpoch))) {
+		    if(cod1LaunchCaptured && G_Cod1EntitySameAllocation(&cod1LaunchRef))G_FreeEntity(bolt);
+		    G_Error("R132: grenade launch lost fresh owner at engine callback");
+		    return NULL;
+		}
+#endif
 // JPW NERVE
 		if ( g_gametype.integer != GT_SINGLE_PLAYER ) {
 // check if player is in trigger objective field -- swiped from G_TouchTriggers()
 			VectorSubtract( self->client->ps.origin, range, mins );
 			VectorAdd( self->client->ps.origin, range, maxs );
 			num = trap_EntitiesInBox( mins, maxs, touch, MAX_GENTITIES );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+			if(cod1FreshLaunch && (!cod1LaunchCaptured ||
+			   !G_Cod1RngGrenadeLease(&cod1LaunchRef,cod1LaunchEpoch))) {
+			    if(cod1LaunchCaptured && G_Cod1EntitySameAllocation(&cod1LaunchRef))G_FreeEntity(bolt);
+			    G_Error("R132: grenade launch lost fresh owner at engine callback");
+			    return NULL;
+			}
+#endif
 			VectorAdd( self->client->ps.origin, self->r.mins, mins );
 			VectorAdd( self->client->ps.origin, self->r.maxs, maxs );
 
@@ -1003,6 +1071,14 @@ gentity_t *fire_grenade( gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 					} else {
 						trap_SendServerCommand( -1, va( "cp \"%s\"", va( "Det charge planted near objective %d!", hit->count ) ) );
 					}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+					if(cod1FreshLaunch && (!cod1LaunchCaptured ||
+					   !G_Cod1RngGrenadeLease(&cod1LaunchRef,cod1LaunchEpoch))) {
+					    if(cod1LaunchCaptured && G_Cod1EntitySameAllocation(&cod1LaunchRef))G_FreeEntity(bolt);
+					    G_Error("R132: grenade launch lost fresh owner at engine callback");
+					    return NULL;
+					}
+#endif
 					i = num;
 				}
 			}
@@ -1057,6 +1133,27 @@ gentity_t *fire_grenade( gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 	SnapVector( bolt->s.pos.trDelta );          // save net bandwidth
 
 	VectorCopy( start, bolt->r.currentOrigin );
+
+    if ( G_Cod1Grenade( bolt ) ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+        if(cod1FreshLaunch && (!cod1LaunchCaptured ||
+           !G_Cod1RngGrenadeLease(&cod1LaunchRef,cod1LaunchEpoch))) {
+            if(cod1LaunchCaptured && G_Cod1EntitySameAllocation(&cod1LaunchRef))G_FreeEntity(bolt);
+            G_Error("R132: grenade launch lost captured fresh allocation");
+            return NULL;
+        }
+#endif
+        if(!G_Cod1InitGrenadeAngles(bolt,dir)) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+            if(cod1FreshLaunch) {
+                if(cod1LaunchCaptured && G_Cod1EntitySameAllocation(&cod1LaunchRef))G_FreeEntity(bolt);
+            } else
+#endif
+                G_FreeEntity(bolt);
+            G_Error("R132: fresh GAME RNG refused grenade launch");
+            return NULL;
+        }
+    }
 
 	return bolt;
 }
@@ -1233,42 +1330,6 @@ gentity_t *fire_zombiespirit( gentity_t *self, gentity_t *bolt, vec3_t start, ve
 }
 
 // the crowbar for the mechanic
-gentity_t *fire_crowbar( gentity_t *self, vec3_t start, vec3_t dir ) {
-	gentity_t   *bolt;
-
-	VectorNormalize( dir );
-
-	bolt = G_Spawn();
-	bolt->classname = "crowbar";
-	bolt->nextthink = level.time + 50000;
-	bolt->think = G_ExplodeMissile;
-	bolt->s.eType = ET_CROWBAR;
-
-
-	bolt->r.svFlags = SVF_USE_CURRENT_ORIGIN | SVF_BROADCAST;
-	// bolt->r.svFlags = SVF_USE_CURRENT_ORIGIN;
-
-	bolt->s.weapon = WP_PANZERFAUST;
-	bolt->r.ownerNum = self->s.number;
-	bolt->parent = self;
-	bolt->damage = 10;
-	bolt->splashDamage = 0;
-	bolt->splashRadius = 0;
-	bolt->methodOfDeath = MOD_ROCKET;
-	bolt->splashMethodOfDeath = MOD_ROCKET_SPLASH;
-//	bolt->clipmask = MASK_SHOT;
-	bolt->clipmask = MASK_MISSILESHOT;
-
-	bolt->s.pos.trType = TR_GRAVITY;
-	bolt->s.pos.trTime = level.time - MISSILE_PRESTEP_TIME;     // move a bit on the very first frame
-	VectorCopy( start, bolt->s.pos.trBase );
-	VectorScale( dir, 800, bolt->s.pos.trDelta );
-	SnapVector( bolt->s.pos.trDelta );          // save net bandwidth
-	VectorCopy( start, bolt->r.currentOrigin );
-
-	return bolt;
-}
-
 // Rafael flamebarrel
 /*
 ======================

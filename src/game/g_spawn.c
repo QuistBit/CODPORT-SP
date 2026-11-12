@@ -34,6 +34,22 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "g_local.h"
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+#include "bg_cod1_direct_fog.h"
+#endif
+#include "g_cod1_mapspawn.h"
+#include "g_cod1_gsc_test.h"
+#include "g_cod1_entity_host.h"
+#include "g_cod1_spawner.h"
+#include "g_cod1_spawner_registry.inc"
+#include "g_cod1_node_registry.inc"
+#include "gsc_host/g_cod1_ai_array_host.inc"
+#include "gsc_host/g_cod1_actor_bootstrap_host.inc"
+#include "gsc_host/g_cod1_spawner_pose.inc"
+
+qboolean G_Cod1MapEntities( void ) {
+	return g_cod1MapEntities;
+}
 
 qboolean    G_SpawnString( const char *key, const char *defaultString, char **out ) {
 	int i;
@@ -230,6 +246,9 @@ void SP_func_bats( gentity_t *self );
 
 void SP_trigger_always( gentity_t *ent );
 void SP_trigger_multiple( gentity_t *ent );
+void SP_trigger_use( gentity_t *ent );
+void SP_trigger_lookat(gentity_t *ent);
+void SP_trigger_damage(gentity_t *ent);
 void SP_trigger_push( gentity_t *ent );
 void SP_trigger_teleport( gentity_t *ent );
 void SP_trigger_hurt( gentity_t *ent );
@@ -430,6 +449,7 @@ void SP_misc_spawner( gentity_t *ent );
 void SP_props_decor_Scale( gentity_t *ent );
 
 spawn_t spawns[] = {
+	{"script_brushmodel", SP_cod1_script_brushmodel},
 	// info entities don't do anything at all, but provide positional
 	// information for things controlled by other processes
 	{"info_player_start", SP_info_player_start},
@@ -475,6 +495,13 @@ spawn_t spawns[] = {
 	// could not be client side predicted (push and teleport).
 	{"trigger_always", SP_trigger_always},
 	{"trigger_multiple", SP_trigger_multiple},
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	{"trigger_use", SP_trigger_use},
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+    {"trigger_damage", SP_trigger_damage},
+    {"trigger_lookat", SP_trigger_lookat},
+#endif
+#endif
 	{"trigger_push", SP_trigger_push},
 	{"trigger_teleport", SP_trigger_teleport},
 	{"trigger_hurt", SP_trigger_hurt},
@@ -697,9 +724,56 @@ qboolean G_CallSpawn( gentity_t *ent ) {
 	spawn_t *s;
 	gitem_t *item;
 
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	Cod1PathEntityDispatch( ent );
+#endif
+
 	if ( !ent->classname ) {
 		G_Printf( "G_CallSpawn: NULL classname\n" );
 		return qfalse;
+	}
+	/* CoD script classes are retained only in the BSP59 map domain. They do
+	 * not inherit the retained RTCW script_model_med/script_mover behavior. */
+	if ( g_cod1MapEntities ) {
+		/* Retail's exact six-byte prefix admits actor_ itself as well. Only
+		 * bit1 routes to spawner initialization; the genuine actor constructor
+		 * and its sentient/physics/path/controller/script dependencies remain
+		 * unavailable. Never fall through to RTCW AICast or publish fake AI. */
+		if ( !strncmp( ent->classname, "actor_", 6 ) ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+			if ( (ent->spawnflags & 1) && G_Cod1SpawnerIntake( ent ) ) {
+                if(!Cod1ActorRecordBindSpawner(ent))return qfalse;
+				Cod1PathEntitySpawnerBorn(ent);
+				Cod1AiDomainObserve( ent, 1 );
+				return qtrue;
+			}
+			if ( !(ent->spawnflags & 1) && Cod1ActorPrefixIntake( ent ) ) return qtrue;
+			Cod1AiDomainObserve( ent, 0 );
+#endif
+			G_Printf( "CoD1 actor bootstrap: %s is unsupported (requires typed BSP spawner intake or the unavailable native actor constructor)\n", ent->classname );
+			return qfalse;
+		}
+        if ( !strcmp(ent->classname,"misc_mg42") ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+            extern int G_Cod1TurretSpawn(gentity_t *);
+            if(G_Cod1TurretSpawn(ent)){Cod1PathEntityTurretBorn(ent);return qtrue;}
+#endif
+            G_Printf("CoD1 turret spawn refused: native resource/allocation contract unavailable\n");
+            return qfalse;
+        }
+		if ( !strcmp( ent->classname, "script_origin" ) ) {
+			SP_cod1_script_origin( ent );
+			return qtrue;
+		}
+		if ( !strcmp( ent->classname, "script_model" ) ) {
+			SP_cod1_script_model( ent );
+			return qtrue;
+		}
+	}
+	item = G_Cod1MapWeaponItem( ent->classname );
+	if ( item ) {
+		G_SpawnItem( ent, item );
+		return qtrue;
 	}
 
 	// check item spawn functions
@@ -837,8 +911,17 @@ void G_SpawnGEntityFromSpawnVars( void ) {
 	int i;
 	gentity_t   *ent;
 
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if ( Cod1NodeRegistryIntake() ) return;
+#endif
+
 	// get the next free entity
 	ent = G_Spawn();
+
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(!Cod1ActorRecordAllocationBegin(ent)){G_Error("CoD1 Actor record allocation refused: %s",cod1ActorPrefix.error);return;}
+	Cod1PathEntityMapBirth( ent );
+#endif
 
 	for ( i = 0 ; i < level.numSpawnVars ; i++ ) {
 		G_ParseField( level.spawnVars[i][0], level.spawnVars[i][1], ent );
@@ -848,6 +931,9 @@ void G_SpawnGEntityFromSpawnVars( void ) {
 	if ( g_gametype.integer == GT_SINGLE_PLAYER ) {
 		G_SpawnInt( "notsingle", "0", &i );
 		if ( i ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+            if(!Cod1ActorRecordAllocationEnd(ent,0)){G_Error("CoD1 filtered Actor record refused: %s",cod1ActorPrefix.error);return;}
+#endif
 			G_FreeEntity( ent );
 			return;
 		}
@@ -855,12 +941,18 @@ void G_SpawnGEntityFromSpawnVars( void ) {
 	if ( g_gametype.integer >= GT_TEAM ) {
 		G_SpawnInt( "notteam", "0", &i );
 		if ( i ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+            if(!Cod1ActorRecordAllocationEnd(ent,0)){G_Error("CoD1 filtered Actor record refused: %s",cod1ActorPrefix.error);return;}
+#endif
 			G_FreeEntity( ent );
 			return;
 		}
 	} else {
 		G_SpawnInt( "notfree", "0", &i );
 		if ( i ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+            if(!Cod1ActorRecordAllocationEnd(ent,0)){G_Error("CoD1 filtered Actor record refused: %s",cod1ActorPrefix.error);return;}
+#endif
 			G_FreeEntity( ent );
 			return;
 		}
@@ -871,6 +963,17 @@ void G_SpawnGEntityFromSpawnVars( void ) {
 	VectorCopy( ent->s.origin, ent->r.currentOrigin );
 
 	// if we didn't get a classname, don't bother spawning anything
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(g_cod1MapEntities){
+        GscEntityRef owner;int captured=G_Cod1EntityCapture(ent,&owner);
+        if(!captured){G_Error("CoD1 spawn requires a current allocation before class dispatch");return;}
+        /* A registration/link callback may retire this allocation. Never
+         * dispose a replacement at the same address after constructor failure. */
+        {int spawned=G_CallSpawn(ent);
+         if(!Cod1ActorRecordAllocationEnd(ent,spawned?1:-1)){G_Error("CoD1 Actor record outcome refused: %s",cod1ActorPrefix.error);return;}
+         if(!spawned&&captured&&G_Cod1EntitySameAllocation(&owner))G_FreeEntity(ent);}
+    }else
+#endif
 	if ( !G_CallSpawn( ent ) ) {
 		G_FreeEntity( ent );
 	}
@@ -1033,9 +1136,20 @@ Parses textual entity definitions out of an entstring and spawns gentities.
 ==============
 */
 void G_SpawnEntitiesFromString( void ) {
+	G_Cod1MapSpawnBegin();
+	G_Cod1SpawnerMapBegin();
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	Cod1NodeRegistryBegin();
+	Cod1AiDomainBegin();
+	Cod1ActorPrefixBegin();
+#endif
 	// allow calls to G_Spawn*()
 	level.spawning = qtrue;
 	level.numSpawnVars = 0;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	Cod1ActorPrefixPrepass();
+	if(!G_Cod1GscTestPrepareBeforeBsp(level.time)){G_Error("CoD1 early program preparation refused");return;}
+#endif
 
 	// the worldspawn is not an actual entity, but it still
 	// has a "spawn" function to perform any global setup
@@ -1047,9 +1161,209 @@ void G_SpawnEntitiesFromString( void ) {
 
 	// parse ents
 	while ( G_ParseSpawnVars() ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+        if(!Cod1ActorPrepassRecordAdmit()){G_Error("CoD1 Actor record replay refused: %s",cod1ActorPrefix.error);return;}
+#endif
 		G_SpawnGEntityFromSpawnVars();
 	}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(!Cod1ActorPrepassRecordFinish()){G_Error("CoD1 Actor record replay incomplete: %s",cod1ActorPrefix.error);return;}
+    if(!G_Cod1GscTestPreparePlacedResources()){G_Error("CoD1 placed currentstate resource owner refused");return;}
+#endif
 
 	level.spawning = qfalse;            // any future calls to G_Spawn*() will be errors
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	Cod1NodeRegistryFinish();
+	Cod1AiDomainFinish();
+	Cod1ActorPrefixFinish();
+#endif
+	if ( g_cod1ScriptOriginCount || g_cod1ScriptModelCount ) {
+		G_Printf( "CoD1 script entity bootstrap: %d script_origin, %d script_model retained; %d models unassigned, %d model assignments rejected, %d scales rejected; visual models use the existing bind-pose adapter\n",
+			g_cod1ScriptOriginCount, g_cod1ScriptModelCount,
+			g_cod1ScriptModelUnassigned, g_cod1ScriptModelRejected,
+			g_cod1ScriptScaleRejected );
+	}
+	if ( g_cod1StaticBrushCount ) {
+		G_Printf( "CoD1 map bootstrap: %d static script_brushmodel entities; GSC motion, visibility and mission logic are not implemented\n",
+			g_cod1StaticBrushCount );
+	}
+	if ( g_cod1MapWeaponAliases ) {
+		G_Printf( "CoD1 map entities: %d weapon pickup aliases resolved to existing inventory items\n",
+			g_cod1MapWeaponAliases );
+	}
 }
 
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+/* The map flag belongs to this translation unit. Do not include the static
+ * g_cod1_mapspawn.h in g_save.c or g_cmds.c: it would create a second flag. */
+qboolean G_Cod1DirectFogEvent( const cod1DirectFogEvent_t *event ) {
+	char live[COD1_DIRECT_FOG_WIRE_BYTES];
+	char retained[COD1_DIRECT_FOG_WIRE_BYTES];
+	if ( !g_cod1MapEntities ||
+		!Cod1DirectFogEncodeLive( event, live, sizeof( live ) ) ||
+		!Cod1DirectFogEncodeCache( event, retained, sizeof( retained ) ) ) {
+		return qfalse;
+	}
+	/* A pre-client script call still reaches late joins and survives saves. The
+	 * `cs` update is cache-only on BSP59; live clients act on `fog` exactly once. */
+	trap_SetConfigstring( CS_FOGVARS, retained );
+	trap_SendServerCommand( -1, live );
+	return qtrue;
+}
+
+/* Only an explicit CoD script/command boundary may call this. RTCW's
+ * fogswitch command also carries water events and is not equivalent. */
+qboolean G_Cod1DirectFogClear( int transitionMs ) {
+	char live[COD1_DIRECT_FOG_WIRE_BYTES];
+	int length;
+	if ( !g_cod1MapEntities || transitionMs < 0 ) {
+		return qfalse;
+	}
+	length = snprintf( live, sizeof( live ), "fog %d", transitionMs );
+	if ( length <= 0 || length >= sizeof( live ) ) {
+		return qfalse;
+	}
+	trap_SetConfigstring( CS_FOGVARS, COD1_DIRECT_FOG_CLEAR_CACHE );
+	trap_SendServerCommand( -1, live );
+	return qtrue;
+}
+
+/* The disk gamex86.dll builtin supplies near=0/far=1 and multiplies its
+ * fifth script float by float32 1000.0 in x87, then stores a double for
+ * `%.0f` formatting. There is no float32 rounding of the product. This is
+ * callable by a future script VM; no map script is read by this bridge. */
+qboolean G_Cod1SetExpFog( float density, float red, float green, float blue,
+	float transitionSeconds ) {
+	cod1DirectFogEvent_t event;
+	double milliseconds;
+	char timeToken[COD1_DIRECT_FOG_FIELD_BYTES];
+	int length;
+	if ( !( density > 0.0f && density < 1.0f ) ||
+		!( red >= 0.0f && red <= 1.0f ) ||
+		!( green >= 0.0f && green <= 1.0f ) ||
+		!( blue >= 0.0f && blue <= 1.0f ) ||
+		!( transitionSeconds >= 0.0f && transitionSeconds <= FLT_MAX ) ) {
+		return qfalse;
+	}
+	milliseconds = (double)transitionSeconds * (double)1000.0f;
+	if ( !( milliseconds >= 0.0 && milliseconds <= INT_MAX ) ) {
+		return qfalse;
+	}
+	length = Cod1DirectFogFormat( timeToken, sizeof( timeToken ), "%.0f", milliseconds );
+	if ( length <= 0 || length >= sizeof( timeToken ) ) {
+		return qfalse;
+	}
+	event.nearDist = 0.0f;
+	event.farDist = 1.0f;
+	event.density = density;
+	event.color[0] = red;
+	event.color[1] = green;
+	event.color[2] = blue;
+	if ( !Cod1DirectFogInt( timeToken, &event.transitionMs ) ) {
+		return qfalse;
+	}
+	return G_Cod1DirectFogEvent( &event );
+}
+
+/* The disk gamex86.dll setCullFog builtin accepts six script floats. It
+ * routes through the same seven-field `fog` command as setExpFog, supplying
+ * density=1.0 for linear fog; near/far remain the first two script floats.
+ * The GSC VM is not yet connected to this boundary. */
+qboolean G_Cod1SetCullFog( float nearDist, float farDist, float red,
+	float green, float blue, float transitionSeconds ) {
+	cod1DirectFogEvent_t event;
+	double milliseconds;
+	char timeToken[COD1_DIRECT_FOG_FIELD_BYTES];
+	int length;
+	if ( !( nearDist >= 0.0f && farDist > nearDist ) ||
+		!( (double)farDist < 2147483648.0 ) ||
+		!( red >= 0.0f && red <= 1.0f ) ||
+		!( green >= 0.0f && green <= 1.0f ) ||
+		!( blue >= 0.0f && blue <= 1.0f ) ||
+		!( transitionSeconds >= 0.0f && transitionSeconds <= FLT_MAX ) ) {
+		return qfalse;
+	}
+	milliseconds = (double)transitionSeconds * (double)1000.0f;
+	if ( !( milliseconds >= 0.0 && milliseconds <= INT_MAX ) ) {
+		return qfalse;
+	}
+	length = Cod1DirectFogFormat( timeToken, sizeof( timeToken ), "%.0f", milliseconds );
+	if ( length <= 0 || length >= sizeof( timeToken ) ) {
+		return qfalse;
+	}
+	event.nearDist = nearDist;
+	event.farDist = farDist;
+	event.density = 1.0f;
+	event.color[0] = red;
+	event.color[1] = green;
+	event.color[2] = blue;
+	if ( !Cod1DirectFogInt( timeToken, &event.transitionMs ) ) {
+		return qfalse;
+	}
+	return G_Cod1DirectFogEvent( &event );
+}
+
+qboolean G_Cod1DirectFogRestoreCache( const char *saved ) {
+	cod1DirectFogEvent_t event;
+	char live[COD1_DIRECT_FOG_WIRE_BYTES];
+	cod1FogCacheKind_t kind;
+	if ( !g_cod1MapEntities || !Cod1DirectFogTagged( saved ) ) {
+		return qfalse;
+	}
+	kind = Cod1FogDecodeRetained( saved, &event );
+	if ( kind == COD1_FOG_CLEAR ) {
+		strcpy( live, "fog 0" );
+	} else if ( kind != COD1_FOG_SET ||
+		!Cod1DirectFogEncodeLive( &event, live, sizeof( live ) ) ) {
+		G_Printf( "CoD1 direct fog: invalid saved retained event\n" );
+		trap_SetConfigstring( CS_FOGVARS, "" );
+		return qtrue; /* Never reinterpret a tagged event as RTCW numeric fog. */
+	}
+	trap_SetConfigstring( CS_FOGVARS, saved );
+	trap_SendServerCommand( -1, live );
+	return qtrue;
+}
+
+qboolean G_Cod1DirectFogRetainedActive( void ) {
+	char retained[COD1_DIRECT_FOG_WIRE_BYTES];
+	cod1DirectFogEvent_t event;
+	if ( !g_cod1MapEntities ) {
+		return qfalse;
+	}
+	trap_GetConfigstring( CS_FOGVARS, retained, sizeof( retained ) );
+	return Cod1FogDecodeRetained( retained, &event ) != COD1_FOG_UNOWNED ? qtrue : qfalse;
+}
+
+/* Same map flag and engine-owned retained target as the actual fog producer.
+ * Read-only: no second persistent fog state or cleanup lifecycle. The caller
+ * still owns Session/map identity and must recheck the snapshot after queries.
+ * No teleport capability is granted by successfully reading these values. */
+qboolean G_Cod1DirectFogVisibility( cod1DirectFogVisibility_t *out ) {
+	char retained[COD1_DIRECT_FOG_WIRE_BYTES];
+	cod1DirectFogVisibility_t next;
+	if ( !out || !g_cod1MapEntities ) return qfalse;
+	memset( retained, 0, sizeof( retained ) );
+	trap_GetConfigstring( CS_FOGVARS, retained, sizeof( retained ) );
+	if ( !g_cod1MapEntities || !memchr( retained, 0, sizeof( retained ) ) ||
+		!Cod1DirectFogVisibilityFromCache( retained, &next ) ) return qfalse;
+	*out = next;
+	return qtrue;
+}
+#endif
+
+/* Identity of a completed real trigger_multiple constructor. Origin is
+ * mutable in triggerOff/On; the original allocation and callback survive. */
+extern void G_Cod1TriggerMultipleTouch(gentity_t*,gentity_t*,trace_t*);
+int G_Cod1TouchThreadCurrent(const GscEntityRef *ref,uint64_t birth){
+    const C1PathEntityRecord *record;
+    const gentity_t *e;
+    if(!ref || birth!=ref->generation || !G_Cod1EntityHost()->validate(NULL,ref) ||
+       !g_cod1MapEntities || level.spawning || level.restarted)return 0;
+    record=cod1PathEntities+ref->slot;e=g_entities+ref->slot;
+    return record->birth==3 && record->kind==2 && record->present &&
+        record->entity.epoch==ref->epoch && record->entity.slot==ref->slot &&
+        record->entity.generation==ref->generation && !e->client &&
+        e->classname && !strcmp(e->classname,"trigger_multiple") &&
+        e->r.bmodel && e->s.modelindex>0 && e->s.eType==ET_INVISIBLE &&
+        e->touch==G_Cod1TriggerMultipleTouch && !e->use && !e->spawnflags;
+}

@@ -165,6 +165,8 @@ struct vm_s {
 	int callLevel;                  // for debug indenting
 	int breakFunction;              // increment breakCount on function entry to this
 	int breakCount;
+	/* ENGINE-resident owner cleanup, called before DLL unload on every path. */
+	void (*beforeFree)(struct vm_s *);
 };
 
 

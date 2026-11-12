@@ -433,7 +433,9 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 			return qfalse;
 		}
 
-		if ( chan->fragmentLength > msg->maxsize ) {
+		/* Reassembly keeps the sequence at data[0..3].  The payload alone
+		 * fitting maxsize did not leave room for that preserved prefix. */
+		if ( msg->maxsize < 4 || chan->fragmentLength > msg->maxsize - 4 ) {
 			Com_Printf( "%s:fragmentLength %i > msg->maxsize\n"
 						, NET_AdrToString( chan->remoteAddress ),
 						chan->fragmentLength );

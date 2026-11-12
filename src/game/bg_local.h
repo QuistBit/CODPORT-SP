@@ -53,6 +53,11 @@ typedef struct {
 	qboolean groundPlane;
 	trace_t groundTrace;
 
+	/* PATCH43: sample before movement/weapon updates; gait uses the same step.
+	 * These are pmove locals, not additions to the networked player state. */
+	qboolean cod1AdsMove;
+	float cod1WeaponMoveScale;
+
 	float impactSpeed;
 
 	vec3_t previous_origin;
@@ -96,4 +101,3 @@ void PM_AddEvent( int newEvent );
 
 qboolean    PM_SlideMove( qboolean gravity );
 void        PM_StepSlideMove( qboolean gravity );
-

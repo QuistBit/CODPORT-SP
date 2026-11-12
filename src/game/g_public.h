@@ -425,7 +425,51 @@ typedef enum {
 	BOTLIB_PC_READ_TOKEN,
 	BOTLIB_PC_SOURCE_FILE_AND_LINE,
 
-	G_FS_COPY_FILE  //DAJ
+	G_FS_COPY_FILE,  //DAJ
+
+	/* R89 project extension: paired native exe/game DLL, no retail API claim.
+	 * Append explicitly so every existing import number remains unchanged. */
+	G_TRACE_USE_ENTITY = 199,
+
+	/* R103 native-only paired port spatial bridge. Explicit private IDs preserve
+	 * the sparse legacy/botlib table; game ABI 47 requires the matching engine. */
+	G_COD1_SPATIAL_CAPSULE_TRACE = 1000,
+	G_COD1_SPATIAL_AREA = 1001,
+	G_COD1_SPATIAL_SIGHT = 1002,
+	G_COD1_SPATIAL_ACTOR_LINK = 1003,
+	G_COD1_SPATIAL_ACTOR_UNLINK = 1004,
+	G_COD1_SPATIAL_SCENE_RESET = 1005,
+	/* R104 private headless DObj topology, native DLL only. */
+	G_COD1_DOBJ_BUILD = 1006,
+	G_COD1_DOBJ_FREE = 1007,
+	G_COD1_DOBJ_SCENE_RESET = 1008,
+	/* R108 independent map-owned model precache, native DLL only. */
+	G_COD1_RESOURCE_MODEL_PRECACHE = 1009,
+	/* R113 native-only point query; matching game/executable ABI 50. */
+	G_COD1_SPATIAL_POINT_TRACE = 1010,
+	/* R125 native-only read of an existing DObj, paired game/executable ABI53. */
+	G_COD1_DOBJ_QUERY = 1011,
+	/* R128 native-only atomic reliable-component admission, paired ABI54.
+	 * Success means queued submission, never client ACK or rendering. */
+	G_COD1_TRY_SEND_SERVER_COMMAND = 1012,
+	/* R128 exact engine cvar float getter, paired ABI54. */
+	G_COD1_CVAR_VALUE = 1013,
+	/* R129 bounded genuine localized-configstring publication, paired ABI55. */
+	G_COD1_TRY_SET_LOCALIZED_CONFIGSTRING = 1014,
+	/* R135 copied native client/CGAME keybinding QUERY/VALIDATE bridge. */
+	G_COD1_KEYBINDING_QUERY = 1015,
+	/* R160: copied map-owned model resource QUERY/VALIDATE; no FS/callback. */
+	G_COD1_MODEL_RESOURCE_REFERENCE = 1016,
+	G_COD1_ACTOR_MODEL_APPLY = 1017,
+	G_COD1_ACTOR_REGISTERED_MODELS_APPLY = 1018,
+	G_COD1_TRY_SET_HUD_MARKER = 1019,
+	G_COD1_SPATIAL_ACTOR_CONTENTS = 1020,
+	G_COD1_PATH_SIGHT = 1021 /* paired port ABI67 */,
+	G_COD1_LOCALIZED_ACQUIRE = 1022,
+	G_COD1_LOCALIZED_RELEASE = 1023, /* paired port ABI68 */
+	G_COD1_NAVIGATION_RESOURCE = 1024, /* paired port ABI69 */
+	G_COD1_ENTITY_PARSE_REWIND = 1025, /* paired port ABI71, exhausted GAME_INIT cursor only */
+	G_COD1_LOCALIZED_STARTUP = 1026 /* paired port ABI72, copied one-shot startup scope */
 } gameImport_t;
 
 
@@ -470,7 +514,8 @@ typedef enum {
 	// done.
 
 	GAME_RETRIEVE_MOVESPEEDS_FROM_CLIENT,
-	GAME_GETMODELINFO
+	GAME_GETMODELINFO,
+	GAME_COD1_STATE_ABI,
+	GAME_COD1_NAV_RESOURCE_RETIRED /* uint32 low, high; cancellation only */
 
 } gameExport_t;
-

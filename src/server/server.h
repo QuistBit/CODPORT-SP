@@ -32,6 +32,13 @@ If you have questions concerning this license or the applicable additional terms
 #include "../qcommon/qcommon.h"
 #include "../game/g_public.h"
 #include "../game/bg_public.h"
+#include "../game/cod1_spatial.h"
+#include "../game/cod1_dobj.h"
+#include "../game/cod1_dobj_export.h"
+#include "../game/cod1_precache.h"
+#include "../game/cod1_actor_model_apply.h"
+#include "../game/cod1_actor_registered_models.h"
+#include "../qcommon/cod1_model_resource.h"
 
 //=============================================================================
 
@@ -39,6 +46,12 @@ If you have questions concerning this license or the applicable additional terms
 										// GAME BOTH REFERENCE !!!
 
 #define MAX_ENT_CLUSTERS    16
+
+/* R129: backing padding protects MSG_WriteBits' final <=32-bit Huffman
+ * write.  It does not enlarge the logical MAX_MSGLEN wire budget. */
+#define SV_MESSAGE_BUFFER_SIZE ( MAX_MSGLEN + ( 4 * sizeof( ( (huff_t *)0 )->nodeList ) / sizeof( node_t ) + 7 ) / 8 + 1 )
+/* Netchan_Process retains a four-byte sequence prefix when reassembling. */
+#define SV_MESSAGE_PAYLOAD_LIMIT ( MAX_MSGLEN - 4 )
 
 typedef struct svEntity_s {
 	struct worldSector_s *worldSector;
@@ -261,6 +274,7 @@ extern cvar_t  *sv_reloading;   //----(SA)	added
 //
 void SV_FinalMessage( char *message );
 void QDECL SV_SendServerCommand( client_t *cl, const char *fmt, ... );
+qboolean SV_Cod1TrySendServerCommand( int clientNum, const char *text );
 
 
 void SV_AddOperatorCommands( void );
@@ -277,6 +291,17 @@ void SV_MasterShutdown( void );
 // sv_init.c
 //
 void SV_SetConfigstring( int index, const char *val );
+qboolean SV_Cod1TrySetLocalizedConfigstring( int index, const char *val, const char *expected, const char *owner );
+qboolean SV_Cod1TryBroadcastLocalized(int,const char*);
+qboolean SV_Cod1LocalizedAcquire(char*,int);
+qboolean SV_Cod1LocalizedRelease(const char*);
+#include "../game/cod1_localized_startup.h"
+qboolean SV_Cod1LocalizedStartup(const cod1LocalizedStartup_t*);
+int SV_Cod1LocalizedStorageSeparate(const void*,size_t);
+void SV_Cod1LocalizedClearMap(void);
+void SV_Cod1LocalizedBeginGameModule(void);
+void SV_Cod1LocalizedEndGameModule(void);
+qboolean SV_Cod1TrySetHudMarker( const char *value, const char *expected );
 void SV_GetConfigstring( int index, char *buffer, int bufferSize );
 
 void SV_SetUserinfo( int index, const char *val );
@@ -311,7 +336,14 @@ void SV_DropClient( client_t *drop, const char *reason );
 void SV_ExecuteClientCommand( client_t *cl, const char *s, qboolean clientOK );
 void SV_ClientThink( client_t *cl, usercmd_t *cmd );
 
-void SV_WriteDownloadToClient( client_t *cl, msg_t *msg );
+/* Prepared filesystem/window state belongs to client_t.  These fields
+ * describe only records serialized into one not-yet-admitted packet. */
+typedef struct {
+	int xmitBlock;
+	int sendTime;
+	qboolean clearName;
+} svDownloadSend_t;
+void SV_WriteDownloadToClient( client_t *cl, msg_t *msg, svDownloadSend_t *send );
 
 //
 // sv_ccmds.c
@@ -324,7 +356,8 @@ void SV_Heartbeat_f( void );
 void SV_AddServerCommand( client_t *client, const char *cmd );
 void SV_UpdateServerCommandsToClient( client_t *client, msg_t *msg );
 void SV_WriteFrameToClient( client_t *client, msg_t *msg );
-void SV_SendMessageToClient( msg_t *msg, client_t *client );
+qboolean SV_SendMessageToClient( msg_t *msg, client_t *client );
+void SV_DeferClientMessage( client_t *client );
 void SV_SendClientMessages( void );
 void SV_SendClientSnapshot( client_t *client );
 
@@ -398,6 +431,28 @@ int SV_PointContents( const vec3_t p, int passEntityNum );
 
 
 void SV_Trace( trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask, int capsule );
+void SV_TraceUseEntity(trace_t *results, const vec3_t start, const vec3_t end, int entityNum);
+/* R103 checked native-only imports; no shared entity layout extension. */
+int SV_Cod1SpatialCapsuleTrace(const cod1SpatialTraceQuery_t *query, trace_t *results);
+int SV_Cod1SpatialArea(const cod1SpatialAreaQuery_t *query, int *slots, int capacity, int *count);
+int SV_Cod1SpatialSight(const cod1SpatialSightQuery_t *query, int *blocked);
+int SV_Cod1SpatialActorLink(const cod1SpatialActorLink_t *request);
+int SV_Cod1SpatialActorUnlink(const cod1SpatialActorUnlink_t *request);
+int SV_Cod1PathSight(const cod1PathSightQuery_t*,int*);
+int SV_Cod1SpatialActorContents(const cod1SpatialActorContents_t *request);
+int SV_Cod1SpatialSceneReset(const cod1SpatialSceneReset_t *request);
+int SV_Cod1DObjBuild(const cod1DObjBuild_t *request, cod1DObjSummary_t *summary);
+int SV_Cod1DObjFree(const cod1DObjFree_t *request);
+int SV_Cod1DObjSceneReset(const cod1DObjSceneReset_t *request);
+int SV_Cod1DObjQuery(const cod1DObjQuery_t *request, cod1DObjQueryResult_t *out);
+int SV_Cod1DObjExport(const cod1DObjExportRequest_t *request,
+    cod1DObjExportResult_t *out, size_t outBytes);
+
+/* R89 private port API: a point ray against one positive BSP59 inline model.
+ * Includes zero-content brush/curve geometry without changing normal masks.
+ * Invalid input/model returns a clear trace. This is not a retail syscall. */
+void CM_TraceUseInlineModel(trace_t *results, const vec3_t start, const vec3_t end,
+    clipHandle_t model, const vec3_t origin, const vec3_t angles);
 // mins and maxs are relative
 
 // if the entire move stays in a solid volume, trace.allsolid will be set,
@@ -415,7 +470,18 @@ void SV_ClipToEntity( trace_t *trace, const vec3_t start, const vec3_t mins, con
 //
 // sv_net_chan.c
 //
-void SV_Netchan_Transmit( client_t *client, msg_t *msg );    //int length, const byte *data );
+qboolean SV_MessageFitsWithEOF( const msg_t *msg );
+qboolean SV_Netchan_Transmit( client_t *client, msg_t *msg );
 void SV_Netchan_TransmitNextFragment( netchan_t *chan );
 qboolean SV_Netchan_Process( client_t *client, msg_t *msg );
 
+int SV_Cod1ModelPrecache(const cod1ModelPrecache_t *request);
+int SV_Cod1ModelResourceReference(const cod1ModelResourceReference_t *request,
+                                cod1ModelResourceReference_t *out);
+int SV_Cod1CopyRegisteredModel(const cod1ModelResourceReference_t *reference,
+    c1mrResource_t *out);
+int SV_Cod1ActorModelApply(const cod1ActorModelApply_t *request,
+    cod1ActorModelApplyResult_t *out);
+int SV_Cod1ActorRegisteredModelsApply(const cod1ActorRegisteredModelsApply_t *request,
+    cod1ActorModelApplyResult_t *out);
+void SV_Cod1PrecacheClearScene(void);

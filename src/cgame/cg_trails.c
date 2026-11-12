@@ -180,6 +180,12 @@ CG_AddTrailJunc
 int CG_AddTrailJunc( int headJuncIndex, qhandle_t shader, int spawnTime, int sType, vec3_t pos, int trailLife, float alphaStart, float alphaEnd, float startWidth, float endWidth, int flags, vec3_t colorStart, vec3_t colorEnd, float sRatio, float animSpeed ) {
 	trailJunc_t *j, *headJunc;
 
+	/* A failed media registration must not own a live trail. The caller's
+	 * previous chain remains on the global list until its normal expiry. */
+	if ( shader <= 0 ) {
+		return 0;
+	}
+
 	if ( headJuncIndex > 0 ) {
 		headJunc = &trailJuncs[headJuncIndex - 1];
 
@@ -250,6 +256,10 @@ CG_AddSparkJunc
 int CG_AddSparkJunc( int headJuncIndex, qhandle_t shader, vec3_t pos, int trailLife, float alphaStart, float alphaEnd, float startWidth, float endWidth ) {
 	trailJunc_t *j, *headJunc;
 
+	if ( shader <= 0 ) {
+		return 0;
+	}
+
 	if ( headJuncIndex > 0 ) {
 		headJunc = &trailJuncs[headJuncIndex - 1];
 
@@ -300,6 +310,10 @@ CG_AddSmokeJunc
 int CG_AddSmokeJunc( int headJuncIndex, qhandle_t shader, vec3_t pos, int trailLife, float alpha, float startWidth, float endWidth ) {
 #define ST_RATIO    4.0     // sprite image: width / height
 	trailJunc_t *j, *headJunc;
+
+	if ( shader <= 0 ) {
+		return 0;
+	}
 
 	if ( headJuncIndex > 0 ) {
 		headJunc = &trailJuncs[headJuncIndex - 1];

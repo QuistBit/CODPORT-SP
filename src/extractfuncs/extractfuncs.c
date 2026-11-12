@@ -183,6 +183,7 @@ void DumpReplaceFunctions( void ) {
 	buf[len] = 0;
 	fclose( f );
 
+	newbuf = NULL; /* Safe when generating a missing header. */
 	strcpy( path, func_filename );
 	if ( f = fopen( path, "rb" ) ) {
 		fseek( f, 0, SEEK_END );
@@ -203,11 +204,8 @@ void DumpReplaceFunctions( void ) {
 			strcpy( newpath, "g_funcs.tmp" );
 			rename( newpath, path );
 
-			// make g_save recompile itself
-			remove( "debug\\g_save.obj" );
-			remove( "debug\\g_save.sbr" );
-			remove( "release\\g_save.obj" );
-			remove( "release\\g_save.sbr" );
+			/* PATCH40a: headers are generated before compilation. Let the
+			 * build dependency tracker recompile g_save; do not delete outputs. */
 
 			updated = 1;
 		} else {
@@ -242,6 +240,7 @@ void DumpReplaceFunctions( void ) {
 	buf[len] = 0;
 	fclose( f );
 
+	newbuf = NULL; /* Safe when generating a missing header. */
 	strcpy( path, func_filedesc );
 	if ( f = fopen( path, "rb" ) ) {
 		fseek( f, 0, SEEK_END );
@@ -262,12 +261,8 @@ void DumpReplaceFunctions( void ) {
 			strcpy( newpath, "g_func_decs.tmp" );
 			rename( newpath, path );
 
-			// make g_save recompile itself
-			// NOTE TTimo win32 only? (harmless on *nix anyway)
-			remove( "debug\\g_save.obj" );
-			remove( "debug\\g_save.sbr" );
-			remove( "release\\g_save.obj" );
-			remove( "release\\g_save.sbr" );
+			/* PATCH40a: headers are generated before compilation. Let the
+			 * build dependency tracker recompile g_save; do not delete outputs. */
 
 			updated = 1;
 		} else {
@@ -301,6 +296,18 @@ replacefunc_t *FindFunctionName( char *funcname ) {
 } //end of the function FindFunctionName
 
 int MayScrewUp( char *funcname ) {
+	/* SCREWUP skips all preprocessor directives while scanning game sources.
+	 * These six opt-in fog entry points are never persisted as entity or AI
+	 * callbacks, so including them would make a build without the fog flag
+	 * reference functions that were not compiled into the game DLL. */
+	if ( !strcmp( funcname, "G_Cod1DirectFogEvent" ) ||
+		 !strcmp( funcname, "G_Cod1DirectFogClear" ) ||
+		 !strcmp( funcname, "G_Cod1SetExpFog" ) ||
+		 !strcmp( funcname, "G_Cod1SetCullFog" ) ||
+		 !strcmp( funcname, "G_Cod1DirectFogRestoreCache" ) ||
+		 !strcmp( funcname, "G_Cod1DirectFogRetainedActive" ) ) {
+		return false;
+	}
 	if ( !strcmp( funcname, "GetBotAPI" ) ) {
 		return false;
 	}
@@ -591,9 +598,9 @@ int verbose = 0;
 
 #ifdef _WIN32
 
-void main( int argc, char *argv[] ) {
+int main( int argc, char *argv[] ) {
 	WIN32_FIND_DATA filedata;
-	HWND handle;
+	HANDLE handle;
 	int done; //, i;
 
 	if ( argc < 2 ) {
@@ -601,7 +608,8 @@ void main( int argc, char *argv[] ) {
 	} //end if
 
 	handle = FindFirstFile( argv[1], &filedata );
-	done = ( handle == INVALID_HANDLE_VALUE );
+	if ( handle == INVALID_HANDLE_VALUE ) Error( "No input files match %s\n", argv[1] );
+	done = 0;
 	while ( !done )
 	{
 		if ( !( filedata.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ) ) {
@@ -611,7 +619,9 @@ void main( int argc, char *argv[] ) {
 		  //find the next file
 		done = !FindNextFile( handle, &filedata );
 	} //end while
+	FindClose( handle );
 	DumpReplaceFunctions();
+	return 0;
 } //end of the function main
 
 #else
@@ -648,6 +658,7 @@ int main( int argc, char *argv[] ) {
 		GetFunctionNamesFromFile( argv[i] );
 	}
 	DumpReplaceFunctions();
+	return 0;
 }
 
 #endif

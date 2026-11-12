@@ -29,6 +29,9 @@ If you have questions concerning this license or the applicable additional terms
 // cmodel.c -- model loading
 
 #include "cm_local.h"
+#include "cod1_bsp.h"
+#include "cod1_collision.h"
+#include <limits.h>
 
 #ifdef BSPC
 
@@ -50,10 +53,6 @@ void SetPlaneSignbits( cplane_t *out ) {
 
 // to allow boxes to be treated as brush models, we allocate
 // some extra indexes along with those needed by the map
-#define BOX_BRUSHES     1
-#define BOX_SIDES       6
-#define BOX_LEAFS       2
-#define BOX_PLANES      12
 
 #define LL( x ) x = LittleLong( x )
 
@@ -74,6 +73,7 @@ cvar_t      *cm_playerCurveClip;
 cmodel_t box_model;
 cplane_t    *box_planes;
 cbrush_t    *box_brush;
+static qboolean boxNativeContents;
 
 
 
@@ -596,6 +596,163 @@ unsigned CM_Checksum( dheader_t *header ) {
 
 /*
 ==================
+CM_LoadCod1Map
+
+IBSP59 native capsule geometry plus legacy point/box compatibility.
+The native tree and PVS are exposed to engine leaf/cluster queries.
+==================
+*/
+static void CM_LoadCod1Map( const char *name, const cod1Bsp_t *bsp,
+							const cod1BspSpatial_t *spatial, int length,
+							qboolean clientload, int *checksum ) {
+	const byte *entities;
+	int entityLength;
+	cod1BspWorldInfo_t info;
+	cod1BspSpawn_t spawn;
+	cplane_t *plane;
+	int triangleCount;
+	int trianglesWritten;
+	int i, j, fields[9];
+	vec3_t collisionMins, collisionMaxs;
+
+	if ( !COD1_BSP_GetWorldInfo( bsp, &info ) ||
+		 !COD1_BSP_LumpData( bsp, COD1_BSP_LUMP_ENTITIES, &entityLength ) ||
+		 entityLength < 2 ) {
+		Com_Error( ERR_DROP, "CM_LoadMap: invalid CoD1 map %s", name );
+		return;
+	}
+
+	entities = COD1_BSP_LumpData( bsp, COD1_BSP_LUMP_ENTITIES, &entityLength );
+	if ( !entities || entities[entityLength - 1] != '\0' ) {
+		Com_Error( ERR_DROP, "CM_LoadMap: CoD1 entity lump is not terminated" );
+		return;
+	}
+
+	Com_Memset( &cm, 0, sizeof( cm ) );
+	Q_strncpyz( cm.name, name, sizeof( cm.name ) );
+	*checksum = LittleLong( Com_BlockChecksum( bsp->base, length ) );
+	if ( spatial->planeCount > INT_MAX / (int)sizeof( cplane_t ) - BOX_PLANES ||
+		 spatial->nodeCount > INT_MAX / (int)sizeof( cNode_t ) ||
+		 spatial->leafCount > INT_MAX / (int)sizeof( cLeaf_t ) - BOX_LEAFS ) {
+		Com_Error( ERR_DROP, "CM_LoadMap: CoD1 BSP spatial allocation exceeds hunk size" );
+		return;
+	}
+
+	cm.planes = Hunk_Alloc( ( spatial->planeCount + BOX_PLANES ) * sizeof( *cm.planes ), h_high );
+	cm.numPlanes = spatial->planeCount;
+	for ( i = 0; i < spatial->planeCount; i++ ) {
+		plane = cm.planes + i;
+		COD1_BSP_SpatialPlane( spatial, i, plane->normal, &plane->dist );
+		plane->type = PlaneTypeForNormal( plane->normal );
+		SetPlaneSignbits( plane );
+	}
+	cm.nodes = Hunk_Alloc( spatial->nodeCount * sizeof( *cm.nodes ), h_high );
+	cm.numNodes = spatial->nodeCount;
+	for ( i = 0; i < spatial->nodeCount; i++ ) {
+		COD1_BSP_SpatialRecord( spatial->nodes, i, fields );
+		cm.nodes[i].plane = cm.planes + fields[0];
+		for ( j = 0; j < 2; j++ ) cm.nodes[i].children[j] = fields[1 + j];
+	}
+	cm.leafs = Hunk_Alloc( ( spatial->leafCount + BOX_LEAFS ) * sizeof( *cm.leafs ), h_high );
+	cm.numLeafs = spatial->leafCount;
+	cm.numAreas = 1;
+	for ( i = 0; i < spatial->leafCount; i++ ) {
+		COD1_BSP_SpatialRecord( spatial->leaves, i, fields );
+		cm.leafs[i].cluster = fields[0];
+		cm.leafs[i].area = fields[1];
+		if ( fields[1] >= cm.numAreas ) cm.numAreas = fields[1] + 1;
+		/* Lump 22/23 indexes name native brushes and collision facets. The
+		 * inline adapter owns a separate RTCW brush array, so world leaves
+		 * must not index that array through the native offsets. */
+	}
+
+	/* Keep engine-visible model handles/bounds. Capsule geometry for these
+       models is owned by the native v59 world loaded by CM_LoadMap. */
+	cm.numSubModels = info.modelCount > 0 ? info.modelCount : 1;
+	if ( cm.numSubModels > MAX_INLINE_MODELS ) {
+		Com_Error( ERR_DROP, "CoD1 BSP has %d models; collision handles support at most %d",
+			cm.numSubModels, MAX_INLINE_MODELS );
+		return;
+	}
+	cm.cmodels = Hunk_Alloc( cm.numSubModels * sizeof( *cm.cmodels ), h_high );
+	{
+		int modelIndex;
+		for ( modelIndex = 0; modelIndex < cm.numSubModels; modelIndex++ ) {
+			if ( !COD1_BSP_GetModelBounds( bsp, modelIndex,
+					cm.cmodels[modelIndex].mins, cm.cmodels[modelIndex].maxs ) ) {
+				VectorSet( cm.cmodels[modelIndex].mins, MIN_WORLD_COORD, MIN_WORLD_COORD, MIN_WORLD_COORD );
+				VectorSet( cm.cmodels[modelIndex].maxs, MAX_WORLD_COORD, MAX_WORLD_COORD, MAX_WORLD_COORD );
+			}
+		}
+	}
+	Com_Printf( "CoD1 collision: exposed %d inline models\n", cm.numSubModels );
+
+	/* Retain the previous world triangle adapter for point/box queries only.
+       Ordinary player capsules now use native v59 collision geometry. */
+	triangleCount = COD1_BSP_CollisionTriangleCount( bsp );
+	trianglesWritten = 0;
+	if ( triangleCount > 0 ) {
+		cm.cod1Triangles = Hunk_Alloc( triangleCount * sizeof( *cm.cod1Triangles ), h_high );
+		if ( COD1_BSP_FillCollisionTriangles( bsp, cm.cod1Triangles, triangleCount,
+				&trianglesWritten, collisionMins, collisionMaxs ) && trianglesWritten > 0 ) {
+			cm.cod1NumTriangles = trianglesWritten;
+			VectorCopy( collisionMins, cm.cmodels[0].mins );
+			VectorCopy( collisionMaxs, cm.cmodels[0].maxs );
+			Com_DPrintf( "CM_LoadCod1Map: collision triangles %d bounds (%g %g %g)-(%g %g %g)\n",
+					trianglesWritten,
+					collisionMins[0], collisionMins[1], collisionMins[2],
+					collisionMaxs[0], collisionMaxs[1], collisionMaxs[2] );
+		} else {
+			cm.cod1Triangles = NULL;
+			Com_DPrintf( "CM_LoadCod1Map: CoD1 collision decode produced no triangles\n" );
+		}
+	} else {
+		Com_DPrintf( "CM_LoadCod1Map: CoD1 map has no triangle soup collision data\n" );
+	}
+
+	cm.numClusters = spatial->clusterCount;
+	cm.clusterBytes = spatial->clusterBytes;
+	cm.visibility = Hunk_Alloc( ( spatial->visibility ? cm.numClusters : 1 ) *
+		cm.clusterBytes, h_high );
+	if ( spatial->visibility ) {
+		Com_Memcpy( cm.visibility, spatial->visibility, cm.numClusters * cm.clusterBytes );
+		cm.vised = qtrue;
+	} else {
+		Com_Memset( cm.visibility, 255, cm.clusterBytes );
+		cm.vised = qfalse;
+	}
+	cm.areas = Hunk_Alloc( cm.numAreas * sizeof( *cm.areas ), h_high );
+	cm.areaPortals = Hunk_Alloc( cm.numAreas * cm.numAreas * sizeof( *cm.areaPortals ), h_high );
+
+	/* Extra slots are required by CM_InitBoxHull for temporary player boxes. */
+    /* R9: populate only inline brush leaves from the validated native world.
+     * World triangles and native player capsules keep their existing routes. */
+    CM_LoadV59InlineBrushes();
+    /* Inline surface arrays are also supplied by CM_LoadV59InlineBrushes. */
+
+	cm.entityString = Hunk_Alloc( entityLength + 1, h_high );
+	Com_Memcpy( cm.entityString, entities, entityLength );
+	cm.entityString[entityLength] = '\0';
+	cm.numEntityChars = entityLength;
+	if ( COD1_BSP_FindPlayerStart( bsp, &spawn ) ) {
+		Com_DPrintf( "CM_LoadCod1Map: player start %s at (%g %g %g) yaw %g\n",
+				spawn.classname, spawn.origin[0], spawn.origin[1], spawn.origin[2],
+				spawn.angles[1] );
+	} else {
+		Com_DPrintf( "CM_LoadCod1Map: no usable CoD1 player start\n" );
+	}
+
+	CM_InitBoxHull();
+	CM_FloodAreaConnections();
+
+	if ( clientload ) {
+		/* Keep the usual client-load cache behavior without retaining the BSP. */
+		cm.name[0] = '\0';
+	}
+}
+
+/*
+==================
 CM_LoadMap
 
 Loads in the map and all submodels
@@ -625,8 +782,7 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 	}
 
 	// free old stuff
-	Com_Memset( &cm, 0, sizeof( cm ) );
-	CM_ClearLevelPatches();
+	CM_ClearMap();
 
 	if ( !name[0] ) {
 		cm.numLeafs = 1;
@@ -652,6 +808,29 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 
 	last_checksum = LittleLong( Com_BlockChecksum( buf, length ) );
 	*checksum = last_checksum;
+
+	/* CoD1 uses a 33-lump IBSP 59 container.  Do this before copying the
+	   legacy 17-lump dheader_t, otherwise CM_LoadMap would read wrong offsets. */
+	{
+		cod1Bsp_t cod1;
+		if ( COD1_BSP_Parse( buf, length, &cod1 ) ) {
+            cod1BspSpatial_t spatial;
+            char error[256] = "IBSP59 allocation failed";
+            if (!COD1_BSP_GetSpatial(&cod1, &spatial)) {
+                FS_FreeFile(buf);
+                Com_Error(ERR_DROP, "CM_LoadMap: %s: invalid CoD1 BSP tree or PVS", name);
+                return;
+            }
+            if (!CM_LoadV59(buf, length, error, sizeof(error))) {
+                FS_FreeFile(buf);
+                Com_Error(ERR_DROP, "CM_LoadMap: %s: %s", name, error);
+                return;
+            }
+			CM_LoadCod1Map( name, &cod1, &spatial, length, clientload, checksum );
+			FS_FreeFile( buf );
+			return;
+		}
+	}
 
 	header = *(dheader_t *)buf;
 	for ( i = 0 ; i < sizeof( dheader_t ) / 4 ; i++ ) {
@@ -726,7 +905,7 @@ CM_InlineModel
 */
 clipHandle_t    CM_InlineModel( int index ) {
 	if ( index < 0 || index >= cm.numSubModels ) {
-		Com_Error( ERR_DROP, "CM_InlineModel: bad number" );
+		Com_Error( ERR_DROP, "CM_InlineModel: bad number %d (CoD/RTCW models=%d)", index, cm.numSubModels );
 	}
 	return index;
 }
@@ -780,6 +959,7 @@ void CM_InitBoxHull( void ) {
 	box_brush->numsides = 6;
 	box_brush->sides = cm.brushsides + cm.numBrushSides;
 	box_brush->contents = CONTENTS_BODY;
+	boxNativeContents = qfalse;
 
 	box_model.leaf.numLeafBrushes = 1;
 //	box_model.leaf.firstLeafBrush = cm.numBrushes;
@@ -821,7 +1001,10 @@ BSP trees instead of being compared directly.
 Capsules are handled differently though.
 ===================
 */
-clipHandle_t CM_TempBoxModel( const vec3_t mins, const vec3_t maxs, int capsule ) {
+clipHandle_t CM_TempBoxModelContents( const vec3_t mins, const vec3_t maxs, int capsule, int contents ) {
+
+	box_brush->contents = contents;
+	boxNativeContents = qtrue;
 
 	VectorCopy( mins, box_model.mins );
 	VectorCopy( maxs, box_model.maxs );
@@ -849,6 +1032,20 @@ clipHandle_t CM_TempBoxModel( const vec3_t mins, const vec3_t maxs, int capsule 
 	return BOX_MODEL_HANDLE;
 }
 
+clipHandle_t CM_TempBoxModel( const vec3_t mins, const vec3_t maxs, int capsule ) {
+	clipHandle_t handle = CM_TempBoxModelContents( mins, maxs, capsule, CONTENTS_BODY );
+	boxNativeContents = qfalse;
+	return handle;
+}
+
+int CM_TempModelContents( void ) {
+	return box_brush->contents;
+}
+
+qboolean CM_TempModelHasNativeContents( void ) {
+	return boxNativeContents;
+}
+
 /*
 ===================
 CM_ModelBounds
@@ -862,4 +1059,8 @@ void CM_ModelBounds( clipHandle_t model, vec3_t mins, vec3_t maxs ) {
 	VectorCopy( cmod->maxs, maxs );
 }
 
-
+void CM_ClearMap(void) {
+    CM_ClearV59();
+    Com_Memset(&cm, 0, sizeof(cm));
+    CM_ClearLevelPatches();
+}

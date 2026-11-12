@@ -38,9 +38,16 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "../game/q_shared.h"
+#include "../game/bg_cod1_native_runtime.h"
+#include "../game/bg_cod1_actor_runtime.h"
+#include "../game/bg_cod1_keybinding.h"
+#include "cg_cod1_posture.h"
 #include "tr_types.h"
 #include "../game/bg_public.h"
 #include "cg_public.h"
+#include "cg_cod1_script_fx.h"
+#include "../game/bg_cod1_debug_text.h"
+#include "../game/bg_cod1_debug_line.h"
 
 
 #define POWERUP_BLINKS      5
@@ -291,6 +298,7 @@ typedef struct centity_s {
 	int teleportFlag;
 
 	int trailTime;                  // so missile trails can handle dropped initial packets
+	int cod1TrailNextTime;          // CoD1 native projectile EFX cadence, client-only
 	int miscTime;
 
 	playerEntity_t pe;
@@ -673,6 +681,7 @@ typedef struct weaponInfo_s {
 	float missileDlight;
 	vec3_t missileDlightColor;
 	int missileRenderfx;
+	int cod1MissileTrailEffect;     // cached CoD1 projTrailEffect root
 
 	void ( *ejectBrassFunc )( centity_t * );
 
@@ -767,6 +776,7 @@ typedef struct {
 	// prediction state
 	qboolean hyperspace;                // true if prediction has hit a trigger_teleport
 	playerState_t predictedPlayerState;
+    cod1Posture_t cod1Posture;
 	centity_t predictedPlayerEntity;
 	qboolean validPPS;                  // clear until the first call to CG_PredictPlayerState
 	int predictedErrorTime;
@@ -777,6 +787,8 @@ typedef struct {
 
 	float stepChange;                   // for stair up smoothing
 	int stepTime;
+	float cod1StepChange;               // signed native CoD1 camera step
+	int cod1StepTime;
 
 	float duckChange;                   // for duck viewheight smoothing
 	int duckTime;
@@ -916,6 +928,12 @@ typedef struct {
 	int itemPickup;
 	int itemPickupTime;
 	int itemPickupBlendTime;            // the pulse around the crosshair is timed seperately
+	/* Native callbacks cache game/objective messages separately from pickups. */
+	char cod1GameMessage[MAX_STRING_CHARS];
+	int cod1GameMessageTime;
+	char cod1ObjectiveMessage[MAX_STRING_CHARS];
+	int cod1ObjectiveMessageTime;
+	int cod1ObjectiveMessageKind;
 
 	int holdableSelectTime;             //----(SA)	for holdable item icon drawing
 
@@ -1050,7 +1068,6 @@ typedef struct {
 	qhandle_t targetEffectExplosionShader;
 
 	qhandle_t machinegunBrassModel;
-	qhandle_t panzerfaustBrassModel;    //----(SA)	added
 
 	// Rafael
 	qhandle_t smallgunBrassModel;
@@ -1092,8 +1109,6 @@ typedef struct {
 	qhandle_t shotgunSmokePuffShader;
 	qhandle_t waterBubbleShader;
 	qhandle_t bloodTrailShader;
-
-	qhandle_t nailPuffShader;
 
 //----(SA)	modified
 
@@ -1184,8 +1199,6 @@ typedef struct {
 	qhandle_t hastePuffShader;
 
 	// weapon effect models
-	qhandle_t spearModel;   //----(SA)
-
 	qhandle_t bulletFlashModel;
 	qhandle_t ringFlashModel;
 	qhandle_t dishFlashModel;
@@ -1196,9 +1209,6 @@ typedef struct {
 	qhandle_t mg42muzzleflash;
 	//qhandle_t	mg42muzzleflashgg;
 	qhandle_t planemuzzleflash;
-
-	// Rafael
-	qhandle_t crowbar;
 
 	qhandle_t waterSplashModel;
 	qhandle_t waterSplashShader;
@@ -1305,7 +1315,6 @@ typedef struct {
 	// sounds
 	sfxHandle_t n_health;
 	sfxHandle_t noFireUnderwater;
-	sfxHandle_t snipersound;
 	sfxHandle_t quadSound;
 	sfxHandle_t tracerSound;
 	sfxHandle_t selectSound;
@@ -1322,7 +1331,6 @@ typedef struct {
 	sfxHandle_t sfx_rockexp;
 	sfxHandle_t sfx_dynamiteexp;
 	sfxHandle_t sfx_dynamiteexpDist;    //----(SA)	added
-	sfxHandle_t sfx_spearhit;
 	sfxHandle_t sfx_knifehit[5];
 	sfxHandle_t sfx_bullet_metalhit[3];
 	sfxHandle_t sfx_bullet_woodhit[3];
@@ -1545,6 +1553,7 @@ typedef struct {
 	int timelimit;
 	int maxclients;
 	char mapname[MAX_QPATH];
+	qboolean cod1MapEntities;            // IBSP version 59; gates CoD-only item presentation
 	char redTeam[MAX_QPATH];                // A team
 	char blueTeam[MAX_QPATH];               // B team
 
@@ -1568,13 +1577,14 @@ typedef struct {
 	// locally derived information from gamestate
 	//
 	qhandle_t gameModels[MAX_MODELS];
+	qhandle_t cod1GameShaders[MAX_COD1_SHADERS];
 
 	sfxHandle_t gameSounds[MAX_SOUNDS];
 	int gameSoundTypes[MAX_SOUNDS];             //----(SA)	added
 
 	int numInlineModels;
-	qhandle_t inlineDrawModel[MAX_MODELS];
-	vec3_t inlineModelMidpoints[MAX_MODELS];
+	qhandle_t inlineDrawModel[MAX_INLINE_MODELS];
+	vec3_t inlineModelMidpoints[MAX_INLINE_MODELS];
 
 	clientInfo_t clientinfo[MAX_CLIENTS];
 
@@ -1637,6 +1647,23 @@ extern vmCvar_t cg_drawCrosshair;
 extern vmCvar_t cg_drawCrosshairNames;
 extern vmCvar_t cg_drawCrosshairPickups;
 extern vmCvar_t cg_hudAlpha;
+extern vmCvar_t cg_hudDamageIconWidth;
+extern vmCvar_t cg_hudDamageIconHeight;
+extern vmCvar_t cg_hudDamageIconOffset;
+extern vmCvar_t cg_hudDamageIconTime;
+extern vmCvar_t cg_hudDamageIconInScope;
+extern vmCvar_t cg_hudCompassSize;
+extern vmCvar_t cg_hudCompassMaxRange;
+extern vmCvar_t cg_hudCompassMinRange;
+extern vmCvar_t cg_hudCompassMinRadius;
+extern vmCvar_t cg_hudCompassSpringyPointers;
+extern vmCvar_t cg_hudObjectiveMaxRange;
+extern vmCvar_t cg_hudObjectiveMinAlpha;
+extern vmCvar_t cg_hudObjectiveMaxHeight;
+extern vmCvar_t cg_hudObjectiveMinHeight;
+extern vmCvar_t cg_hudObjectiveRingSize;
+extern vmCvar_t cg_hudObjectiveRingTime;
+extern vmCvar_t cg_hudObjectiveNumRings;
 extern vmCvar_t cg_useWeapsForZoom;
 extern vmCvar_t cg_weaponCycleDelay;            //----(SA)	added
 extern vmCvar_t cg_cycleAllWeaps;
@@ -1647,6 +1674,7 @@ extern vmCvar_t cg_crosshairX;
 extern vmCvar_t cg_crosshairY;
 extern vmCvar_t cg_crosshairSize;
 extern vmCvar_t cg_crosshairAlpha;          //----(SA)	added
+extern vmCvar_t cg_crosshairAlphaMin;
 extern vmCvar_t cg_crosshairHealth;
 extern vmCvar_t cg_drawStatus;
 extern vmCvar_t cg_draw2D;
@@ -1669,6 +1697,7 @@ extern vmCvar_t cg_gun_x;
 extern vmCvar_t cg_gun_y;
 extern vmCvar_t cg_gun_z;
 extern vmCvar_t cg_drawGun;
+extern vmCvar_t cg_crosshairNoGun;
 extern vmCvar_t cg_drawFPGun;
 extern vmCvar_t cg_drawGamemodels;
 extern vmCvar_t cg_cursorHints;
@@ -1814,6 +1843,10 @@ qboolean CG_GetWeaponTag( int clientNum, char *tagname, orientation_t * or );
 // cg_view.c
 //
 void CG_TestModel_f( void );
+void CG_Cod1ActorDebug_f( void );
+void CG_Cod1ActorDebugAdd( void );
+void CG_Cod1ActorDebugReset( void );
+void CG_Cod1ActorServer_f( void );
 void CG_TestGun_f( void );
 void CG_TestModelNextFrame_f( void );
 void CG_TestModelPrevFrame_f( void );
@@ -1901,7 +1934,6 @@ void CG_SelectNextPlayer();
 float CG_GetValue( int ownerDraw, int type ); // 'type' is relative or absolute (fractional-'0.5' or absolute- '50' health)
 qboolean CG_OwnerDrawVisible( int flags );
 void CG_RunMenuScript( char **args );
-void CG_ShowResponseHead();
 void CG_SetPrintString( int type, const char *p );
 void CG_InitTeamChat();
 void CG_GetTeamColor( vec4_t *color );
@@ -1918,6 +1950,23 @@ void CG_Fade( int r, int g, int b, int a, int time, int duration ); //----(SA)	m
 
 void CG_CalcShakeCamera();
 void CG_ApplyShakeCamera();
+void CG_Cod1ScriptQuakeReset(qboolean full);
+void CG_Cod1ScriptQuakeConfigChanged(int number);
+void CG_Cod1ScriptQuakeCommand(void);
+void CG_Cod1ScriptQuakeApply(void);
+void CG_Cod1DebugTextReset(qboolean full);
+void CG_Cod1DebugTextConfigChanged(int number);
+void CG_Cod1DebugTextCommand(void);
+void CG_Cod1DebugTextAdd(void);
+void CG_Cod1DebugLineReset(qboolean full);
+void CG_Cod1DebugLineConfigChanged(int number);
+void CG_Cod1DebugLineCommand(void);
+void CG_Cod1DebugLineAdd(void);
+void CG_Cod1HudElementsReset(qboolean full);
+void CG_Cod1HudElementsConfigChanged(int number);
+void CG_Cod1HudElementsCommand(void);
+void CG_Cod1HudElementsDraw(void);
+int CG_Cod1HudElementsOwnsPregameFade(void);
 
 
 
@@ -1987,6 +2036,7 @@ void CG_NextWeapon_f( void );
 void CG_PrevWeapon_f( void );
 void CG_Weapon_f( void );
 void CG_WeaponBank_f( void );
+void CG_WeaponSlot_f( void );
 void CG_WeaponSuggest( int weap );
 
 void CG_FinishWeaponChange( int lastweap, int newweap );
@@ -1994,6 +2044,11 @@ void CG_FinishWeaponChange( int lastweap, int newweap );
 void CG_RegisterWeapon( int weaponNum );
 void CG_RegisterItemVisuals( int itemNum );
 
+void CG_Cod1FireRecoil(void);
+void CG_Cod1SendWeaponAim(void);
+void trap_Cod1SetWeaponAngles(int valid,float pitch,float yaw);
+qboolean CG_Cod1ReloadEvent(centity_t *cent,int variant);
+qboolean CG_Cod1MeleeStartEvent(centity_t *cent);
 void CG_FireWeapon( centity_t *cent );   //----(SA)	modified.
 //void CG_EndFireWeapon( centity_t *cent, int firemode );	//----(SA)	added
 void CG_MissileHitWall( int weapon, int clientNum, vec3_t origin, vec3_t dir, int surfaceFlags );   //	(SA) modified to send missilehitwall surface parameters
@@ -2007,9 +2062,6 @@ void CG_MG42EFX( centity_t *cent );
 void CG_FLAKEFX( centity_t *cent, int whichgun );
 
 void CG_MortarEFX( centity_t *cent );
-
-// Ridah
-qboolean CG_MonsterUsingWeapon( centity_t *cent, int aiChar, int weaponNum );
 
 // Rafael
 void CG_MissileHitWall2( int weapon, int clientNum, vec3_t origin, vec3_t dir );
@@ -2026,6 +2078,36 @@ void CG_GrappleTrail( centity_t *ent, const weaponInfo_t *wi );
 void CG_AddViewWeapon( playerState_t *ps );
 void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent );
 void CG_DrawWeaponSelect( void );
+void CG_Cod1HudReset(void);
+int CG_Cod1HudEnabled(void);
+void CG_Cod1DamageReset(void);
+void CG_Cod1DamageFeedback(int yawByte,int pitchByte,int damage);
+/* CoD mission records use the dedicated range in bg_public.h. */
+#define COD1_OBJECTIVE_COUNT MAX_COD1_OBJECTIVES
+typedef struct {
+	int state;
+	qboolean hasOrigin;
+	vec3_t origin;
+	char text[1024];
+	int changeTime;
+	int ring;
+} cod1Objective_t;
+void CG_Cod1ObjectivesReset(void);
+void CG_Cod1ObjectivesInit(void);
+void CG_Cod1ObjectivesConfigStringModified(int number);
+const cod1Objective_t *CG_Cod1ObjectiveAt(int index);
+void CG_Cod1LocaleReset(void);
+const char *CG_Cod1LocaleLookup(const char *key);
+const char *CG_Cod1LocaleLookupObjective(const char *key);
+const char *CG_Cod1LocaleLookupSubtitle(const char *key);
+void CG_Cod1VoiceFrame(void);
+void CG_Cod1LoopSoundFrame(void);
+void CG_Cod1LoopSoundSuspend(void);
+void CG_Cod1VoiceSubtitleDraw(void);
+void CG_Cod1SubtitleReset(void);
+const char *CG_Cod1ObjectiveLocalize(const char *text);
+const char *CG_Cod1MessageLocalize(const char *text);
+const char *CG_Cod1PromptLocalize(const char *key);
 void CG_DrawHoldableSelect( void );
 
 void CG_OutOfAmmoChange( void );
@@ -2202,6 +2284,12 @@ void CG_InitConsoleCommands( void );
 // cg_servercmds.c
 //
 void CG_ExecuteNewServerCommands( int latestSequence );
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+void CG_Cod1DirectFogMapInit( void );
+void CG_Cod1DirectFogApplyRetained( void );
+qboolean CG_Cod1DirectFogActive( void );
+qboolean CG_Cod1DirectFogOwnsState( void );
+#endif
 void CG_ParseServerinfo( void );
 void CG_SetConfigValues( void );
 void CG_ShaderStateChanged( void );
@@ -2304,6 +2392,15 @@ int         trap_CM_MarkFragments( int numPoints, const vec3_t *points,
 // moves and the listener moves
 void        trap_S_StartSound( vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfx );
 void        trap_S_StartSoundEx( vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfx, int flags );
+struct cod1VoiceRequest_s;
+struct cod1AliasSlaveRequest_s;
+void trap_Cod1AliasSlave(const struct cod1AliasSlaveRequest_s *);
+int trap_Cod1VoiceStream(const struct cod1VoiceRequest_s *);
+struct cod1LoopStreamRequest_s;
+int trap_Cod1LoopStream(const struct cod1LoopStreamRequest_s *);
+int         trap_Cod1SoundDuration(sfxHandle_t sfx,float pitch);
+void        trap_Cod1StartAliasSound( vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfx, float gain, float pitch, float distMin, float distMax );
+int trap_Cod1TryStartAliasSound(vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfx, float gain, float pitch, float distMin, float distMax);
 void        trap_S_StopLoopingSound( int entnum );
 
 void        trap_S_StopStreamingSound( int entnum );  // usually AI.  character is talking and needs to be shut up /now/
@@ -2312,6 +2409,7 @@ void        trap_S_StopStreamingSound( int entnum );  // usually AI.  character 
 void        trap_S_StartLocalSound( sfxHandle_t sfx, int channelNum );
 void        trap_S_ClearLoopingSounds( qboolean killall );
 void        trap_S_AddLoopingSound( int entityNum, const vec3_t origin, const vec3_t velocity, sfxHandle_t sfx, int volume );
+void trap_Cod1AddLoopingAliasSound(int,const vec3_t,const vec3_t,int,sfxHandle_t,int);
 void        trap_S_AddRangedLoopingSound( int entityNum, const vec3_t origin, const vec3_t velocity, sfxHandle_t sfx, int range );
 void        trap_S_AddRealLoopingSound( int entityNum, const vec3_t origin, const vec3_t velocity, sfxHandle_t sfx );
 void        trap_S_UpdateEntityPosition( int entityNum, const vec3_t origin );
@@ -2346,6 +2444,11 @@ qhandle_t   trap_R_GetShaderFromModel( qhandle_t modelid, int surfnum, int withl
 // Nothing is drawn until R_RenderScene is called.
 void        trap_R_ClearScene( void );
 void        trap_R_AddRefEntityToScene( const refEntity_t *re );
+int         trap_R_AddCod1NativeView( const refEntity_t *re,
+                                     const cod1NativeAnimState_t *state,
+                                     cod1NativeViewTags_t *tags );
+int         trap_R_AddCod1ActorAnimated( const refEntity_t *re,
+                                        const cod1ActorAnimState_t *state );
 
 // polys are intended for simple wall marks, not really for doing
 // significant construction
@@ -2458,3 +2561,105 @@ void        CG_FreeCamera( int camNum );
 void CG_StartShakeCamera( float p, int duration, vec3_t src, float radius );
 
 qboolean    trap_GetModelInfo( int clientNum, char *modelName, animModelInfo_t **modelInfo );
+void CG_Cod1ResetViewWeapons(void);
+int CG_Cod1WeaponPickupItem(int index);
+int CG_Cod1AliasPickupItem(int index);
+void CG_Cod1PickupSoundsReset(void);
+void CG_Cod1PickupSoundsInit(void);
+void CG_Cod1PlayWeaponPickup(int index,int entity);
+void CG_Cod1PlayWeaponAmmoPickup(int index,int entity);
+void CG_Cod1PrecacheConsumableMedia(void);
+int CG_Cod1ItemWeaponRequested(int definition);
+void CG_Cod1RocketPrecache(void);
+void CG_Cod1FootstepsReset(void);
+void CG_Cod1FoleySceneReset(void);
+extern vmCvar_t cg_r196FoleyScene;
+/* NATIVE_EFX_R1: separate visual state, no entity/protocol changes. */
+void CG_Cod1EfxReset(void);
+void CG_Cod1EfxShutdown(void);
+void CG_Cod1EfxClear(void);
+void CG_Cod1EfxPrepare(void);
+void CG_Cod1ScriptFxReset(qboolean full);
+void CG_Cod1ScriptFxConfigChanged(int number);
+void CG_Cod1ScriptFxCommand(void);
+void CG_Cod1TagFxCommand(void);
+struct cod1MusicPlayback_s;
+int trap_Cod1ScriptMusic(const struct cod1MusicPlayback_s *);
+struct cod1AmbientPlayback_s;
+int trap_Cod1ScriptAmbient(const struct cod1AmbientPlayback_s *);
+void CG_Cod1AmbientReset(qboolean full);
+void CG_Cod1AmbientConfigChanged(int number);
+void CG_Cod1AmbientCommand(void);
+void CG_Cod1AmbientFrame(void);
+void CG_Cod1ItemPrecacheReset(void);
+void CG_Cod1ItemPrecacheInit(void);
+int CG_Cod1ItemPrecacheConfigChanged(int number);
+qhandle_t CG_Cod1PrecacheItemWeapon(int definition,int (*current)(void *),void *user);
+int trap_Cod1FS_GetFileList(const char*,const char*,char*,int);
+void CG_Cod1ImpactPrepare(void);
+void CG_Cod1TurretShotInit(void);
+void CG_Cod1TurretShotReset(void);
+qboolean CG_Cod1TurretShotEvent(const entityState_t*);
+void CG_Cod1TurretShotLoop(const entityState_t*);
+void CG_Cod1ImpactReset(void);
+qboolean CG_Cod1BulletImpact(const entityState_t *);
+qboolean CG_Cod1RocketImpact(const entityState_t *, const vec3_t);
+void CG_Cod1RocketInfo_f(void);
+void CG_Cod1RocketTest_f(void);
+void CG_Cod1ImpactInfo_f(void);
+void CG_SpawnTracer(int,vec3_t,vec3_t);
+void CG_Cod1ImpactTest_f(void);
+void CG_Cod1ImpactMark(qhandle_t,const vec3_t,const vec3_t,float,float,float,float,float,qboolean,float,qboolean,int);
+void CG_Cod1EfxPrecacheWeapon(const char *effect);
+int CG_Cod1EfxRegisterProjectileTrail(const char *effect);
+void CG_Cod1EfxProjectileTrail(centity_t *ent, const weaponInfo_t *wi);
+void CG_Cod1EfxAdd(void);
+qboolean CG_Cod1EfxGrenade(const vec3_t origin, const vec3_t direction,
+    const char *material, const char *weaponEffect);
+void CG_Cod1EfxTest_f(void);
+void CG_Cod1EfxInfo_f(void);
+/* MUZZLE_R1: internal cgame calls, no syscall or network ABI changes. */
+int CG_Cod1EfxRegisterMuzzle(const char *path);
+void CG_Cod1EfxMuzzleShot(int effect,int key);
+void CG_Cod1EfxBeginView(void);
+void CG_Cod1EfxMuzzleView(int effect,int key,const refEntity_t *gun);
+void CG_Cod1EfxMuzzleViewPose(int effect,int key,const refEntity_t *gun,
+                             const orientation_t *poseTag,qboolean nativePose);
+void CG_Cod1EfxAddView(void);
+void CG_Cod1MuzzleInfo_f(void);
+void CG_Cod1ResetGrenadeFeedback(void);
+qboolean CG_Cod1GrenadeBounce(int weapon, const vec3_t origin, int packedFlags);
+
+qhandle_t CG_Cod1ScopeShader(void);
+void CG_Cod1ScopeCenter(float *x,float *y);
+
+/* BRASS_R1: detached local-view model particles. */
+void CG_Cod1BrassShutdown(void);
+void CG_Cod1BrassClear(void);
+void CG_Cod1BrassBeginView(void);
+void CG_Cod1BrassAdd(void);
+void CG_Cod1BrassEvent(centity_t *cent,int event,int sequence);
+void CG_Cod1BrassCorrectionEvent(centity_t *cent,int oldEvent,int newEvent,int sequence);
+void CG_Cod1BrassView(int key,const refEntity_t *gun);
+void CG_Cod1BrassViewPose(int key,const refEntity_t *gun,
+                         const orientation_t *poseTag,qboolean nativePose);
+void CG_Cod1BrassInfo_f(void);
+#include "../game/bg_cod1_weapondef.h"
+void CG_Cod1BrassPrecache(const cwDef_t *def);
+
+
+void CG_Cod1RegisterScriptShaders(void);
+
+/* R135 native copied keybinding boundary. */
+void CG_Cod1KeyBindingReset(qboolean);
+qboolean CG_Cod1KeyBindingQuery(cod1KeyBindingQuery_t *);
+qboolean CG_Cod1KeyBindingQueryNative(int,int);
+qboolean CG_Cod1KeyBindingName(int,char *,int);
+qboolean trap_Cod1KeyBindingContext(cod1KeyBindingQuery_t *);
+qboolean trap_Cod1KeyBindingScan(int,char *,int);
+int trap_R_AddCod1TurretToScene(const cod1TurretRenderState_t *);
+int trap_R_Cod1TurretTagFlash(const cod1TurretRenderState_t *,float[16]);
+qhandle_t trap_R_RegisterCod1TurretActor(const cod1TurretActorResourceState_t *);
+int trap_R_AddCod1TurretActorToScene(const cod1TurretActorRenderState_t *);
+void CG_Cod1TurretActorReset(void);
+void CG_Cod1PrepareInitialMountedActors(const snapshot_t *snap);

@@ -213,7 +213,11 @@ int AAS_PointAreaNum( vec3_t point ) {
 	aas_plane_t *plane;
 
 	if ( !( *aasworld ).loaded ) {
-		botimport.Print( PRT_ERROR, "AAS_PointAreaNum: aas not loaded\n" );
+		static int aasNotLoadedWarningShown;
+		if ( !aasNotLoadedWarningShown ) {
+			botimport.Print( PRT_WARNING, "AAS_PointAreaNum: aas not loaded; further messages suppressed\n" );
+			aasNotLoadedWarningShown = 1;
+		}
 		return 0;
 	} //end if
 

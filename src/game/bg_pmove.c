@@ -34,6 +34,19 @@ If you have questions concerning this license or the applicable additional terms
 #include "q_shared.h"
 #include "bg_public.h"
 #include "bg_local.h"
+#include "bg_cod1_stance.h"
+#include "bg_cod1_posture_state.h"
+#include "bg_cod1_gait.h"
+#include "bg_cod1_stance_move.h"
+#include "bg_cod1_speed.h"
+#define COD1_WEAPONDEF_IMPLEMENTATION
+#include "bg_cod1_weapondef.h"
+#include "bg_cod1_reload.h"
+#include "bg_cod1_combat.h"
+#include "bg_cod1_lean.h"
+#include "bg_cod1_brass.h"
+#include "bg_cod1_impact.h"
+#include "bg_cod1_footstep.h"
 
 // Rafael gameskill
 int bg_pmove_gameskill_integer;
@@ -248,6 +261,7 @@ static void PM_Friction( void ) {
 	float   *vel;
 	float speed, newspeed, control;
 	float drop;
+	float stopSpeed;
 
 	vel = pm->ps->velocity;
 
@@ -271,8 +285,19 @@ static void PM_Friction( void ) {
 		if ( pml.walking && !( pml.groundTrace.surfaceFlags & SURF_SLICK ) ) {
 			// if getting knocked back, no friction
 			if ( !( pm->ps->pm_flags & PMF_TIME_KNOCKBACK ) ) {
-				control = speed < pm_stopspeed ? pm_stopspeed : speed;
-				drop += control * pm_friction * pml.frametime;
+                /* PATCH36: restore the original 100-unit stop floor.
+                 * The matching acceleration floor below prevents crawl drag
+                 * from overpowering acceleration (the PATCH23 workaround). */
+                stopSpeed = pm_stopspeed;
+                control = speed < stopSpeed ? stopSpeed : speed;
+                /* Native 0x30002d0d: recovery reduces friction; the separate
+                 * short landing latch doubles it. Knockback skips this block. */
+                if (BG_Cod1MovementActive(pm)) {
+                    if (pm->ps->stats[STAT_COD1_EDGES]&COD1_LAND_SLOW) control *= .3f;
+                    else if (pm->ps->pm_flags&PMF_TIME_LAND) control *= 2.0f;
+                }
+                drop += control * (BG_Cod1MovementActive(pm) ? 5.5f : pm_friction)
+                    * pml.frametime;
 			}
 		}
 	}
@@ -331,7 +356,12 @@ static void PM_Accelerate( vec3_t wishdir, float wishspeed, float accel ) {
 	if ( addspeed <= 0 ) {
 		return;
 	}
-	accelspeed = accel * pml.frametime * wishspeed;
+	/* PATCH59: the native acceleration floor is shared by ground and air,
+     * including slick/knockback. It bounds acceleration, not player speed. */
+    if (BG_Cod1MovementActive(pm) && wishspeed < 100.0f)
+        accelspeed = accel * pml.frametime * 100.0f;
+    else
+        accelspeed = accel * pml.frametime * wishspeed;
 	if ( accelspeed > addspeed ) {
 		accelspeed = addspeed;
 	}
@@ -369,6 +399,40 @@ static void PM_Accelerate( vec3_t wishdir, float wishspeed, float accel ) {
 
 
 
+#include "bg_cod1_prone.h"
+#include "bg_cod1_prone_pitch.h"
+
+/* PATCH43: ordinary Thompson adapter for native request -> movement mode.
+ * cgame 0x3000ae30 + 0x30007030 run before movement and PM_Weapon.
+ * Native groundPlane is 0x300d0530 (also set on an unwalkable slope).
+ * Native FIRING=3, RTCW FIRING=8: do not copy numeric state ranges.
+ * Reload never uses movement mode 0x80, even when visual ADS can rise near
+ * its end. Full visual ADS/reload/prone-request state is a separate bridge.
+ */
+static void PM_Cod1PrepareMove( void ) {
+    const cwDef_t *d;
+    pml.cod1AdsMove = qfalse;
+    pml.cod1WeaponMoveScale = 1.0f;
+    if (!BG_Cod1MovementActive(pm) || !CW_Active(pm->ps) ||
+        (pm->ps->stats[STAT_COD1_EDGES]&CW_LADDER_HIDDEN)) return;
+    if (pm->ps->stats[STAT_HEALTH] <= 0 ||
+        (pm->ps->pm_flags & PMF_RESPAWNED) ||
+        (pm->ps->eFlags & EF_MG42_ACTIVE) ||
+        pm->ps->persistant[PERS_HWEAPON_USE]) return;
+    d = CW_PSDef(pm->ps);
+    /* Missing metadata keeps the previous neutral scale. Retail Thompson
+     * and its semi-auto definition both explicitly provide this field. */
+    if (*CW_String(d, "moveSpeedScale"))
+        pml.cod1WeaponMoveScale = (float)CW_Number(d, "moveSpeedScale");
+    if (!(pm->cmd.wbuttons & WBUTTON_ATTACK2) ||
+        !CW_Number(d, "aimDownSight") || !pml.groundPlane ||
+        (pm->ps->pm_flags & PMF_COD1_PRONE)) return;
+    if (pm->ps->weaponstate == WEAPON_READY ||
+        pm->ps->weaponstate == WEAPON_FIRING ||
+        pm->ps->weaponstate == WEAPON_COD1_RECHAMBER)
+        pml.cod1AdsMove = qtrue;
+}
+
 /*
 ============
 PM_CmdScale
@@ -382,6 +446,11 @@ static float PM_CmdScale( usercmd_t *cmd ) {
 	int max;
 	float total;
 	float scale;
+
+	if ( BG_Cod1MovementActive(pm) ) {
+		return BG_Cod1MoveScale(pm->ps, cmd, pml.cod1AdsMove,
+                               pml.cod1WeaponMoveScale, qfalse);
+	}
 
 	if ( pm->ps->aiChar && !( pm->ps->eFlags & EF_DUMMY_PMOVE ) ) {
 		// restrict AI character movements (don't strafe or run backwards as fast as they can run forwards)
@@ -529,7 +598,12 @@ static void PM_SetMovementDir( void ) {
 PM_CheckJump
 =============
 */
+static int PM_FootstepForSurface( void );
+#include "bg_cod1_jump.h"
+
 static qboolean PM_CheckJump( void ) {
+	if (BG_Cod1MovementActive(pm)) return PM_Cod1CheckJump();
+	if(pm->ps->pm_flags & PMF_COD1_PRONE)return qfalse;
 	// JPW NERVE -- jumping in multiplayer uses and requires sprint juice (to prevent turbo skating, sprint + jumps)
 	// don't allow jump accel
 //	if (pm->cmd.serverTime - pm->ps->jumpTime < 850)
@@ -558,7 +632,10 @@ static qboolean PM_CheckJump( void ) {
 	pm->ps->pm_flags |= PMF_JUMP_HELD;
 
 	pm->ps->groundEntityNum = ENTITYNUM_NONE;
-	pm->ps->velocity[2] = JUMP_VELOCITY;
+	/* Original CoD1 SP: sqrt(gravity * 78), for a 39-unit jump.
+     * Keep the legacy rule for non-CoD movement paths. */
+    pm->ps->velocity[2] = BG_Cod1MovementActive(pm) && pm->ps->gravity > 0 ?
+        (float)sqrt(78.0f * pm->ps->gravity) : JUMP_VELOCITY;
 	PM_AddEvent( EV_JUMP );
 
 	if ( pm->cmd.forwardmove >= 0 ) {
@@ -639,6 +716,7 @@ static void PM_WaterJumpMove( void ) {
 		// cancel as soon as we are falling down again
 		pm->ps->pm_flags &= ~PMF_ALL_TIMES;
 		pm->ps->pm_time = 0;
+        pm->ps->stats[STAT_COD1_EDGES]&=~COD1_LAND_SLOW;
 	}
 }
 
@@ -802,6 +880,7 @@ static void PM_AirMove( void ) {
 	float wishspeed;
 	float scale;
 	usercmd_t cmd;
+    float airInputLimit = 0;
 
 	PM_Friction();
 
@@ -809,7 +888,8 @@ static void PM_AirMove( void ) {
 	smove = pm->cmd.rightmove;
 
 	cmd = pm->cmd;
-	scale = PM_CmdScale( &cmd );
+	scale = BG_Cod1MovementActive(pm) ?
+        BG_Cod1AirScale(pm->ps,&cmd,pml.cod1AdsMove) : PM_CmdScale(&cmd);
 
 // Ridah, moved this down, so we use the actual movement direction
 	// set the movementDir so clients can rotate the legs for strafing
@@ -831,7 +911,17 @@ static void PM_AirMove( void ) {
 	wishspeed *= scale;
 
 	// not on ground, so little effect on velocity
+    if (BG_Cod1MovementActive(pm)) {
+        airInputLimit = BG_Cod1HorizontalSpeed(pm->ps->velocity);
+        if (airInputLimit < (float)pm->ps->speed)
+            airInputLimit = (float)pm->ps->speed;
+    }
 	PM_Accelerate( wishdir, wishspeed, pm_airaccelerate );
+    /* PATCH58: turning/WA/WD must not manufacture horizontal speed above
+     * the run limit. Preserve faster incoming impulses without adding to them. */
+    if (BG_Cod1MovementActive(pm))
+        BG_Cod1LimitHorizontalSpeed(pm->ps->velocity,airInputLimit);
+
 
 	// we may have a ground plane that is very steep, even
 	// though we don't have a groundentity
@@ -921,6 +1011,10 @@ static void PM_WalkMove( void ) {
 			PM_WaterMove();
 		} else {
 			PM_AirMove();
+			if (BG_Cod1MovementActive(pm)) {
+				pm->ps->jumpTime=pm->cmd.serverTime;
+				return; /* CoD jump has no RTCW sprint-stamina charge. */
+			}
 // JPW NERVE
 #if defined ( CGAMEDLL )
 			if ( cg_gameType.integer != GT_SINGLE_PLAYER )
@@ -969,7 +1063,13 @@ static void PM_WalkMove( void ) {
 	smove = pm->cmd.rightmove;
 
 	cmd = pm->cmd;
-	scale = PM_CmdScale( &cmd );
+    /* PATCH53: only the native ground scaler applies lean slowdown.
+     * Jump routes to PM_AirMove above before reaching this call. */
+    if (BG_Cod1MovementActive(pm))
+        scale = BG_Cod1MoveScale(pm->ps, &cmd, pml.cod1AdsMove,
+                                pml.cod1WeaponMoveScale, qtrue);
+    else
+        scale = PM_CmdScale( &cmd );
 
 // Ridah, moved this down, so we use the actual movement direction
 	// set the movementDir so clients can rotate the legs for strafing
@@ -996,8 +1096,12 @@ static void PM_WalkMove( void ) {
 	wishspeed = VectorNormalize( wishdir );
 	wishspeed *= scale;
 
-	// clamp the speed lower if ducking
-	if ( pm->ps->pm_flags & PMF_DUCKED ) {
+	if(!BG_Cod1MovementActive(pm) && (pm->ps->pm_flags & PMF_COD1_PRONE)){
+        float cap=pm->ps->speed*COD1_CRAWL_SCALE;
+        if(wishspeed>cap)wishspeed=cap;
+    }
+    // clamp the speed lower if ducking
+	if ( !BG_Cod1MovementActive(pm) && (pm->ps->pm_flags & PMF_DUCKED) ) {
 		/*
 		if ( wishspeed > pm->ps->speed * pm_duckScale ) {
 			wishspeed = pm->ps->speed * pm_duckScale;
@@ -1031,9 +1135,14 @@ static void PM_WalkMove( void ) {
 	} else if ( ( pm->ps->stats[STAT_HEALTH] <= 0 ) && pm->ps->aiChar && ( pml.groundTrace.surfaceFlags & SURF_MONSTERSLICK ) )    {
 		accelerate = pm_airaccelerate;
 	} else {
-		accelerate = pm_accelerate;
+		accelerate = BG_Cod1MovementActive(pm) ?
+            BG_Cod1GroundAcceleration(pm->ps) : pm_accelerate;
 	}
 
+    /* Native 0x3000398b: recovery quarters ground acceleration, including
+     * the slick/knockback branch, without turning it into an airborne move. */
+    if (BG_Cod1MovementActive(pm) &&
+        (pm->ps->stats[STAT_COD1_EDGES]&COD1_LAND_SLOW)) accelerate *= .25f;
 	PM_Accelerate( wishdir, wishspeed, accelerate );
 
 	//Com_Printf("velocity = %1.1f %1.1f %1.1f\n", pm->ps->velocity[0], pm->ps->velocity[1], pm->ps->velocity[2]);
@@ -1073,6 +1182,16 @@ static void PM_WalkMove( void ) {
 		VectorNormalize( pm->ps->velocity );
 		VectorScale( pm->ps->velocity, vel, pm->ps->velocity );
 	}
+
+    /* PATCH58: the slope-speed restoration above also includes falling Z
+     * speed. On a landing it must not turn that energy into extra run speed. */
+    if (BG_Cod1MovementActive(pm) &&
+        !(pml.groundTrace.surfaceFlags & SURF_SLICK) &&
+        !(pm->ps->pm_flags & PMF_TIME_KNOCKBACK)) {
+        float limit = BG_Cod1HorizontalSpeed(oldvel);
+        if (limit < (float)pm->ps->speed) limit = (float)pm->ps->speed;
+        BG_Cod1LimitHorizontalSpeed(pm->ps->velocity,limit);
+    }
 
 	// don't do anything if standing still
 	if ( !pm->ps->velocity[0] && !pm->ps->velocity[1] ) {
@@ -1248,6 +1367,8 @@ static void PM_CrashLand( void ) {
 	float vel, acc;
 	float t;
 	float a, b, c, den;
+
+	if (BG_Cod1MovementActive(pm)) {PM_Cod1CrashLand();return;}
 
 	// Ridah, only play this if coming down hard
 	if ( !pm->ps->legsTimer ) {
@@ -1462,11 +1583,14 @@ static void PM_GroundTrace( void ) {
 	point[2] = pm->ps->origin[2] - 0.25;
 
 	pm->trace( &trace, pm->ps->origin, pm->mins, pm->maxs, point, pm->ps->clientNum, pm->tracemask );
+    /* PATCH39: native IBSP59 capsule contacts provide actual support.
+     * Do not replace them with a ray against render geometry. */
 	pml.groundTrace = trace;
 
 	// do something corrective if the trace starts in a solid...
 	if ( trace.allsolid ) {
 		if ( !PM_CorrectAllSolid( &trace ) ) {
+			if (BG_Cod1MovementActive(pm)) pm->ps->cod1JumpApex=0;
 			return;
 		}
 	}
@@ -1478,6 +1602,9 @@ static void PM_GroundTrace( void ) {
 		pml.walking = qfalse;
 		return;
 	}
+
+	/* Original GroundTrace clears the apex on contact, before kickoff/landing. */
+	if (BG_Cod1MovementActive(pm)) pm->ps->cod1JumpApex=0;
 
 	// check if getting thrown off the ground
 	if ( pm->ps->velocity[2] > 0 && DotProduct( pm->ps->velocity, trace.plane.normal ) > 10 ) {
@@ -1521,6 +1648,7 @@ static void PM_GroundTrace( void ) {
 	if ( pm->ps->pm_flags & PMF_TIME_WATERJUMP ) {
 		pm->ps->pm_flags &= ~( PMF_TIME_WATERJUMP | PMF_TIME_LAND );
 		pm->ps->pm_time = 0;
+        pm->ps->stats[STAT_COD1_EDGES]&=~COD1_LAND_SLOW;
 	}
 
 	if ( pm->ps->groundEntityNum == ENTITYNUM_NONE ) {
@@ -1532,7 +1660,7 @@ static void PM_GroundTrace( void ) {
 		PM_CrashLand();
 
 		// don't do landing time if we were just going down a slope
-		if ( pml.previous_velocity[2] < -200 ) {
+		if ( !BG_Cod1MovementActive(pm) && pml.previous_velocity[2] < -200 ) {
 			// don't allow another jump for a little while
 			pm->ps->pm_flags |= PMF_TIME_LAND;
 			pm->ps->pm_time = 250;
@@ -1606,6 +1734,32 @@ Sets mins, maxs, and pm->ps->viewheight
 */
 static void PM_CheckDuck( void ) {
 	trace_t trace;
+	if(BG_Cod1CheckStance(pm)) {
+        if(BG_Cod1PlayerMovementActive(pm) && !(pm->ps->eFlags & EF_MG42_ACTIVE)) {
+            cod1PostureState_t eye;
+            cod1PostureInput_t input;
+            int desired=pm->ps->viewheight-(int)pm->mins[2];
+            if(!pm->ps->cod1EyeTarget) {
+                pm->ps->cod1EyeHeight=(float)desired;
+                pm->ps->cod1EyeTarget=desired;
+                pm->ps->cod1EyeStart=pm->ps->cod1EyeDown=0;
+            }
+            eye.desired=desired;eye.height=pm->ps->cod1EyeHeight;
+            eye.start=pm->ps->cod1EyeStart;eye.target=pm->ps->cod1EyeTarget;
+            eye.down=pm->ps->cod1EyeDown;eye.offset=0;
+            input.now=pm->cmd.serverTime;input.flags=0;
+            input.prone_time=input.rise_time=400;input.frametime=pml.frametime;
+            COD1_PostureTick(&eye,&input);
+            pm->ps->cod1EyeHeight=eye.height;pm->ps->cod1EyeStart=eye.start;
+            pm->ps->cod1EyeTarget=eye.target;pm->ps->cod1EyeDown=eye.down;
+        } else {
+            pm->ps->cod1EyeTarget=pm->ps->cod1EyeStart=pm->ps->cod1EyeDown=0;
+            pm->ps->cod1EyeHeight=0;
+        }
+        return;
+    }
+    pm->ps->cod1EyeTarget=pm->ps->cod1EyeStart=pm->ps->cod1EyeDown=0;
+    pm->ps->cod1EyeHeight=0;
 
 	// Ridah, modified this for configurable bounding boxes
 	pm->mins[0] = pm->ps->mins[0];
@@ -1664,12 +1818,17 @@ static void PM_CheckDuck( void ) {
 PM_Footsteps
 ===============
 */
+/* R195: native gait/material audio. Special movement and NPC animation
+ * remain in the existing path. */
+#include "bg_cod1_footsteps.inc"
 static void PM_Footsteps( void ) {
 	float bobmove, animGap;
 	int old;
 	qboolean footstep;
 	qboolean iswalking;
 	int animResult = -1;
+
+	if(PM_Cod1Footsteps())return;
 
 	if ( pm->ps->eFlags & EF_DEAD ) {
 		return;
@@ -1991,9 +2150,41 @@ static void PM_WaterEvents( void ) {        // FIXME?
 PM_BeginWeaponReload
 ==============
 */
+static qboolean PM_Cod1ReloadWeapon(int weapon) {
+    return CW_WeaponDef(weapon)!=NULL && !pm->ps->aiChar && (pm->cmd.wbuttons & WBUTTON_COD1_STANCE);
+}
+static void PM_ReloadClip(int weapon);
+static void PM_Cod1ReloadPhase(int phase);
+static int PM_Cod1CanReload(const cwDef_t *d);
 static void PM_BeginWeaponReload( int weapon ) {
+	qboolean cod1Reload = PM_Cod1ReloadWeapon( weapon );
+
 	// only allow reload if the weapon isn't already occupied (firing is okay)
 	if ( pm->ps->weaponstate != WEAPON_READY && pm->ps->weaponstate != WEAPON_FIRING ) {
+		return;
+	}
+
+	/* CoD1 cleanup: a player weapon with a WeaponDef owns its complete reload
+	 * policy.  Do not enter RTCW chair/scope/grenade animation gates first. */
+	if ( cod1Reload ) {
+		const cwDef_t *d = CW_PSDef( pm->ps );
+		int empty = pm->ps->ammoclip[BG_FindClipForWeapon( weapon )] == 0;
+		if ( !PM_Cod1CanReload( d ) ) {
+			return;
+		}
+		/* Keep the shared third-person body animation event until the player
+		 * XAnim/body runtime replaces it; only the weapon policy is native. */
+		BG_AnimScriptEvent( pm->ps, ANIM_ET_RELOAD, qfalse, qtrue );
+		if ( CW_Number( d, "segmentedReload" ) ) {
+			PM_Cod1ReloadPhase( COD1_RELOAD_START );
+			return;
+		}
+		pm->ps->stats[STAT_COD1_RELOAD] = empty ? COD1_RELOAD_EMPTY : COD1_RELOAD_NORMAL;
+		pm->ps->weaponTime = CW_ReloadDuration( d, empty );
+		pm->ps->weaponDelay = CW_ReloadAddDelay( d, empty );
+		pm->ps->weaponstate = WEAPON_RELOADING;
+		PM_StartWeaponAnim( empty ? WEAP_RELOAD2 : WEAP_RELOAD1 );
+		BG_AddPredictableEventToPlayerstate( EV_FILL_CLIP, pm->ps->stats[STAT_COD1_RELOAD], pm->ps );
 		return;
 	}
 
@@ -2012,33 +2203,26 @@ static void PM_BeginWeaponReload( int weapon ) {
 	case WP_GRENADE_PINEAPPLE:
 		break;
 
-		// no reloading
 	case WP_KNIFE:
 	case WP_TESLA:
 		return;
 
 	default:
-		// DHM - Nerve :: override current animation (so reloading after firing will work)
 		BG_AnimScriptEvent( pm->ps, ANIM_ET_RELOAD, qfalse, qtrue );
 		break;
 	}
 
-
 	PM_ContinueWeaponAnim( WEAP_RELOAD1 );
 
-
-	// okay to reload while overheating without tacking the reload time onto the end of the
-	// current weaponTime (the reload time is partially absorbed into the overheat time)
-	if ( pm->ps->weaponstate == WEAPON_READY ) {                  // set wait to the reload duration
+	if ( pm->ps->weaponstate == WEAPON_READY ) {
 		pm->ps->weaponTime += ammoTable[weapon].reloadTime;
 	} else if ( pm->ps->weaponTime < ammoTable[weapon].reloadTime ) {
 		pm->ps->weaponTime += ( ammoTable[weapon].reloadTime - pm->ps->weaponTime );
 	}
 
 	pm->ps->weaponstate = WEAPON_RELOADING;
-	PM_AddEvent( EV_FILL_CLIP );    // play reload sound
+	PM_AddEvent( EV_FILL_CLIP );
 }
-
 
 
 
@@ -2047,6 +2231,14 @@ static void PM_BeginWeaponReload( int weapon ) {
 PM_BeginWeaponChange
 ===============
 */
+static void PM_Cod1ResetRaise(void) {
+    pm->ps->weaponDelay=0;
+    pm->ps->stats[STAT_COD1_ADS]=pm->ps->stats[STAT_COD1_ADS_REMAINDER]=0;
+    pm->ps->stats[STAT_COD1_RELOAD]=pm->ps->stats[STAT_COD1_SWITCH_TARGET]=0;
+    pm->ps->stats[STAT_COD1_SHOT_CONE]=0;
+    pm->ps->stats[STAT_COD1_EDGES]&=(CW_EDGE_ATTACK|CW_EDGE_MODE|CW_EDGE_MELEE|COD1_LEAN_ACTIVE|COD1_LAND_SLOW);
+    CW_StoreSpread(pm->ps,25500);
+}
 static void PM_BeginWeaponChange( int oldweapon, int newweapon, qboolean reload ) {  //----(SA)	modified to play 1st person alt-mode transition animations.
 	int switchtime;
 	qboolean altswitch, showdrop;
@@ -2076,9 +2268,19 @@ static void PM_BeginWeaponChange( int oldweapon, int newweapon, qboolean reload 
 		pm->ps->weaponTime = 0;
 		pm->ps->weaponstate = WEAPON_RAISING;
 		pm->ps->weapon = newweapon;
+		if(PM_Cod1ReloadWeapon(newweapon)) {
+			PM_Cod1ResetRaise();
+			pm->ps->weaponTime=CW_StowTime(CW_PSDef(pm->ps),1);
+		}
 		return;
 	}
 
+    if(PM_Cod1ReloadWeapon(oldweapon) && (pm->ps->stats[STAT_COD1_RELOAD] || pm->ps->weaponstate==WEAPON_COD1_RECHAMBER)) {
+        /* Cancel the pending insertion when changing weapon. Already inserted
+         * ammo stays inserted; no second transfer at completion. */
+        pm->ps->stats[STAT_COD1_RELOAD]=0;
+        pm->ps->weaponDelay=pm->ps->weaponTime=0;
+    }
 	altswitch = (qboolean)( newweapon == weapAlts[oldweapon] );
 
 	showdrop = qtrue;
@@ -2129,35 +2331,32 @@ static void PM_BeginWeaponChange( int oldweapon, int newweapon, qboolean reload 
 		pm->ps->weaponstate = WEAPON_DROPPING;
 	}
 
-	switchtime = 250;   // dropping/raising usually takes 1/4 sec.
-	// sometimes different switch times for alt weapons
-	switch ( oldweapon ) {
-	case WP_LUGER:
-		if ( altswitch ) {
-			switchtime = 50;
+	if ( PM_Cod1ReloadWeapon( oldweapon ) ) {
+		switchtime = CW_StowTime( CW_PSDef( pm->ps ), 0 );
+	} else {
+		switchtime = 250;   // dropping/raising usually takes 1/4 sec.
+		// sometimes different switch times for alt weapons
+		switch ( oldweapon ) {
+		case WP_LUGER:
+			if ( altswitch ) {
+				switchtime = 50;
+			}
+			break;
+		case WP_SILENCER:
+			if ( altswitch ) {
+				switchtime = 1200;
+			}
+			break;
+		case WP_FG42:
+		case WP_FG42SCOPE:
+			if ( altswitch ) {
+				switchtime = 50;        // fast
+			}
+			break;
+		default:
+			break;
 		}
-		break;
-	case WP_SILENCER:
-		if ( altswitch ) {
-			switchtime = 1200;
-		}
-		break;
-	case WP_FG42:
-	case WP_FG42SCOPE:
-		if ( altswitch ) {
-			switchtime = 50;        // fast
-		}
-		break;
-
-//		case WP_MAUSER:
-//		case WP_SNIPERRIFLE:
-//		case WP_GARAND:
-//		case WP_SNOOPERSCOPE:
-//			if(altswitch)
-//				switchtime  = 100;
-//			break;
 	}
-
 	pm->ps->weaponTime += switchtime;
 }
 
@@ -2208,29 +2407,35 @@ static void PM_FinishWeaponChange( void ) {
 		return;
 	}
 
-	// dropping/raising usually takes 1/4 sec.
-	switchtime = 250;
+	if ( PM_Cod1ReloadWeapon( newweapon ) ) {
+		switchtime = CW_StowTime( CW_PSDef( pm->ps ), 1 );
+		PM_Cod1ResetRaise();
+	} else {
+		// dropping/raising usually takes 1/4 sec.
+		switchtime = 250;
 
-	// sometimes different switch times for alt weapons
-	switch ( newweapon ) {
-	case WP_LUGER:
-		if ( newweapon == weapAlts[oldweapon] ) {
-			switchtime = 50;
+		// sometimes different switch times for alt weapons
+		switch ( newweapon ) {
+		case WP_LUGER:
+			if ( newweapon == weapAlts[oldweapon] ) {
+				switchtime = 50;
+			}
+			break;
+		case WP_SILENCER:
+			if ( newweapon == weapAlts[oldweapon] ) {
+				switchtime = 1190;
+			}
+			break;
+		case WP_FG42:
+		case WP_FG42SCOPE:
+			if ( newweapon == weapAlts[oldweapon] ) {
+				switchtime = 50;        // fast
+			}
+			break;
+		default:
+			break;
 		}
-		break;
-	case WP_SILENCER:
-		if ( newweapon == weapAlts[oldweapon] ) {
-			switchtime = 1190;
-		}
-		break;
-	case WP_FG42:
-	case WP_FG42SCOPE:
-		if ( newweapon == weapAlts[oldweapon] ) {
-			switchtime = 50;        // fast
-		}
-		break;
 	}
-
 	pm->ps->weaponTime += switchtime;
 
 	// make scripting aware of new weapon
@@ -2257,17 +2462,26 @@ PM_ReloadClip
 static void PM_ReloadClip( int weapon ) {
 	int ammoreserve, ammoclip, ammomove;
 
-	ammoreserve = pm->ps->ammo[ BG_FindAmmoForWeapon( weapon )];
+	ammoreserve = pm->ps->ammo[ BG_PlayerAmmoIndex(pm->ps, weapon )];
 	ammoclip    = pm->ps->ammoclip[BG_FindClipForWeapon( weapon )];
 
-	ammomove = ammoTable[weapon].maxclip - ammoclip;
+	ammomove = (PM_Cod1ReloadWeapon(weapon)?CW_MaxClip(pm->ps,weapon):ammoTable[weapon].maxclip) - ammoclip;
+    if(PM_Cod1ReloadWeapon(weapon)) {
+        const cwDef_t *d=CW_PSDef(pm->ps);int phase=pm->ps->stats[STAT_COD1_RELOAD]&~COD1_RELOAD_STOP;
+        if(CW_Number(d,"segmentedReload")) {
+            int add=(int)CW_Number(d,phase==COD1_RELOAD_START?"reloadStartAdd":"reloadAmmoAdd");
+            if(ammomove>add)ammomove=add;
+        }
+        if(ammomove<0)ammomove=0;
+        pm->ps->cod1Rechamber&=~CW_BoltBit(weapon);
+    }
 
 	if ( ammoreserve < ammomove ) {
 		ammomove = ammoreserve;
 	}
 
 	if ( ammomove ) {
-		pm->ps->ammo[ BG_FindAmmoForWeapon( weapon )] -= ammomove;
+		pm->ps->ammo[ BG_PlayerAmmoIndex(pm->ps, weapon )] -= ammomove;
 		pm->ps->ammoclip[BG_FindClipForWeapon( weapon )] += ammomove;
 	}
 
@@ -2283,7 +2497,15 @@ PM_FinishWeaponReload
 */
 
 static void PM_FinishWeaponReload( void ) {
-	PM_ReloadClip( pm->ps->weapon );          // move ammo into clip
+    if(PM_Cod1ReloadWeapon(pm->ps->weapon) && pm->ps->stats[STAT_COD1_RELOAD]) {
+        const cwDef_t *d=CW_PSDef(pm->ps);int phase=pm->ps->stats[STAT_COD1_RELOAD];
+        if(CW_Number(d,"segmentedReload") && (phase&~COD1_RELOAD_STOP)!=COD1_RELOAD_END) {
+            PM_Cod1ReloadPhase(!(phase&COD1_RELOAD_STOP) && PM_Cod1CanReload(d)?COD1_RELOAD_LOOP:COD1_RELOAD_END);return;
+        }
+        pm->ps->stats[STAT_COD1_RELOAD]=0;
+        pm->ps->weaponDelay=0;
+        PM_StartWeaponAnim(WEAP_IDLE1);
+    } else PM_ReloadClip( pm->ps->weapon ); // Legacy RTCW inserts at finish.
 	pm->ps->weaponstate = WEAPON_READY;     // ready to fire
 }
 
@@ -2298,43 +2520,48 @@ void PM_CheckForReload( int weapon ) {
 	qboolean doReload = qfalse;
 	int clipWeap, ammoWeap;
 
-	if ( pm->noWeapClips ) { // no need to reload
+	if ( pm->noWeapClips ) {
 		return;
 	}
 
-	// user is forcing a reload (manual reload)
 	reloadRequested = (qboolean)( pm->cmd.wbuttons & WBUTTON_RELOAD );
 
 	switch ( pm->ps->weaponstate ) {
 	case WEAPON_RAISING:
-	case WEAPON_RAISING_TORELOAD:       //----(SA)	added
+	case WEAPON_RAISING_TORELOAD:
 	case WEAPON_DROPPING:
-	case WEAPON_DROPPING_TORELOAD:      //----(SA)	added
+	case WEAPON_DROPPING_TORELOAD:
 	case WEAPON_READYING:
 	case WEAPON_RELAXING:
 	case WEAPON_RELOADING:
 		return;
-		break;
 	default:
 		break;
 	}
 
 	clipWeap = BG_FindClipForWeapon( weapon );
-	ammoWeap = BG_FindAmmoForWeapon( weapon );
+	ammoWeap = BG_PlayerAmmoIndex( pm->ps, weapon );
 
-	// don't allow reloading for these weapons.  when the player hits 'reload' or 'fire'
-	// when the weapon is empty, it will switch away to the primary.  (so player can see results of
-	// last shot through scope without it auto-switching away for the reload)
-	if ( !pm->ps->aiChar ) {  // RF, added this check since this confuses the AI
+	/* CoD1 cleanup: WeaponDef is the sole reload policy for native player
+	 * weapons.  RTCW scoped-alt/akimbo/maxclip rules remain legacy-only. */
+	if ( PM_Cod1ReloadWeapon( weapon ) ) {
+		const cwDef_t *d = CW_PSDef( pm->ps );
+		if ( !PM_Cod1CanReload( d ) ) {
+			return;
+		}
+		if ( reloadRequested || ( !pm->ps->ammoclip[clipWeap] && pm->ps->ammo[ammoWeap] ) ) {
+			PM_BeginWeaponReload( weapon );
+		}
+		return;
+	}
+
+	if ( !pm->ps->aiChar ) {
 		switch ( weapon ) {
 		case WP_SNOOPERSCOPE:
 		case WP_SNIPERRIFLE:
 		case WP_FG42SCOPE:
 			if ( reloadRequested ) {
-				doReload = qtrue;
-				if ( !( pm->ps->ammo[ammoWeap] ) ) { // no ammo left. when you switch out, don't try to reload
-					doReload = qfalse;
-				}
+				doReload = (qboolean)( pm->ps->ammo[ammoWeap] != 0 );
 				PM_BeginWeaponChange( weapon, weapAlts[weapon], doReload );
 			}
 			return;
@@ -2343,53 +2570,39 @@ void PM_CheckForReload( int weapon ) {
 		}
 	}
 
-
-//	if ( pm->ps->weaponTime <= 0) {
-
 	if ( reloadRequested ) {
-		// don't allow a force reload if it won't have any effect (no more ammo reserves or full clip)
 		if ( pm->ps->ammo[ammoWeap] ) {
 			if ( pm->ps->ammoclip[clipWeap] < ammoTable[weapon].maxclip ) {
 				doReload = qtrue;
 			}
-			if ( weapon == WP_AKIMBO ) {
-				// akimbo should also check Colt status
-				if ( pm->ps->ammoclip[BG_FindClipForWeapon( WP_COLT )] < ammoTable[BG_FindClipForWeapon( WP_COLT )].maxclip ) {
-					doReload = qtrue;
-				}
+			if ( weapon == WP_AKIMBO &&
+				 pm->ps->ammoclip[BG_FindClipForWeapon( WP_COLT )] < ammoTable[BG_FindClipForWeapon( WP_COLT )].maxclip ) {
+				doReload = qtrue;
 			}
 		}
-	}
-	// clip is empty, but you have reserves.  (auto reload)
-	else if ( !( pm->ps->ammoclip[clipWeap] ) ) {   // clip is empty...
-		if ( pm->ps->ammo[ammoWeap] ) {         // and you have reserves
-			if ( weapon == WP_AKIMBO ) {    // if colt's got ammo, don't force reload yet (you know you've got it 'out' since you've got the akimbo selected
-				if ( !( pm->ps->ammoclip[WP_COLT] ) ) {
+	} else if ( !pm->ps->ammoclip[clipWeap] && pm->ps->ammo[ammoWeap] ) {
+		if ( weapon == WP_AKIMBO ) {
+			if ( !pm->ps->ammoclip[WP_COLT] ) {
+				doReload = qtrue;
+			}
+		} else if ( weapon == WP_COLT ) {
+			if ( pm->ps->weapon == WP_AKIMBO ) {
+				if ( !pm->ps->ammoclip[WP_AKIMBO] ) {
 					doReload = qtrue;
-				}
-				// likewise.  however, you need to check if you've got the akimbo selected, since you could have the colt alone
-			} else if ( weapon == WP_COLT ) {   // weapon checking for reload is colt...
-				if ( pm->ps->weapon == WP_AKIMBO ) {    // you've got the akimbo selected...
-					if ( !( pm->ps->ammoclip[WP_AKIMBO] ) ) {   // and it's got no ammo either
-						doReload = qtrue;       // so reload
-					}
-				} else {     // single colt selected
-					doReload = qtrue;       // so reload
 				}
 			} else {
 				doReload = qtrue;
 			}
+		} else {
+			doReload = qtrue;
 		}
 	}
-
-//	}
 
 	if ( doReload ) {
 		PM_BeginWeaponReload( weapon );
 	}
-
-
 }
+
 
 /*
 ==============
@@ -2417,7 +2630,7 @@ static void PM_SwitchIfEmpty( void ) {
 		return;
 	}
 
-	if ( pm->ps->ammo[ BG_FindAmmoForWeapon( pm->ps->weapon )] ) { // still got ammo in reserve
+	if ( pm->ps->ammo[ BG_PlayerAmmoIndex(pm->ps, pm->ps->weapon )] ) { // still got ammo in reserve
 		return;
 	}
 
@@ -2449,7 +2662,7 @@ void PM_WeaponUseAmmo( int wp, int amount ) {
 	int takeweapon;
 
 	if ( pm->noWeapClips ) {
-		pm->ps->ammo[ BG_FindAmmoForWeapon( wp )] -= amount;
+		pm->ps->ammo[ BG_PlayerAmmoIndex(pm->ps, wp )] -= amount;
 	} else {
 		takeweapon = BG_FindClipForWeapon( wp );
 		if ( wp == WP_AKIMBO ) {
@@ -2473,7 +2686,7 @@ int PM_WeaponAmmoAvailable( int wp ) {
 	int takeweapon;
 
 	if ( pm->noWeapClips ) {
-		return pm->ps->ammo[ BG_FindAmmoForWeapon( wp )];
+		return pm->ps->ammo[ BG_PlayerAmmoIndex(pm->ps, wp )];
 	} else {
 //		return pm->ps->ammoclip[BG_FindClipForWeapon( wp )];
 		takeweapon = BG_FindClipForWeapon( wp );
@@ -2495,7 +2708,7 @@ PM_WeaponClipEmpty
 */
 int PM_WeaponClipEmpty( int wp ) {
 	if ( pm->noWeapClips ) {
-		if ( !( pm->ps->ammo[ BG_FindAmmoForWeapon( wp )] ) ) {
+		if ( !( pm->ps->ammo[ BG_PlayerAmmoIndex(pm->ps, wp )] ) ) {
 			return 1;
 		}
 	} else {
@@ -2534,7 +2747,7 @@ void PM_CoolWeapons( void ) {
 
 	// a weapon is currently selected, convert current heat value to 0-255 range for client transmission
 	if ( pm->ps->weapon ) {
-		pm->ps->curWeapHeat = ( ( (float)pm->ps->weapHeat[pm->ps->weapon] / (float)ammoTable[pm->ps->weapon].maxHeat ) ) * 255.0f;
+		pm->ps->curWeapHeat = (!CW_Active(pm->ps) && ammoTable[pm->ps->weapon].maxHeat>0) ? (pm->ps->weapHeat[pm->ps->weapon]/(float)ammoTable[pm->ps->weapon].maxHeat)*255.0f : 0;
 
 //		if(pm->ps->weapHeat[pm->ps->weapon])
 //			Com_Printf("pm heat: %d, %d\n", pm->ps->weapHeat[pm->ps->weapon], pm->ps->curWeapHeat);
@@ -2723,8 +2936,68 @@ extern vmCvar_t g_reloading;
 PM_Weapon
 ==============
 */
+#include "bg_cod1_ladder_weapon.h"
+#include "bg_cod1_handheld.h"
+
+/* RTCW_WEAPON_CLEANUP_R6: keep CoD player fire presentation out of the
+ * legacy weapon switches. These helpers intentionally preserve the exact
+ * pre-R6 animation choices; they do not redefine native XAnim timing. */
+static void PM_Cod1StartFirePresentation( qboolean wasFiring, const cwDef_t *d ) {
+    if ( !wasFiring ) {
+        pm->ps->weaponDelay = (int)CW_Number( d, "fireDelay" );
+        return;
+    }
+    switch ( pm->ps->weapon ) {
+    case WP_MP40:
+    case WP_THOMPSON:
+    case WP_STEN:
+    case WP_FG42:
+        BG_AnimScriptEvent( pm->ps, ANIM_ET_FIREWEAPON, qtrue, qtrue );
+        break;
+    default:
+        BG_AnimScriptEvent( pm->ps, ANIM_ET_FIREWEAPON, qfalse, qtrue );
+        break;
+    }
+}
+
+static void PM_Cod1ShotPresentation( int weapattackanim ) {
+    switch ( pm->ps->weapon ) {
+    case WP_MP40:
+    case WP_THOMPSON:
+    case WP_STEN:
+        PM_ContinueWeaponAnim( weapattackanim );
+        break;
+    default:
+        PM_StartWeaponAnim( weapattackanim );
+        break;
+    }
+}
+
+/* RTCW_WEAPON_CLEANUP_R7: before R7 four CoD weapon enum values passed
+ * through the legacy RTCW post-shot switch only far enough to consume one
+ * libc rand() value.  Prediction already runs its own process-local RNG, so
+ * this draw never carried synchronized weapon state.  Keep the draw for now
+ * solely to avoid shifting unrelated legacy/cosmetic RNG streams while the
+ * meaningless RTCW addTime/aimSpread calculations are removed from CoD. */
+static void PM_Cod1PreserveLegacyShotRng( void ) {
+    switch ( pm->ps->weapon ) {
+    case WP_FG42:
+    case WP_MP40:
+    case WP_THOMPSON:
+    case WP_STEN:
+        (void)rand();
+        break;
+    default:
+        break;
+    }
+}
+
 static void PM_Weapon( void ) {
 	int addTime;
+	int cod1FireCarry = 0;
+    int cod1AttackEdge=0,cod1ModeEdge=0,cod1MeleeEdge=0;
+    const cwDef_t *cod1Def=CW_PSDef(pm->ps);
+	qboolean cod1Weapon = CW_Active(pm->ps) && (pm->cmd.wbuttons & WBUTTON_COD1_STANCE);
 	int ammoNeeded;
 	qboolean delayedFire;       //----(SA)  true if the delay time has just expired and this is the frame to send the fire event
 	int aimSpreadScaleAdd;
@@ -2756,57 +3029,90 @@ static void PM_Weapon( void ) {
 
 	// check for dead player
 	if ( pm->ps->stats[STAT_HEALTH] <= 0 ) {
-		pm->ps->weapon = WP_NONE;
+        if(pm->ps->stats[STAT_COD1_RELOAD]) {
+            pm->ps->stats[STAT_COD1_RELOAD]=0;
+            pm->ps->weaponTime=pm->ps->weaponDelay=0;
+        }
+		pm->ps->stats[STAT_COD1_ADS]=pm->ps->stats[STAT_COD1_ADS_REMAINDER]=pm->ps->stats[STAT_COD1_SWITCH_TARGET]=0;
+        pm->ps->stats[STAT_COD1_EDGES]&=COD1_LEAN_ACTIVE;
+        if(cod1Weapon){pm->ps->weaponTime=pm->ps->weaponDelay=pm->ps->grenadeTimeLeft=pm->ps->cod1Rechamber=0;CW_StoreSpread(pm->ps,0);}
+        pm->ps->weapon = WP_NONE;
 		return;
 	}
 
 	// don't allow any weapon stuff if using the mg42
 	if ( pm->ps->persistant[PERS_HWEAPON_USE] ) {
+        pm->ps->stats[STAT_COD1_ADS]=pm->ps->stats[STAT_COD1_ADS_REMAINDER]=0;
+		pm->ps->stats[STAT_COD1_EDGES]&=~(CW_ADS_REQUESTED|CW_ADS_RISING|CW_PRONE_LOCK);
 		return;
 	}
+
+    /* A server pickup can remove the held weapon before a newer selection
+     * reaches us. Never complete its pending shot/reload during that gap. */
+    if(!pm->ps->aiChar && cod1Def && !COM_BitCheck(pm->ps->weapons,pm->ps->weapon)) {
+        pm->ps->weaponTime=pm->ps->weaponDelay=pm->ps->grenadeTimeLeft=pm->ps->cod1Rechamber=0;
+        pm->ps->stats[STAT_COD1_RELOAD]=pm->ps->stats[STAT_COD1_SWITCH_TARGET]=0;
+        pm->ps->stats[STAT_COD1_ADS]=pm->ps->stats[STAT_COD1_ADS_REMAINDER]=0;
+        pm->ps->weaponstate=WEAPON_READY;
+        if(pm->cmd.weapon>WP_NONE && pm->cmd.weapon<WP_NUM_WEAPONS &&
+           COM_BitCheck(pm->ps->weapons,pm->cmd.weapon))
+            PM_BeginWeaponChange(WP_NONE,pm->cmd.weapon,qfalse);
+        else {
+            int slot;
+            for(slot=1;slot<CW_SLOT_COUNT;slot++)if(pm->ps->cod1Slots[slot])break;
+            if(slot==CW_SLOT_COUNT)pm->ps->weapon=WP_NONE;
+        }
+        return;
+    }
+
+    if(cod1Weapon && cod1Def) {
+        int bits=pm->ps->stats[STAT_COD1_EDGES];
+        cod1AttackEdge=(pm->cmd.buttons&BUTTON_ATTACK) && !(bits&CW_EDGE_ATTACK);
+        cod1ModeEdge=(pm->cmd.buttons&BUTTON_GESTURE) && !(bits&CW_EDGE_MODE);
+        cod1MeleeEdge=(pm->cmd.buttons&BUTTON_SPRINT) && !(bits&CW_EDGE_MELEE);
+        /* PATCH49: request arbitration already ran before movement. */
+        pm->ps->stats[STAT_COD1_EDGES]=(bits&(CW_ADS_RISING|CW_ADS_REQUESTED|CW_PRONE_LOCK|CW_MELEE_HIT|COD1_LEAN_ACTIVE|CW_LADDER_WEAPON|CW_LADDER_HIDDEN|COD1_LAND_SLOW))|
+            ((pm->cmd.buttons&BUTTON_ATTACK)?CW_EDGE_ATTACK:0)|
+            ((pm->cmd.buttons&BUTTON_GESTURE)?CW_EDGE_MODE:0)|
+            ((pm->cmd.buttons&BUTTON_SPRINT)?CW_EDGE_MELEE:0);
+        /* PATCH48: input intent survives reload. Evaluate its ADS gate before
+         * timers/acceptance; rejected R still leaves aiming intact (PATCH46). */
+        CW_UpdateADS(pm->ps,cod1Def,CW_ADSTarget(pm->ps,cod1Def),pml.msec);
+        CW_UpdateSpread(pm->ps,cod1Def,&pm->cmd,pml.msec);
+        if(PM_Cod1DiscardSpent(cod1Def))return;
+        if(PM_Cod1LadderWeapon(cod1Def))return;
+        if(PM_Cod1Melee(cod1Def,cod1MeleeEdge))return;
+        if(PM_Cod1ExtraWeapon(cod1Def,cod1AttackEdge))return;
+        if(pm->ps->weaponstate==WEAPON_COD1_SWITCH) {
+            if(pm->cmd.weapon!=pm->ps->weapon) {
+                pm->ps->stats[STAT_COD1_SWITCH_TARGET]=0;pm->ps->weaponTime=0;pm->ps->weaponstate=WEAPON_READY;
+            } else {
+                pm->ps->weaponTime-=pml.msec;
+                if(pm->ps->weaponTime<=0) {
+                    int target=pm->ps->stats[STAT_COD1_SWITCH_TARGET]-1;
+                    if(CW_Get(target) && CW_FamilyRoot(target)==CW_WeaponRoot(pm->ps->weapon))CW_SetMode(pm->ps,pm->ps->weapon,target);
+                    pm->ps->stats[STAT_COD1_SWITCH_TARGET]=0;pm->ps->weaponTime=0;pm->ps->weaponstate=WEAPON_READY;
+                }
+                return;
+            }
+        }
+        if(cod1ModeEdge && pm->cmd.weapon==pm->ps->weapon && pm->ps->weaponTime<=0 &&
+           (pm->ps->weaponstate==WEAPON_READY || pm->ps->weaponstate==WEAPON_FIRING) && CW_Get(cod1Def->altIndex)) {
+            pm->ps->stats[STAT_COD1_SWITCH_TARGET]=cod1Def->altIndex+1;
+            pm->ps->weaponTime=CW_SwitchTime(cod1Def);pm->ps->weaponDelay=0;pm->ps->weaponstate=WEAPON_COD1_SWITCH;
+            BG_AddPredictableEventToPlayerstate(EV_FILL_CLIP,3,pm->ps);return;
+        }
+    } else {
+        pm->ps->stats[STAT_COD1_ADS]=pm->ps->stats[STAT_COD1_ADS_REMAINDER]=0;
+        pm->ps->stats[STAT_COD1_EDGES]&=(COD1_LEAN_ACTIVE|COD1_LAND_SLOW);pm->ps->stats[STAT_COD1_SWITCH_TARGET]=0;
+    }
 
 	// RF, remoed this, was preventing lava from hurting player
 	//pm->watertype = 0;
 
-	akimboFire = BG_AkimboFireSequence( pm->ps->weapon, pm->ps->ammoclip[WP_AKIMBO], pm->ps->ammoclip[WP_COLT] );
+	akimboFire = cod1Weapon ? qfalse : BG_AkimboFireSequence( pm->ps->weapon, pm->ps->ammoclip[WP_AKIMBO], pm->ps->ammoclip[WP_COLT] );
 
-	if ( 0 ) {
-		switch ( pm->ps->weaponstate ) {
-		case WEAPON_READY:
-			Com_Printf( " -- WEAPON_READY\n" );
-			break;
-		case WEAPON_RAISING:
-			Com_Printf( " -- WEAPON_RAISING\n" );
-			break;
-		case WEAPON_RAISING_TORELOAD:       //----(SA)	added
-			Com_Printf( " -- WEAPON_RAISING_TORELOAD\n" );
-			break;
-		case WEAPON_DROPPING:
-			Com_Printf( " -- WEAPON_DROPPING\n" );
-			break;
-		case WEAPON_DROPPING_TORELOAD:      //----(SA)	added
-			Com_Printf( " -- WEAPON_DROPPING_TORELOAD\n" );
-			break;
-		case WEAPON_READYING:
-			Com_Printf( " -- WEAPON_READYING\n" );
-			break;
-		case WEAPON_RELAXING:
-			Com_Printf( " -- WEAPON_RELAXING\n" );
-			break;
-		case WEAPON_VENOM_REST:
-			Com_Printf( " -- WEAPON_VENOM_REST\n" );
-			break;
-		case WEAPON_FIRING:
-			Com_Printf( " -- WEAPON_FIRING\n" );
-			break;
-		case WEAPON_FIRINGALT:
-			Com_Printf( " -- WEAPON_FIRINGALT\n" );
-			break;
-		case WEAPON_RELOADING:
-			Com_Printf( " -- WEAPON_RELOADING\n" );
-			break;
-		}
-	}
+	/* R6: permanently disabled weaponstate debug switch removed. */
 
 	// dec venom timer
 	if ( pm->ps->venomTime > 0 ) {
@@ -2853,7 +3159,7 @@ static void PM_Weapon( void ) {
 
 	delayedFire = qfalse;
 
-	if ( pm->ps->weapon == WP_GRENADE_LAUNCHER || pm->ps->weapon == WP_GRENADE_PINEAPPLE || pm->ps->weapon == WP_DYNAMITE ) {
+	if ( !cod1Weapon && ( pm->ps->weapon == WP_GRENADE_LAUNCHER || pm->ps->weapon == WP_GRENADE_PINEAPPLE || pm->ps->weapon == WP_DYNAMITE ) ) {
 		// (SA) AI's don't set grenadeTimeLeft on +attack, so I don't check for (pm->ps->aiChar) here
 		if ( pm->ps->grenadeTimeLeft > 0 ) {
 			if ( pm->ps->weapon == WP_DYNAMITE ) {
@@ -2906,11 +3212,17 @@ static void PM_Weapon( void ) {
 	}
 }
 
+/* BRASS_R1: observe reload before the existing add-ammo bit is cleared. */
+if(cod1Weapon)CWB_CheckReload(pm->ps,pml.msec);
+
 if ( pm->ps->weaponDelay > 0 ) {
 	pm->ps->weaponDelay -= pml.msec;
 	if ( pm->ps->weaponDelay <= 0 ) {
 		pm->ps->weaponDelay = 0;
-		delayedFire = qtrue;            // weapon delay has expired.  Fire this frame
+        if(PM_Cod1ReloadWeapon(pm->ps->weapon) && pm->ps->weaponstate==WEAPON_RELOADING && pm->ps->stats[STAT_COD1_RELOAD]) {
+            PM_ReloadClip(pm->ps->weapon);
+            delayedFire=qfalse;
+        } else delayedFire = qtrue; // Only a shot delay produces a firing event.
 
 		// double check the player is still holding the fire button down for these weapons
 		// so you don't get a delayed "non-fire" (fire hit and released, then shot fires)
@@ -2936,41 +3248,15 @@ if ( pm->ps->weaponstate == WEAPON_RELAXING ) {
 if ( pm->ps->weaponTime > 0 ) {
 	pm->ps->weaponTime -= pml.msec;
 	if ( pm->ps->weaponTime < 0 ) {
+		/* Retain fractional command-step overshoot during a held burst. */
+		if (cod1Weapon && pm->ps->weaponstate == WEAPON_FIRING && (pm->cmd.buttons & BUTTON_ATTACK) && pm->cmd.weapon == pm->ps->weapon) cod1FireCarry = pm->ps->weaponTime;
 		pm->ps->weaponTime = 0;
 	}
 
-//----(SA)	removed for DM and id
-/*
-		// RF, testing special case Pistol, which fires faster if you tap the fire button
-		if ( pm->ps->weapon == WP_LUGER ) {
-			if ( pm->ps->releasedFire ) {
-				if (pm->ps->weaponTime <= 250 && (pm->cmd.buttons & BUTTON_ATTACK)) {
-					pm->ps->weaponTime = 0;
-				}
-			} else if (!(pm->cmd.buttons & BUTTON_ATTACK)) {
-				pm->ps->releasedFire = qtrue;
-			}
-		} else if ( pm->ps->weapon == WP_COLT ) {
-			if ( pm->ps->releasedFire ) {
-				if (pm->ps->weaponTime <= 150 && (pm->cmd.buttons & BUTTON_ATTACK)) {
-					pm->ps->weaponTime = 0;
-				}
-			} else if (!(pm->cmd.buttons & BUTTON_ATTACK)) {
-				pm->ps->releasedFire = qtrue;
-			}
-		} else if ( pm->ps->weapon == WP_SILENCER ) {
-			if ( pm->ps->releasedFire ) {
-				if (pm->ps->weaponTime <= 250 && (pm->cmd.buttons & BUTTON_ATTACK)) {
-					pm->ps->weaponTime = 0;
-				}
-			} else if (!(pm->cmd.buttons & BUTTON_ATTACK)) {
-				pm->ps->releasedFire = qtrue;
-			}
-		}
-*/
-//----(SA)	end
+
 
 // JPW NERVE -- added back for multiplayer pistol balancing
+	if ( !cod1Weapon ) {
 #ifdef CGAMEDLL
 	if ( cg_gameType.integer != GT_SINGLE_PLAYER ) {
 #endif
@@ -2996,6 +3282,7 @@ if ( pm->ps->weaponTime > 0 ) {
 	}
 }
 // jpw
+	}
 
 }
 
@@ -3005,7 +3292,8 @@ if ( pm->ps->weaponTime > 0 ) {
 // again if lowering or raising
 
 // TTimo gcc: suggest parentheses around && within ||
-if ( pm->ps->weaponTime <= 0 || ( !weaponstateFiring && pm->ps->weaponDelay <= 0 ) ) {
+if ( pm->ps->weaponTime <= 0 || ( !weaponstateFiring && pm->ps->weaponDelay <= 0 ) ||
+    (PM_Cod1ReloadWeapon(pm->ps->weapon) && pm->ps->weaponstate==WEAPON_RELOADING && pm->ps->stats[STAT_COD1_RELOAD]) ) {
 	if ( pm->ps->weapon != pm->cmd.weapon ) {
 		PM_BeginWeaponChange( pm->ps->weapon, pm->cmd.weapon, qfalse );     //----(SA)	modified
 	}
@@ -3020,6 +3308,7 @@ if ( pm->ps->weaponTime > 0 || pm->ps->weaponDelay > 0 ) {
 
 if ( pm->ps->weaponstate == WEAPON_RELOADING ) {
 	PM_FinishWeaponReload();
+    if(pm->ps->weaponstate==WEAPON_RELOADING)return;
 }
 
 // change weapon if time
@@ -3046,7 +3335,7 @@ if ( pm->ps->weapon == WP_NONE ) {  // this is possible since the player starts 
 
 // JPW NERVE -- in multiplayer, don't allow panzerfaust or dynamite to fire if charge bar isn't full
 #ifdef GAMEDLL
-if ( g_gametype.integer == GT_WOLF ) {
+if ( !cod1Weapon && g_gametype.integer == GT_WOLF ) {
 	if ( pm->ps->weapon == WP_PANZERFAUST ) {
 		if ( pm->cmd.serverTime - pm->ps->classWeaponTime < g_soldierChargeTime.integer ) {
 			return;
@@ -3061,7 +3350,7 @@ if ( g_gametype.integer == GT_WOLF ) {
 }
 #endif
 #ifdef CGAMEDLL
-if ( cg_gameType.integer == GT_WOLF ) {
+if ( !cod1Weapon && cg_gameType.integer == GT_WOLF ) {
 	if ( pm->ps->weapon == WP_PANZERFAUST ) {
 		if ( pm->cmd.serverTime - pm->ps->classWeaponTime < cg_soldierChargeTime.integer ) {
 			return;
@@ -3076,7 +3365,23 @@ if ( cg_gameType.integer == GT_WOLF ) {
 #endif
 // jpw
 
+/* A bolt is required after the fire phase even if attack remains held.
+ * Its pending bit survives switching until the bolt/add-ammo event. */
+if(cod1Weapon && CW_Number(cod1Def,"boltAction") && (pm->ps->cod1Rechamber&CW_BoltBit(pm->ps->weapon))) {
+    int total=(int)CW_Number(cod1Def,"rechamberTime"),delay=(int)CW_Number(cod1Def,"rechamberBoltTime");
+    pm->ps->weaponstate=WEAPON_COD1_RECHAMBER;pm->ps->weaponTime=total;
+    pm->ps->weaponDelay=delay>0 && delay<total?delay:1;
+    BG_AddPredictableEventToPlayerstate(EV_FILL_CLIP,7,pm->ps);return;
+}
 // check for fire
+if(cod1Weapon && cod1Def && CW_Number(cod1Def,"semiAuto") && !cod1AttackEdge) {
+    /* A completed single shot must leave FIRING even while attack is held.
+     * Otherwise the prone firing lock can never be released. */
+    if(pm->ps->weaponstate==WEAPON_FIRING) {
+        PM_ContinueWeaponAnim(WEAP_IDLE1);pm->ps->weaponstate=WEAPON_READY;
+    }
+    return;
+}
 if ( !( pm->cmd.buttons & ( BUTTON_ATTACK | WBUTTON_ATTACK2 ) ) && !delayedFire ) {     // if not on fire button and there's not a delayed shot this frame...
 	pm->ps->weaponTime  = 0;
 	pm->ps->weaponDelay = 0;
@@ -3100,7 +3405,7 @@ if ( pm->ps->eFlags & EF_ZOOMING ) {
 }
 
 // player is leaning - no fire
-if ( pm->ps->leanf != 0 && pm->ps->weapon != WP_GRENADE_LAUNCHER && pm->ps->weapon != WP_GRENADE_PINEAPPLE && pm->ps->weapon != WP_DYNAMITE ) {
+if ( !BG_Cod1LeanActive(pm->ps) && pm->ps->leanf != 0 && pm->ps->weapon != WP_GRENADE_LAUNCHER && pm->ps->weapon != WP_GRENADE_PINEAPPLE && pm->ps->weapon != WP_DYNAMITE ) {
 	return;
 }
 
@@ -3116,6 +3421,9 @@ if ( pm->waterlevel == 3 ) {
 }
 
 // start the animation even if out of ammo
+if ( cod1Weapon && cod1Def ) {
+    PM_Cod1StartFirePresentation( weaponstateFiring, cod1Def );
+} else {
 switch ( pm->ps->weapon )
 {
 default:
@@ -3137,7 +3445,7 @@ case WP_FG42SCOPE:
 			// AI get fast spin-up
 			pm->ps->weaponDelay = 150;
 		} else {
-			pm->ps->weaponDelay = ammoTable[pm->ps->weapon].fireDelayTime;          // delay so the weapon can get up into position before firing (and showing the flash)
+			pm->ps->weaponDelay = ammoTable[pm->ps->weapon].fireDelayTime;          // legacy/AI fire delay
 		}
 	} else {
 		BG_AnimScriptEvent( pm->ps, ANIM_ET_FIREWEAPON, qtrue, qtrue );
@@ -3197,66 +3505,77 @@ case WP_GRENADE_PINEAPPLE:
 	break;
 }
 
+
+}
+
 pm->ps->weaponstate = WEAPON_FIRING;
+
+/* Original start-fire marks the prone lock before checking the magazine.
+ * Commands for this step were already consumed; the next step sees the lock. */
+if(cod1Weapon && (pm->ps->pm_flags&PMF_COD1_PRONE))
+    pm->ps->stats[STAT_COD1_EDGES]|=CW_PRONE_LOCK;
 
 
 
 // check for out of ammo
 
-ammoNeeded = ammoTable[pm->ps->weapon].uses;
+ammoNeeded = cod1Weapon ? 1 : ammoTable[pm->ps->weapon].uses;
 
 if ( pm->ps->weapon ) {
-	int ammoAvailable;
-	qboolean reloadingW, playswitchsound = qtrue;
-
-	ammoAvailable = PM_WeaponAmmoAvailable( pm->ps->weapon );
+	int ammoAvailable = PM_WeaponAmmoAvailable( pm->ps->weapon );
 
 	if ( ammoNeeded > ammoAvailable ) {
-
-		reloadingW = (qboolean)( ammoNeeded <= pm->ps->ammo[ BG_FindAmmoForWeapon( pm->ps->weapon )] ); // you have ammo for this, just not in the clip
-
-		if ( pm->ps->eFlags & EF_MELEE_ACTIVE ) {   // not going to be allowed to reload if holding a chair
-			reloadingW = qfalse;
-		}
-
-		if ( pm->ps->weapon == WP_SNOOPERSCOPE ) {
-			reloadingW = qfalse;
-		}
-
-		switch ( pm->ps->weapon ) {
-			// Ridah, only play if using a triggered weapon
-		case WP_GAUNTLET:
-		case WP_MONSTER_ATTACK1:
-		case WP_DYNAMITE:
-		case WP_GRENADE_LAUNCHER:
-		case WP_GRENADE_PINEAPPLE:
-			playswitchsound = qfalse;
-			break;
-
-			// some weapons not allowed to reload.  must switch back to primary first
-		case WP_SNOOPERSCOPE:
-		case WP_SNIPERRIFLE:
-		case WP_FG42SCOPE:
-			reloadingW = qfalse;
-			break;
-		}
-
-		if ( playswitchsound ) {
+		if ( cod1Weapon && cod1Def ) {
+			/* Native player weapons need only the established empty/reload cue.
+			 * RTCW chair, scoped-alt and monster policies are legacy-only. */
+			qboolean reloadingW = (qboolean)( ammoNeeded <= pm->ps->ammo[BG_PlayerAmmoIndex( pm->ps, pm->ps->weapon )] );
+			PM_AddEvent( reloadingW ? EV_EMPTYCLIP : EV_NOAMMO );
 			if ( reloadingW ) {
-				PM_AddEvent( EV_EMPTYCLIP );
+				PM_ContinueWeaponAnim( WEAP_RELOAD1 );
 			} else {
-				PM_AddEvent( EV_NOAMMO );
+				PM_ContinueWeaponAnim( WEAP_IDLE1 );
+				pm->ps->weaponTime += 500;
 			}
-		}
-
-		if ( reloadingW ) {
-			PM_ContinueWeaponAnim( WEAP_RELOAD1 );      //----(SA)
+			return;
 		} else {
-			PM_ContinueWeaponAnim( WEAP_IDLE1 );
-			pm->ps->weaponTime += 500;
-		}
+			qboolean reloadingW = (qboolean)( ammoNeeded <= pm->ps->ammo[BG_PlayerAmmoIndex( pm->ps, pm->ps->weapon )] );
+			qboolean playswitchsound = qtrue;
 
-		return;
+			if ( pm->ps->eFlags & EF_MELEE_ACTIVE ) {
+				reloadingW = qfalse;
+			}
+			if ( pm->ps->weapon == WP_SNOOPERSCOPE ) {
+				reloadingW = qfalse;
+			}
+
+			switch ( pm->ps->weapon ) {
+			case WP_GAUNTLET:
+			case WP_MONSTER_ATTACK1:
+			case WP_DYNAMITE:
+			case WP_GRENADE_LAUNCHER:
+			case WP_GRENADE_PINEAPPLE:
+				playswitchsound = qfalse;
+				break;
+			case WP_SNOOPERSCOPE:
+			case WP_SNIPERRIFLE:
+			case WP_FG42SCOPE:
+				reloadingW = qfalse;
+				break;
+			default:
+				break;
+			}
+
+			if ( playswitchsound ) {
+				PM_AddEvent( reloadingW ? EV_EMPTYCLIP : EV_NOAMMO );
+			}
+			if ( reloadingW ) {
+				PM_ContinueWeaponAnim( WEAP_RELOAD1 );
+			} else {
+				PM_ContinueWeaponAnim( WEAP_IDLE1 );
+				pm->ps->weaponTime += 500;
+			}
+			return;
+		}
 	}
 }
 
@@ -3279,8 +3598,8 @@ if ( PM_WeaponAmmoAvailable( pm->ps->weapon ) != -1 ) {
 
 // fire weapon
 
-// add weapon heat
-if ( ammoTable[pm->ps->weapon].maxHeat ) {
+// add weapon heat (legacy/AI only; CoD WeaponDefs do not use RTCW heat)
+if ( !cod1Weapon && ammoTable[pm->ps->weapon].maxHeat ) {
 	pm->ps->weapHeat[pm->ps->weapon] += ammoTable[pm->ps->weapon].nextShotTime;
 }
 
@@ -3288,20 +3607,17 @@ if ( ammoTable[pm->ps->weapon].maxHeat ) {
 
 // if this was the last round in the clip, play the 'lastshot' animation
 // this animation has the weapon in a "ready to reload" state
-if ( pm->ps->weapon == WP_AKIMBO ) {
-	if ( akimboFire ) {
-		weapattackanim = WEAP_ATTACK1;      // attack1 is right hand
-	} else {
-		weapattackanim = WEAP_ATTACK2;      // attack2 is left hand
-	}
+if ( cod1Weapon ) {
+	weapattackanim = PM_WeaponClipEmpty( pm->ps->weapon ) ? WEAP_ATTACK_LASTSHOT : WEAP_ATTACK1;
+} else if ( pm->ps->weapon == WP_AKIMBO ) {
+	weapattackanim = akimboFire ? WEAP_ATTACK1 : WEAP_ATTACK2;
 } else {
-	if ( PM_WeaponClipEmpty( pm->ps->weapon ) ) {
-		weapattackanim = WEAP_ATTACK_LASTSHOT;
-	} else {
-		weapattackanim = WEAP_ATTACK1;
-	}
+	weapattackanim = PM_WeaponClipEmpty( pm->ps->weapon ) ? WEAP_ATTACK_LASTSHOT : WEAP_ATTACK1;
 }
 
+if ( cod1Weapon ) {
+    PM_Cod1ShotPresentation( weapattackanim );
+} else {
 switch ( pm->ps->weapon ) {
 case WP_MAUSER:
 case WP_GRENADE_LAUNCHER:
@@ -3324,20 +3640,23 @@ default:
 	break;
 }
 
+}
 
 
-if ( pm->ps->weapon == WP_AKIMBO ) {
-	if ( pm->ps->weapon == WP_AKIMBO && !akimboFire ) {
-		PM_AddEvent( EV_FIRE_WEAPONB );     // really firing colt
-	} else {
-		PM_AddEvent( EV_FIRE_WEAPON );
-	}
+
+/* Capture the shot cone before adding this shot's bloom. Event dispatch runs
+ * after Pmove; using the live accumulator there would penalize the first shot. */
+if(cod1Weapon && cod1Def)pm->ps->stats[STAT_COD1_SHOT_CONE]=1+(int)(CW_SpreadDegrees(pm->ps)*1000);
+
+if ( cod1Weapon ) {
+	BG_AddPredictableEventToPlayerstate( PM_WeaponClipEmpty( pm->ps->weapon ) ? EV_FIRE_WEAPON_LASTSHOT : EV_FIRE_WEAPON,
+		CWB_WeaponParm(pm->ps), pm->ps );
+} else if ( pm->ps->weapon == WP_AKIMBO ) {
+	PM_AddEvent( akimboFire ? EV_FIRE_WEAPON : EV_FIRE_WEAPONB );
+} else if ( PM_WeaponClipEmpty( pm->ps->weapon ) ) {
+	PM_AddEvent( EV_FIRE_WEAPON_LASTSHOT );
 } else {
-	if ( PM_WeaponClipEmpty( pm->ps->weapon ) ) {
-		PM_AddEvent( EV_FIRE_WEAPON_LASTSHOT );
-	} else {
-		PM_AddEvent( EV_FIRE_WEAPON );
-	}
+	PM_AddEvent( EV_FIRE_WEAPON );
 }
 
 
@@ -3346,179 +3665,190 @@ pm->ps->releasedFire = qfalse;
 pm->ps->lastFireTime = pm->cmd.serverTime;
 
 
-aimSpreadScaleAdd = 0;
+if(cod1Weapon && cod1Def) {
+    /* R7: CoD timing/bloom are native WeaponDef state. Do not run the RTCW
+     * post-shot timing/spread switch and then overwrite its results. */
+    PM_Cod1PreserveLegacyShotRng();
+    if(CW_ADS(pm->ps)<1)CW_StoreSpread(pm->ps,pm->ps->stats[STAT_COD1_SPREAD]+CW_Number(cod1Def,"hipSpreadFireAdd")*25500);
+    if(CW_Number(cod1Def,"boltAction"))pm->ps->cod1Rechamber|=CW_BoltBit(pm->ps->weapon);
+    addTime = (int)CW_Number(cod1Def,"fireTime") + cod1FireCarry;
+    if (addTime < 1) addTime = 1;
+} else {
+    aimSpreadScaleAdd = 0;
 
-switch ( pm->ps->weapon ) {
-case WP_KNIFE:
-case WP_DYNAMITE:
-case WP_GRENADE_LAUNCHER:
-case WP_GRENADE_PINEAPPLE:
-case WP_FLAMETHROWER:
-	addTime = ammoTable[pm->ps->weapon].nextShotTime;
-	break;
+    switch ( pm->ps->weapon ) {
+    case WP_KNIFE:
+    case WP_DYNAMITE:
+    case WP_GRENADE_LAUNCHER:
+    case WP_GRENADE_PINEAPPLE:
+    case WP_FLAMETHROWER:
+        addTime = ammoTable[pm->ps->weapon].nextShotTime;
+        break;
 
-case WP_PANZERFAUST:
-	addTime = ammoTable[pm->ps->weapon].nextShotTime;
-	aimSpreadScaleAdd = 30;
-	break;
+    case WP_PANZERFAUST:
+        addTime = ammoTable[pm->ps->weapon].nextShotTime;
+        aimSpreadScaleAdd = 30;
+        break;
 
-case WP_LUGER:
-	addTime = ammoTable[pm->ps->weapon].nextShotTime;
-	aimSpreadScaleAdd = 35;
-	break;
+    case WP_LUGER:
+        addTime = ammoTable[pm->ps->weapon].nextShotTime;
+        aimSpreadScaleAdd = 35;
+        break;
 
-case WP_COLT:
-	addTime = ammoTable[pm->ps->weapon].nextShotTime;
-	aimSpreadScaleAdd = 20;
-	break;
+    case WP_COLT:
+        addTime = ammoTable[pm->ps->weapon].nextShotTime;
+        aimSpreadScaleAdd = 20;
+        break;
 
-//----(SA)	added
-case WP_AKIMBO:
-	// if you're firing an akimbo colt, and your other gun is dry,
-	// nextshot needs to take 2x time
+//----(SA) added
+    case WP_AKIMBO:
+        // if you're firing an akimbo colt, and your other gun is dry,
+        // nextshot needs to take 2x time
 
-	addTime = ammoTable[pm->ps->weapon].nextShotTime;
+        addTime = ammoTable[pm->ps->weapon].nextShotTime;
 
-	// (SA) (added check for last shot in both guns so there's no delay for the last shot)
-	if ( !pm->ps->ammoclip[WP_AKIMBO] || !pm->ps->ammoclip[WP_COLT] ) {
-		if ( ( !pm->ps->ammoclip[WP_AKIMBO] && !akimboFire ) || ( !pm->ps->ammoclip[WP_COLT] && akimboFire ) ) {
-			addTime = 2 * ammoTable[pm->ps->weapon].nextShotTime;
-		}
-	}
+        // (SA) (added check for last shot in both guns so there's no delay for the last shot)
+        if ( !pm->ps->ammoclip[WP_AKIMBO] || !pm->ps->ammoclip[WP_COLT] ) {
+            if ( ( !pm->ps->ammoclip[WP_AKIMBO] && !akimboFire ) || ( !pm->ps->ammoclip[WP_COLT] && akimboFire ) ) {
+                addTime = 2 * ammoTable[pm->ps->weapon].nextShotTime;
+            }
+        }
 
-	aimSpreadScaleAdd = 20;
-	break;
-//----(SA)	end
+        aimSpreadScaleAdd = 20;
+        break;
+//----(SA) end
 
-case WP_MAUSER:
-case WP_GARAND:
-	addTime = ammoTable[pm->ps->weapon].nextShotTime;
-	aimSpreadScaleAdd = 50;
-	break;
+    case WP_MAUSER:
+    case WP_GARAND:
+        addTime = ammoTable[pm->ps->weapon].nextShotTime;
+        aimSpreadScaleAdd = 50;
+        break;
 
-case WP_SNIPERRIFLE:        // (SA) not so much added per shot.  these weapons mostly uses player movement to get out of whack
-	addTime = ammoTable[pm->ps->weapon].nextShotTime;
+    case WP_SNIPERRIFLE:        // (SA) not so much added per shot.  these weapons mostly uses player movement to get out of whack
+        addTime = ammoTable[pm->ps->weapon].nextShotTime;
 // JPW NERVE crippling the rifle a bit in multiplayer; it's way too strong so make it go completely out every time you fire
 #ifdef CGAMEDLL
-	if ( cg_gameType.integer != GT_SINGLE_PLAYER ) {
+        if ( cg_gameType.integer != GT_SINGLE_PLAYER ) {
 #endif
 #ifdef GAMEDLL
-	if ( g_gametype.integer != GT_SINGLE_PLAYER ) {
+        if ( g_gametype.integer != GT_SINGLE_PLAYER ) {
 #endif
-//			addTime *= 2; // pulled this and reduced rifle damage
-	aimSpreadScaleAdd = 100;
-} else {
+//          addTime *= 2; // pulled this and reduced rifle damage
+            aimSpreadScaleAdd = 100;
+        } else {
 // jpw
-	aimSpreadScaleAdd = 20;
-}
-break;
-case WP_SNOOPERSCOPE:
+            aimSpreadScaleAdd = 20;
+        }
+        break;
+    case WP_SNOOPERSCOPE:
 // JPW NERVE crippling the rifle a bit in multiplayer; it's way too strong so make it go completely out every time you fire
 // snooper doesn't do one-shot body kills, so give it a little less bounce
-addTime = ammoTable[pm->ps->weapon].nextShotTime;
+        addTime = ammoTable[pm->ps->weapon].nextShotTime;
 #ifdef CGAMEDLL
-if ( cg_gameType.integer != GT_SINGLE_PLAYER ) {
+        if ( cg_gameType.integer != GT_SINGLE_PLAYER ) {
 #endif
 #ifdef GAMEDLL
-if ( g_gametype.integer != GT_SINGLE_PLAYER ) {
+        if ( g_gametype.integer != GT_SINGLE_PLAYER ) {
 #endif
-aimSpreadScaleAdd = 50;
-//			addTime *= 2;
-} else {
+            aimSpreadScaleAdd = 50;
+//          addTime *= 2;
+        } else {
 // jpw
-	aimSpreadScaleAdd = 10;
-}
-break;
+            aimSpreadScaleAdd = 10;
+        }
+        break;
 
-case WP_FG42SCOPE:
-addTime = ammoTable[pm->ps->weapon].nextShotTime;
-aimSpreadScaleAdd = 10;
-break;
+    case WP_FG42SCOPE:
+        addTime = ammoTable[pm->ps->weapon].nextShotTime;
+        aimSpreadScaleAdd = 10;
+        break;
 
-case WP_FG42:
-case WP_MP40:
-case WP_THOMPSON:
-addTime = ammoTable[pm->ps->weapon].nextShotTime;
-aimSpreadScaleAdd = 15 + rand() % 10;       // (SA) new values for DM
-break;
+    case WP_FG42:
+    case WP_MP40:
+    case WP_THOMPSON:
+        addTime = ammoTable[pm->ps->weapon].nextShotTime;
+        aimSpreadScaleAdd = 15 + rand() % 10;       // (SA) new values for DM
+        break;
 
-case WP_STEN:
-addTime = ammoTable[pm->ps->weapon].nextShotTime;
-aimSpreadScaleAdd = 15 + rand() % 10;       // (SA) new values for DM
-break;
+    case WP_STEN:
+        addTime = ammoTable[pm->ps->weapon].nextShotTime;
+        aimSpreadScaleAdd = 15 + rand() % 10;       // (SA) new values for DM
+        break;
 
-case WP_SILENCER:
-addTime = ammoTable[pm->ps->weapon].nextShotTime;
-aimSpreadScaleAdd = 35;
-break;
+    case WP_SILENCER:
+        addTime = ammoTable[pm->ps->weapon].nextShotTime;
+        aimSpreadScaleAdd = 35;
+        break;
 
-case WP_VENOM:
-addTime = ammoTable[pm->ps->weapon].nextShotTime;
-aimSpreadScaleAdd = 10;
-break;
+    case WP_VENOM:
+        addTime = ammoTable[pm->ps->weapon].nextShotTime;
+        aimSpreadScaleAdd = 10;
+        break;
 
 // JPW NERVE
-case WP_CLASS_SPECIAL:
+    case WP_CLASS_SPECIAL:
 // can't reliably get cvars for restart time in here, so set it small and check it in fireweapon routine
-addTime = 50;
-break;
+        addTime = 50;
+        break;
 // jpw
-case WP_MONSTER_ATTACK1:
-switch ( pm->ps->aiChar ) {
-case AICHAR_ZOMBIE:
-	// Zombie spitting blood
-	addTime = 1000;
-	break;
-default:
-	break;
+    case WP_MONSTER_ATTACK1:
+        switch ( pm->ps->aiChar ) {
+        case AICHAR_ZOMBIE:
+            // Zombie spitting blood
+            addTime = 1000;
+            break;
+        default:
+            break;
+        }
+
+    default:
+    case WP_GAUNTLET:
+        switch ( pm->ps->aiChar )
+        {
+        case AICHAR_LOPER:              // delay 'til next attack
+            addTime = 1000;
+            break;
+        default:
+            addTime = 250;
+            break;
+        }
+        break;
+    }
+
+    // check for overheat
+    // the weapon can overheat, and it's hot
+    if ( ( pm->ps->aiChar != AICHAR_PROTOSOLDIER ) &&
+         ( pm->ps->aiChar != AICHAR_SUPERSOLDIER ) &&
+         ( ammoTable[pm->ps->weapon].maxHeat && pm->ps->weapHeat[pm->ps->weapon] ) ) {
+        // it is overheating
+        if ( pm->ps->weapHeat[pm->ps->weapon] >= ammoTable[pm->ps->weapon].maxHeat ) {
+            pm->ps->weapHeat[pm->ps->weapon] = ammoTable[pm->ps->weapon].maxHeat;       // cap heat to max
+            PM_AddEvent( EV_WEAP_OVERHEAT );
+//          PM_StartWeaponAnim(WEAP_IDLE1); // removed. client handles anim in overheat event
+            addTime = 2000;         // force "heat recovery minimum" to 2 sec right now
+        }
+    }
+
+    if ( pm->ps->powerups[PW_HASTE] ) {
+        addTime /= 1.3;
+    }
+
+    // add the recoil amount to the aimSpreadScale
+    pm->ps->aimSpreadScaleFloat += 3.0 * aimSpreadScaleAdd;
 }
 
-default:
-case WP_GAUNTLET:
-switch ( pm->ps->aiChar )
-{
-case AICHAR_LOPER:              // delay 'til next attack
-	addTime = 1000;
-	break;
-default:
-	addTime = 250;
-	break;
-}
-break;
-}
-
-
-// check for overheat
-
-// the weapon can overheat, and it's hot
-if ( ( pm->ps->aiChar != AICHAR_PROTOSOLDIER ) &&
-	 ( pm->ps->aiChar != AICHAR_SUPERSOLDIER ) &&
-	 ( ammoTable[pm->ps->weapon].maxHeat && pm->ps->weapHeat[pm->ps->weapon] ) ) {
-	// it is overheating
-	if ( pm->ps->weapHeat[pm->ps->weapon] >= ammoTable[pm->ps->weapon].maxHeat ) {
-		pm->ps->weapHeat[pm->ps->weapon] = ammoTable[pm->ps->weapon].maxHeat;       // cap heat to max
-		PM_AddEvent( EV_WEAP_OVERHEAT );
-//			PM_StartWeaponAnim(WEAP_IDLE1);	// removed.  client handles anim in overheat event
-		addTime = 2000;         // force "heat recovery minimum" to 2 sec right now
-	}
-}
-
-if ( pm->ps->powerups[PW_HASTE] ) {
-	addTime /= 1.3;
-}
-
-// add the recoil amount to the aimSpreadScale
-//	pm->ps->aimSpreadScale += 3.0*aimSpreadScaleAdd;
-//	if (pm->ps->aimSpreadScale > 255) pm->ps->aimSpreadScale = 255;
-pm->ps->aimSpreadScaleFloat += 3.0 * aimSpreadScaleAdd;
+/* Keep the legacy field bookkeeping identical for save/debug consumers even
+ * though CoD weapon spread itself lives in STAT_COD1_SPREAD. */
 if ( pm->ps->aimSpreadScaleFloat > 255 ) {
-	pm->ps->aimSpreadScaleFloat = 255;
+    pm->ps->aimSpreadScaleFloat = 255;
 }
 pm->ps->aimSpreadScale = (int)( pm->ps->aimSpreadScaleFloat );
 
 pm->ps->weaponTime += addTime;
 
-PM_SwitchIfEmpty();
+if ( !cod1Weapon ) {
+	PM_SwitchIfEmpty();
+}
 }
 
 
@@ -3559,6 +3889,7 @@ static void PM_DropTimers( void ) {
 		if ( pml.msec >= pm->ps->pm_time ) {
 			pm->ps->pm_flags &= ~PMF_ALL_TIMES;
 			pm->ps->pm_time = 0;
+        pm->ps->stats[STAT_COD1_EDGES]&=~COD1_LAND_SLOW;
 		} else {
 			pm->ps->pm_time -= pml.msec;
 		}
@@ -3607,6 +3938,30 @@ void PM_UpdateLean( playerState_t *ps, usercmd_t *cmd, pmove_t *tpm ) {
 	vec3_t viewangles;
 	trace_t trace;
 
+    if(BG_Cod1LeanActive(ps)) {
+        /* Native 0x30006470: grounded ordinary player or noclip. Moving and
+         * firing do not cancel lean. Unmapped script side-permission flags
+         * remain a future script bridge; existing mounted/frozen gates apply. */
+        if((ps->pm_type==PM_NORMAL && ps->groundEntityNum!=ENTITYNUM_NONE) || ps->pm_type==PM_NOCLIP) {
+            if(!(ps->pm_flags&PMF_IGNORE_INPUT) &&
+               !(ps->eFlags&(EF_MELEE_ACTIVE|EF_MG42_ACTIVE)) && !ps->persistant[PERS_HWEAPON_USE]) {
+                if(cmd->wbuttons&WBUTTON_LEANLEFT)leaning--;
+                if(cmd->wbuttons&WBUTTON_LEANRIGHT)leaning++;
+            }
+        }
+        ps->leanf=COD1_LeanStep(ps->leanf,leaning,BG_Cod1LeanLimit(ps),pml.msec);
+        if(ps->leanf && ps->pm_type!=PM_NOCLIP) {
+            VectorCopy(ps->origin,start);start[2]+=BG_Cod1LeanEyeHeight(ps);
+            VectorCopy(start,end);
+            COD1_LeanOffset(end,ps->viewangles[YAW],ps->leanf<0?-1:1,16,20);
+            VectorSet(tmins,-8,-8,-8);VectorSet(tmaxs,8,8,8);
+            /* Same semantic contents as retail 0x0281c011; numeric content
+             * definitions differ between RTCW and CoD. */
+            tpm->trace(&trace,start,tmins,tmaxs,end,ps->clientNum,MASK_PLAYERSOLID);
+            ps->leanf=COD1_LeanClip(ps->leanf,trace.fraction);
+        }
+        return;
+    }
 	if ( ps->aiChar ) {
 		return;
 	}
@@ -3718,7 +4073,7 @@ void PM_UpdateViewAngles( playerState_t *ps, usercmd_t *cmd, void( trace ) ( tra
 	int i;
 	pmove_t tpm;
 
-	if ( pm->ps->pm_type == PM_FREEZE ) {
+	if ( ps->pm_type == PM_FREEZE ) {
 		return;
 	}
 
@@ -3732,7 +4087,7 @@ void PM_UpdateViewAngles( playerState_t *ps, usercmd_t *cmd, void( trace ) ( tra
 
 	// circularly clamp the angles with deltas
 	for ( i = 0 ; i < 3 ; i++ ) {
-		temp = cmd->angles[i] + ps->delta_angles[i];
+		temp = (short)((unsigned int)cmd->angles[i] + (unsigned int)ps->delta_angles[i]);
 		if ( i == PITCH ) {
 			// don't let the player look up or down more than 90 degrees
 			if ( temp > 16000 ) {
@@ -3745,12 +4100,15 @@ void PM_UpdateViewAngles( playerState_t *ps, usercmd_t *cmd, void( trace ) ( tra
 		}
 		ps->viewangles[i] = SHORT2ANGLE( temp );
 	}
+	BG_Cod1PronePitchClamp(ps, cmd);
 
 
-	tpm.trace = (void *)&trace;
+	tpm.trace = trace;
 //	tpm.trace (&trace, start, tmins, tmaxs, end, ps->clientNum, MASK_PLAYERSOLID);
 
-	PM_UpdateLean( ps, cmd, &tpm );
+    /* CoD lean advances only in PmoveSingle. The prediction renderer also
+     * calls this angle-only entry point; advancing here would double its rate. */
+    if(!(cmd->wbuttons&WBUTTON_COD1_STANCE))PM_UpdateLean(ps,cmd,&tpm);
 }
 
 /*
@@ -3760,6 +4118,9 @@ PM_CheckLadderMove
   Checks to see if we are on a ladder
 ================
 */
+#include "bg_cod1_ladder.h"
+#include "bg_cod1_postmove.h"
+
 qboolean ladderforward;
 vec3_t laddervec;
 
@@ -3770,6 +4131,8 @@ void PM_CheckLadderMove( void ) {
 	float tracedist;
 	#define TRACE_LADDER_DIST   48.0
 	qboolean wasOnLadder;
+
+    if(PM_Cod1LadderActive()){PM_Cod1CheckLadder();return;}
 
 	if ( pm->ps->pm_time ) {
 		return;
@@ -3892,6 +4255,8 @@ void PM_LadderMove( void ) {
 	vec3_t wishdir, wishvel;
 	float upscale;
 
+    if(PM_Cod1LadderActive()){PM_Cod1LadderMove();return;}
+
 	if ( ladderforward ) {
 		// move towards the ladder
 		VectorScale( laddervec, -200.0, wishvel );
@@ -3978,6 +4343,7 @@ PM_Sprint
 */
 //----(SA)	cleaned up for SP (10/22/01)
 void PM_Sprint( void ) {
+	if ( BG_Cod1MovementActive(pm) ) return;
 	if (    ( pm->cmd.buttons & BUTTON_SPRINT ) &&
 			( pm->cmd.forwardmove || pm->cmd.rightmove ) &&
 			!( pm->ps->pm_flags & PMF_DUCKED ) &&
@@ -4045,6 +4411,7 @@ void trap_SnapVector( float *v );
 void PmoveSingle( pmove_t *pmove ) {
 	// Ridah
 	qboolean isDummy;
+	int cod1WasProne;
 
 	isDummy = ( ( pmove->ps->eFlags & EF_DUMMY_PMOVE ) != 0 );
 	// done.
@@ -4055,6 +4422,29 @@ void PmoveSingle( pmove_t *pmove ) {
 	}
 
 	pm = pmove;
+    CW_SyncSlots(pm->ps);
+    {
+        int active=(pm->cmd.wbuttons&WBUTTON_COD1_STANCE) && !pm->ps->aiChar;
+        if(active!=BG_Cod1LeanActive(pm->ps))pm->ps->leanf=0;
+        if(active)pm->ps->stats[STAT_COD1_EDGES]|=COD1_LEAN_ACTIVE;
+        else pm->ps->stats[STAT_COD1_EDGES]&=~COD1_LEAN_ACTIVE;
+        /* PATCH60: the RTCW server writes g_speed (stock 320) each command.
+         * Establish the same CoD base used by ground movement before air,
+         * takeoff and landing limits consume ps->speed. Shared prediction
+         * must do this too, including the first command after a snapshot. */
+        if(active && pm->ps->pm_type==PM_NORMAL)
+            pm->ps->speed=(int)COD1_RUN_SPEED;
+        if(!active || pm->ps->pm_type!=PM_NORMAL || pm->ps->pm_time<=0)
+            pm->ps->stats[STAT_COD1_EDGES]&=~COD1_LAND_SLOW;
+    }
+	cod1WasProne=!!(pm->ps->pm_flags&PMF_COD1_PRONE);
+	if (!BG_Cod1PronePitchActive(pm->ps, &pm->cmd))
+		BG_Cod1PronePitchReset(pm->ps);
+	if (pm->ps->pm_type != PM_NORMAL || !(pm->cmd.wbuttons & WBUTTON_COD1_STANCE)) {
+		pm->ps->cod1JumpApex=0;
+		pm->ps->cod1EyeTarget=pm->ps->cod1EyeStart=pm->ps->cod1EyeDown=0;
+		pm->ps->cod1EyeHeight=0;
+	}
 
 	// this counter lets us debug movement problems with a journal
 	// by setting a conditional breakpoint fot the previous frame
@@ -4134,11 +4524,13 @@ void PmoveSingle( pmove_t *pmove ) {
 		// keep the talk button set tho for when the cmd.serverTime > 66 msec
 		// and the same cmd is used multiple times in Pmove
 		pmove->cmd.buttons = BUTTON_TALK;
-		pmove->cmd.wbuttons = 0;
+		pmove->cmd.wbuttons &= (WBUTTON_COD1_STANCE|WBUTTON_COD1_PRONE);
 		pmove->cmd.forwardmove = 0;
 		pmove->cmd.rightmove = 0;
 		pmove->cmd.upmove = 0;
 	}
+
+	PM_Cod1ProneInput();
 
 	// clear all pmove local vars
 	memset( &pml, 0, sizeof( pml ) );
@@ -4171,6 +4563,7 @@ void PmoveSingle( pmove_t *pmove ) {
 
 		}
 	}
+    if(!isDummy && BG_Cod1LeanActive(pm->ps))PM_UpdateLean(pm->ps,&pm->cmd,pm);
 	AngleVectors( pm->ps->viewangles, pml.forward, pml.right, pml.up );
 
 	if ( pm->cmd.upmove < 10 ) {
@@ -4218,9 +4611,11 @@ void PmoveSingle( pmove_t *pmove ) {
 
 	// set mins, maxs, and viewheight
 	PM_CheckDuck();
+	PM_Cod1PronePitchInitialise(cod1WasProne);
 
 	// set groundentity
 	PM_GroundTrace();
+	PM_Cod1PronePitchAdvance();
 
 	if ( pm->ps->pm_type == PM_DEAD ) {
 		PM_DeadMove();
@@ -4228,6 +4623,9 @@ void PmoveSingle( pmove_t *pmove ) {
 
 	// Ridah, ladders
 	PM_CheckLadderMove();
+	if (!BG_Cod1MovementActive(pm)) pm->ps->cod1JumpApex=0;
+    PM_Cod1ADSRequest(cod1WasProne);
+    PM_Cod1PrepareMove();
 
 	if ( !isDummy ) {
 		PM_DropTimers();
@@ -4286,9 +4684,15 @@ void PmoveSingle( pmove_t *pmove ) {
 
 		// entering / leaving water splashes
 		PM_WaterEvents();
+        PM_Cod1PostMove();
 
 		// snap some parts of playerstate to save network bandwidth
-		trap_SnapVector( pm->ps->velocity );
+		/* CoD retains fractional movement velocity. Integer snapping here
+		 * changes gravity and jump height with command frame duration. */
+		/* PATCH55: CoD ladder velocity remains fractional as well. */
+		if ( !BG_Cod1PlayerMovementActive( pm ) ) {
+			trap_SnapVector( pm->ps->velocity );
+		}
 //		SnapVector( pm->ps->velocity );
 
 		// Ridah
@@ -4316,7 +4720,7 @@ int Pmove( pmove_t *pmove ) {
 		pmove->cmd.rightmove = 0;
 		pmove->cmd.upmove = 0;
 		pmove->cmd.buttons = 0;
-		pmove->cmd.wbuttons = 0;
+		pmove->cmd.wbuttons &= (WBUTTON_COD1_STANCE|WBUTTON_COD1_PRONE);
 		pmove->cmd.wolfkick = 0;
 	}
 	// done.
@@ -4348,7 +4752,7 @@ int Pmove( pmove_t *pmove ) {
 
 	// RF
 	pm = pmove;
-	PM_AdjustAimSpreadScale();
+	if(!(CW_Active(pm->ps) && (pm->cmd.wbuttons&WBUTTON_COD1_STANCE)))PM_AdjustAimSpreadScale();
 
 //	startedTorsoAnim = -1;
 //	startedLegAnim = -1;

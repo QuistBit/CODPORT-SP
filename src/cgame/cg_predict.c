@@ -34,6 +34,8 @@ If you have questions concerning this license or the applicable additional terms
 // It also handles local physics interaction, like fragments bouncing off walls
 
 #include "cg_local.h"
+#include "../game/bg_cod1_character_contact.h"
+#include "../game/bg_cod1_inventory.h"
 
 static pmove_t cg_pmove;
 
@@ -153,6 +155,10 @@ static void CG_ClipMoveToEntities( const vec3_t start, const vec3_t mins, const 
 										 mins, maxs, cmodel,  mask, origin, angles );
 		}
 
+        if(skipNumber==0 && capsule && (mask&CONTENTS_BODY) && trace.startsolid &&
+           ent->eType==ET_GENERAL && ent->cod1TurretActorVersion && ent->cod1TurretActorGeneration &&
+           ent->solid!=SOLID_BMODEL && BG_Cod1SeparatingContact(start,end,mins,maxs,origin,bmins,bmaxs))
+            continue;
 		if ( trace.allsolid || trace.fraction < tr->fraction ) {
 			trace.entityNum = ent->number;
 			*tr = trace;
@@ -336,6 +342,7 @@ static void CG_TouchItem( centity_t *cent ) {
 	}
 
 	item = &bg_itemlist[ cent->currentState.modelindex ];
+    if(item->giType==IT_WEAPON && !cg.predictedPlayerState.aiChar && CW_WeaponDef(item->giTag))return;
 
 	// (SA) no prediction of books/clipboards
 	if ( item->giType == IT_HOLDABLE ) {

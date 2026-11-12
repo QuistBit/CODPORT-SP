@@ -33,7 +33,205 @@ If you have questions concerning this license or the applicable additional terms
 // be a valid snapshot this frame
 
 #include "cg_local.h"
+#include "cg_cod1_mission_transition.inc"
 #include "../ui/ui_shared.h" // bk001205 - for Q3_ui as well
+#include "../game/bg_cod1_soundalias.h"
+#include "cg_cod1_music.inc"
+#include "cg_cod1_script_quake.inc"
+#include "cg_cod1_script_sound.inc"
+#include "cg_cod1_sound_notify.inc"
+#include "cg_cod1_voice.inc"
+#include "cg_cod1_loaded_caption.inc"
+#include "cg_cod1_loop_sound.inc"
+#include "cg_cod1_script_weapon.inc"
+#include "cg_cod1_script_fx.inc"
+#include "cg_cod1_debug_text.inc"
+#include "cg_cod1_debug_line.inc"
+#include "cg_cod1_ambient.inc"
+#include "cg_cod1_item_precache.inc"
+#include "cg_cod1_hud_elements.inc"
+
+/* The retail cgame uses the named sound aliases game_message and
+ * objective_complete for these channels.  Resolve their paths from the
+ * mounted native alias CSVs, as the weapon renderer already does; an absent
+ * alias is silent instead of substituting an unrelated RTCW sample. */
+static void CG_Cod1MessageAliasSound( const char *alias ) {
+	static const char *tables[] = { "soundaliases/iw_sound.csv", "soundaliases/iw_sound2.csv" };
+	char paths[4][CW_VIEW_PATH];
+	fileHandle_t handle;
+	char *data;
+	int i, size, count;
+	for ( i = 0; i < 2; i++ ) {
+		size = trap_FS_FOpenFile( tables[i], &handle, FS_READ );
+		if ( !handle ) {
+			continue;
+		}
+		if ( size <= 0 || size > 1048576 ) {
+			trap_FS_FCloseFile( handle );
+			continue;
+		}
+		data = (char *)malloc( size );
+		if ( !data ) {
+			trap_FS_FCloseFile( handle );
+			return;
+		}
+		trap_FS_Read( data, size, handle );
+		trap_FS_FCloseFile( handle );
+		count = CW_SoundAliasPaths( data, size, alias, paths, 4 );
+		free( data );
+		if ( count > 0 ) {
+			sfxHandle_t sound = trap_S_RegisterSound( paths[rand() % count] );
+			if ( sound ) {
+				trap_S_StartLocalSound( sound, CHAN_LOCAL_SOUND );
+			}
+			return;
+		}
+	}
+}
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+#include "../game/bg_cod1_direct_fog.h"
+
+static qboolean cgCod1DirectFogMap;
+static cod1FogCacheKind_t cgCod1DirectFogOwnership;
+static qboolean cgCod1DirectFogSawLive;
+static char cgCod1DirectFogAppliedCache[COD1_DIRECT_FOG_WIRE_BYTES];
+
+/* Verify the actual world file. A tagged configstring alone is not proof
+ * that a RTCW map should receive CoD's fog transport. */
+void CG_Cod1DirectFogMapInit( void ) {
+	fileHandle_t file = 0;
+	unsigned char header[8];
+	int length;
+	cgCod1DirectFogMap = qfalse;
+	cgCod1DirectFogOwnership = COD1_FOG_UNOWNED;
+	cgCod1DirectFogSawLive = qfalse;
+	cgCod1DirectFogAppliedCache[0] = '\0';
+	length = trap_FS_FOpenFile( cgs.mapname, &file, FS_READ );
+	if ( length >= (int)sizeof( header ) && file ) {
+		trap_FS_Read( header, sizeof( header ), file );
+		cgCod1DirectFogMap = !memcmp( header, "IBSP", 4 ) &&
+			header[4] == 59 && !header[5] && !header[6] && !header[7];
+	}
+	if ( file ) {
+		trap_FS_FCloseFile( file );
+	}
+}
+
+static void CG_Cod1DirectFogSwitchOff( void ) {
+	/* CoD source slot 3 is RTCW FOG_HUD, so never forward it by index.
+	 * RTCW's FOG_MAP switch has the observed immediate no-fog effect. */
+	trap_R_SetFog( FOG_CMD_SWITCHFOG, FOG_MAP, 0, 0, 0, 0, 0 );
+}
+
+static void CG_Cod1DirectFogSet( const cod1DirectFogEvent_t *event ) {
+	char retained[COD1_DIRECT_FOG_WIRE_BYTES];
+	trap_R_SetFog( FOG_SERVER, (int)event->nearDist, (int)event->farDist,
+		event->color[0], event->color[1], event->color[2], event->density );
+	trap_R_SetFog( FOG_CMD_SWITCHFOG, FOG_SERVER, event->transitionMs,
+		0, 0, 0, 0 );
+	cgCod1DirectFogOwnership = COD1_FOG_SET;
+	/* Derive the marker from the command itself. It also matches the cache
+	 * when a live `fog` arrives immediately before its `cs` update. */
+	if ( Cod1DirectFogEncodeCache( event, retained, sizeof( retained ) ) ) {
+		Q_strncpyz( cgCod1DirectFogAppliedCache, retained,
+			sizeof( cgCod1DirectFogAppliedCache ) );
+		return;
+	}
+	cgCod1DirectFogAppliedCache[0] = '\0';
+}
+
+static void CG_Cod1DirectFogClear( void ) {
+	CG_Cod1DirectFogSwitchOff();
+	cgCod1DirectFogOwnership = COD1_FOG_CLEAR;
+	Q_strncpyz( cgCod1DirectFogAppliedCache,
+		COD1_DIRECT_FOG_CLEAR_CACHE, sizeof( cgCod1DirectFogAppliedCache ) );
+}
+
+static void CG_Cod1DirectFogCommand( void ) {
+	char fields[7][COD1_DIRECT_FOG_FIELD_BYTES];
+	const char *args[7], *arg;
+	cod1DirectFogEvent_t event;
+	int i, clearMs;
+	if ( trap_Argc() == 2 ) {
+		arg = CG_Argv( 1 );
+		if ( Cod1DirectFogClearMs( arg, &clearMs ) ) {
+			/* Renderer switches off immediately. Preserve the wire duration
+			 * only on the live command; it has no retained visual effect. */
+			(void)clearMs;
+			CG_Cod1DirectFogClear();
+			cgCod1DirectFogSawLive = qtrue;
+		}
+		return;
+	}
+	if ( trap_Argc() != 8 ) {
+		return;
+	}
+	for ( i = 0; i < 7; ++i ) {
+		arg = CG_Argv( i + 1 );
+		if ( strlen( arg ) >= sizeof( fields[i] ) ) {
+			return;
+		}
+		Q_strncpyz( fields[i], arg, sizeof( fields[i] ) );
+		args[i] = fields[i];
+	}
+	if ( Cod1DirectFogDecodeFields( args, &event ) ) {
+		CG_Cod1DirectFogSet( &event );
+		cgCod1DirectFogSawLive = qtrue;
+	}
+}
+
+/* Cache is not rendered on a dynamic `cs`: every live event arrives through
+ * the reliable `fog` command. This fallback runs after server commands on
+ * the first snapshot, handling events sent before a client was primed. */
+void CG_Cod1DirectFogApplyRetained( void ) {
+	const char *retained = CG_ConfigString( CS_FOGVARS );
+	cod1DirectFogEvent_t event;
+	cod1FogCacheKind_t kind;
+	char normalized[COD1_DIRECT_FOG_WIRE_BYTES];
+	if ( !cgCod1DirectFogMap ) {
+		return;
+	}
+	kind = Cod1FogDecodeRetained( retained, &event );
+	if ( kind == COD1_FOG_MALFORMED ) {
+		if ( cgCod1DirectFogOwnership == COD1_FOG_SET ) {
+			CG_Cod1DirectFogSwitchOff();
+		}
+		cgCod1DirectFogOwnership = COD1_FOG_MALFORMED;
+		cgCod1DirectFogAppliedCache[0] = '\0';
+		CG_Printf( "CoD1 direct fog: invalid retained tag\n" );
+		return;
+	}
+	if ( cgCod1DirectFogSawLive ) {
+		if ( kind == COD1_FOG_SET &&
+			Cod1DirectFogEncodeCache( &event, normalized,
+				sizeof( normalized ) ) &&
+			strcmp( cgCod1DirectFogAppliedCache, normalized ) ) {
+			CG_Printf( "CoD1 direct fog: live event differs from retained state\n" );
+		} else if ( kind == COD1_FOG_CLEAR &&
+			strcmp( cgCod1DirectFogAppliedCache,
+				COD1_DIRECT_FOG_CLEAR_CACHE ) ) {
+			CG_Printf( "CoD1 direct fog: live event differs from retained state\n" );
+		}
+		return;
+	}
+	if ( cgCod1DirectFogOwnership != COD1_FOG_UNOWNED ) {
+		return;
+	}
+	if ( kind == COD1_FOG_SET ) {
+		CG_Cod1DirectFogSet( &event );
+	} else if ( kind == COD1_FOG_CLEAR ) {
+		CG_Cod1DirectFogClear();
+	}
+}
+
+qboolean CG_Cod1DirectFogActive( void ) {
+	return cgCod1DirectFogMap && cgCod1DirectFogOwnership == COD1_FOG_SET;
+}
+
+qboolean CG_Cod1DirectFogOwnsState( void ) {
+	return cgCod1DirectFogMap && cgCod1DirectFogOwnership != COD1_FOG_UNOWNED;
+}
+#endif
 
 
 /*
@@ -375,6 +573,10 @@ CG_ConfigStringModified
 static void CG_ConfigStringModified( void ) {
 	const char  *str;
 	int num;
+    cod1DebugTextClientLease_t debugTextLease=CCT_Lease();
+    cod1DebugLineClientLease_t debugLineLease=CCDL_Lease();
+    cod1AmbientClientLease_t ambientLease=CCA_Lease();
+    cod1ItemClientLease_t itemLease=CCI_Lease();
 
 	num = atoi( CG_Argv( 1 ) );
 
@@ -413,27 +615,67 @@ static void CG_ConfigStringModified( void ) {
 		cgs.voteModified = qtrue;
 	} else if ( num == CS_VOTE_STRING ) {
 		Q_strncpyz( cgs.voteString, str, sizeof( cgs.voteString ) );
-#if 0
-		trap_S_StartLocalSound( cgs.media.voteNow, CHAN_ANNOUNCER );
-	} else if ( num >= CS_TEAMVOTE_TIME && num <= CS_TEAMVOTE_TIME + 1 ) {
-		cgs.teamVoteTime[num - CS_TEAMVOTE_TIME] = atoi( str );
-		cgs.teamVoteModified[num - CS_TEAMVOTE_TIME] = qtrue;
-	} else if ( num >= CS_TEAMVOTE_YES && num <= CS_TEAMVOTE_YES + 1 ) {
-		cgs.teamVoteYes[num - CS_TEAMVOTE_YES] = atoi( str );
-		cgs.teamVoteModified[num - CS_TEAMVOTE_YES] = qtrue;
-	} else if ( num >= CS_TEAMVOTE_NO && num <= CS_TEAMVOTE_NO + 1 ) {
-		cgs.teamVoteNo[num - CS_TEAMVOTE_NO] = atoi( str );
-		cgs.teamVoteModified[num - CS_TEAMVOTE_NO] = qtrue;
-	} else if ( num >= CS_TEAMVOTE_STRING && num <= CS_TEAMVOTE_STRING + 1 ) {
-		Q_strncpyz( cgs.teamVoteString[num - CS_TEAMVOTE_STRING], str, sizeof( cgs.teamVoteString ) );
-		trap_S_StartLocalSound( cgs.media.voteNow, CHAN_ANNOUNCER );
-#endif
 	} else if ( num == CS_INTERMISSION ) {
 		cg.intermissionStarted = atoi( str );
 	} else if ( num == CS_SCREENFADE ) {
 		CG_ParseScreenFade();
 	} else if ( num == CS_FOGVARS ) {
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+		if ( cgCod1DirectFogMap ) {
+			cod1DirectFogEvent_t cached;
+			cod1FogCacheKind_t kind = Cod1FogDecodeRetained( str, &cached );
+			if ( kind == COD1_FOG_SET || kind == COD1_FOG_CLEAR ) {
+				/* CS is the latest target for a late client. A live command
+				 * performs the visual change after this reliable CS update. */
+			} else if ( kind == COD1_FOG_MALFORMED ) {
+				if ( cgCod1DirectFogOwnership == COD1_FOG_SET ) {
+					CG_Cod1DirectFogSwitchOff();
+				}
+				cgCod1DirectFogOwnership = COD1_FOG_MALFORMED;
+				cgCod1DirectFogAppliedCache[0] = '\0';
+				CG_Printf( "CoD1 direct fog: invalid retained tag\n" );
+			} else if ( !str[0] && cgCod1DirectFogOwnership != COD1_FOG_UNOWNED ) {
+				/* The server begins a new map_restart epoch before issuing any
+				 * fog event. A later map_restart command must not reset this. */
+				if ( cgCod1DirectFogOwnership == COD1_FOG_SET ) {
+					CG_Cod1DirectFogSwitchOff();
+				}
+				cgCod1DirectFogOwnership = COD1_FOG_UNOWNED;
+				cgCod1DirectFogSawLive = qfalse;
+				cgCod1DirectFogAppliedCache[0] = '\0';
+			} else {
+				cgCod1DirectFogOwnership = COD1_FOG_UNOWNED;
+				cgCod1DirectFogSawLive = qfalse;
+				cgCod1DirectFogAppliedCache[0] = '\0';
+				CG_ParseFog();
+			}
+		} else {
+			CG_ParseFog();
+		}
+#else
 		CG_ParseFog();
+#endif
+	} else if ( num == CS_COD1_SCRIPT_HUD ) {
+        CG_Cod1HudElementsConfigChanged(num);
+	} else if ( num == CS_COD1_DEBUG_TEXT_METADATA ) {
+        if(CCT_Current(&debugTextLease))CG_Cod1DebugTextConfigChanged(num);
+	} else if ( num == CS_COD1_DEBUG_LINE_METADATA ) {
+        if(CCDL_Current(&debugLineLease))CG_Cod1DebugLineConfigChanged(num);
+	} else if ( num == CS_COD1_AMBIENT_METADATA || num == CS_SYSTEMINFO ) {
+        if(CCA_Current(&ambientLease))CG_Cod1AmbientConfigChanged(num);
+        if(num==CS_SYSTEMINFO && CCI_OwnerCurrent(&itemLease))
+            (void)CG_Cod1ItemPrecacheConfigChanged(num);
+	} else if ( num == CS_COD1_ITEM_PRECACHE ) {
+        if(CCI_OwnerCurrent(&itemLease))(void)CG_Cod1ItemPrecacheConfigChanged(num);
+	} else if ( num == CS_COD1_SCRIPT_EFFECTS ) {
+        CG_Cod1ScriptQuakeConfigChanged(num);
+	} else if ( num == CS_COD1_SCRIPT_FX_METADATA ||
+                (num > CS_COD1_SCRIPT_FX_TABLE && num < CS_COD1_SCRIPT_FX_TABLE+MAX_COD1_SCRIPT_FX) ) {
+        CG_Cod1ScriptFxConfigChanged(num);
+	} else if ( num >= CS_COD1_OBJECTIVES && num < CS_COD1_OBJECTIVES + MAX_COD1_OBJECTIVES ) {
+        CG_Cod1ObjectivesConfigStringModified(num);
+	} else if ( num > CS_COD1_SHADERS && num < CS_COD1_SHADERS + MAX_COD1_SHADERS ) {
+        cgs.cod1GameShaders[num-CS_COD1_SHADERS]=str[0]?trap_R_RegisterShaderNoMip(str):0;
 	} else if ( num >= CS_MODELS && num < CS_MODELS + MAX_MODELS ) {
 		cgs.gameModels[ num - CS_MODELS ] = trap_R_RegisterModel( str );
 	} else if ( num >= CS_SOUNDS && num < CS_SOUNDS + MAX_MODELS ) {
@@ -569,49 +811,6 @@ void CG_SendMoveSpeed( animation_t *animList, int numAnims, char *modelName ) {
 	trap_SendMoveSpeedsToGame( 0, text );
 }
 
-/*
-===============
-CG_SendMoveSpeeds
-
-  send moveSpeeds for all unique models
-===============
-*/
-#if 0
-void CG_SendMoveSpeeds( void ) {
-	int i,j;
-	animModelInfo_t *modelInfo;
-	clientInfo_t *ci;
-
-	for ( i = 0; i < MAX_ANIMSCRIPT_MODELS; i++ ) {
-
-		modelInfo = cgs.animScriptData.modelInfo[i];
-
-		if ( modelInfo == NULL ) {
-			continue;
-		}
-
-		if ( !modelInfo->modelname[0] ) {
-			continue;
-		}
-/*
-		// recalc them
-		// find a client that uses this model
-		for (ci = cgs.clientinfo, j=0; j<MAX_CLIENTS; j++, ci++) {
-			if (ci->modelInfo && ci->modelInfo == modelInfo) {
-				CG_CalcMoveSpeeds( ci );
-				break;
-			}
-		}
-*/
-//		if (j==MAX_CLIENTS)
-//			CG_Error( "CG_SendMoveSpeeds: cannot find client with modelName \"%s\" for moveSpeed calc", modelInfo->modelname );
-
-		// send this model
-		//CG_SendMoveSpeed( modelInfo->animations, modelInfo->numAnimations, modelInfo->modelname );
-	}
-
-}
-#endif
 
 /*
 ===============
@@ -627,6 +826,11 @@ require a reload of all the media
 static void CG_MapRestart( void ) {
 //	char buff[64];
 	int i;
+    CG_Cod1HudElementsReset(qtrue);
+    CG_Cod1HudElementsConfigChanged(CS_COD1_SCRIPT_HUD);
+    CG_Cod1AmbientReset(qfalse);
+    CG_Cod1DebugLineReset(qfalse);
+    CG_Cod1DebugTextReset(qfalse);
 	if ( cg_showmiss.integer ) {
 		CG_Printf( "CG_MapRestart\n" );
 	}
@@ -635,6 +839,13 @@ static void CG_MapRestart( void ) {
 
 	cg.centerPrintTime = 0; // reset centerprint counter so previous messages don't re-appear
 	cg.itemPickupTime = 0;  // reset item pickup counter so previous messages don't re-appear
+	cg.cod1GameMessageTime = 0;
+	cg.cod1ObjectiveMessageTime = 0;
+	cg.cod1GameMessage[0] = 0;
+	cg.cod1ObjectiveMessage[0] = 0;
+	cg.cod1ObjectiveMessageKind = 0;
+	CG_Cod1ObjectivesReset();
+	CG_Cod1ObjectivesInit();
 	cg.cursorHintFade = 0;  // reset cursor hint timer
 	cg.yougotmailTime = 0;  // reset
 
@@ -651,6 +862,8 @@ static void CG_MapRestart( void ) {
 
 	CG_InitLocalEntities();
 	CG_InitMarkPolys();
+	CG_Cod1EfxClear();
+    CG_Cod1BrassClear();
 
 	//Rafael particles
 	CG_ClearParticles();
@@ -729,6 +942,9 @@ static void CG_MapRestart( void ) {
 	memset( cg.cameraShake, 0, sizeof( cg.cameraShake ) );
 	memset( cg.cameraShakeAngles, 0, sizeof( cg.cameraShakeAngles ) );
 	cg.rumbleScale = 0;
+    /* Keep the replay high-water mark if the scene epoch survives restart. */
+    CG_Cod1ScriptQuakeReset(qfalse);
+    CG_Cod1ScriptFxReset(qfalse);
 
 	// play the "fight" sound if this is a restart without warmup
 //	if ( cg.warmup == 0 /* && cgs.gametype == GT_TOURNAMENT */) {
@@ -796,6 +1012,9 @@ void CG_ObjectivePrint( const char *str, int charWidth, int team );     // NERVE
 static void CG_ServerCommand( void ) {
 	const char  *cmd;
 	char text[MAX_SAY_TEXT];
+    cod1DebugTextClientLease_t debugTextLease=CCT_Lease();
+    cod1DebugLineClientLease_t debugLineLease=CCDL_Lease();
+    cod1AmbientClientLease_t ambientLease=CCA_Lease();
 
 	cmd = CG_Argv( 0 );
 
@@ -804,6 +1023,51 @@ static void CG_ServerCommand( void ) {
 		return;
 	}
 
+    if(!strcmp(cmd,"cod1scriptweapon")) {CG_Cod1ScriptWeaponCommand();return;}
+    if(!strcmp(cmd,COD1_SCRIPT_HUD_COMMAND)) {CG_Cod1HudElementsCommand();return;}
+
+    if ( !strcmp( cmd, COD1_DEBUG_TEXT_COMMAND ) ) {
+        if(CCT_Current(&debugTextLease))CG_Cod1DebugTextCommand();
+        return;
+    }
+    if ( !strcmp( cmd, COD1_DEBUG_LINE_COMMAND ) ) {
+        if(CCDL_Current(&debugLineLease))CG_Cod1DebugLineCommand();
+        return;
+    }
+    if ( !strcmp( cmd, COD1_AMBIENT_COMMAND ) ) {
+        if(CCA_Current(&ambientLease))CG_Cod1AmbientCommand();
+        return;
+    }
+    if ( !strcmp( cmd, "c1q" ) ) {
+        CG_Cod1ScriptQuakeCommand();
+        return;
+    }
+    if ( !strcmp( cmd, COD1_SCRIPT_FX_COMMAND ) ) {
+        CG_Cod1ScriptFxCommand();
+        return;
+    }
+    if ( !strcmp( cmd, COD1_LOOP_FX_COMMAND ) ) {
+        CG_Cod1LoopFxCommand();
+        return;
+    }
+    if ( !strcmp( cmd, COD1_TAG_FX_COMMAND ) ) {
+        CG_Cod1TagFxCommand();
+        return;
+    }
+
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	if ( cgCod1DirectFogMap && !strcmp( cmd, "fog" ) ) {
+		CG_Cod1DirectFogCommand();
+		return;
+	}
+#endif
+
+    if (!strcmp(cmd,"c1o")) {CG_Cod1LoopSoundCommand();return;}
+    if (!strcmp(cmd,COD1_LOADED_CAPTION_COMMAND)) {CG_Cod1LoadedCaptionCommand();return;}
+    if (!strcmp(cmd,"c1v")) {CG_Cod1VoiceCommand();return;}
+    if (!strcmp(cmd,"c1x")) {CG_Cod1VoiceStopCommand();return;}
+    if (!strcmp(cmd,"c1n")) {CG_Cod1NotifySoundCommand();return;}
+    if (!strcmp(cmd,"c1s")) {CG_Cod1ScriptSoundCommand();return;}
 	if ( !strcmp( cmd, "startCam" ) ) {
 		CG_StartCamera( CG_Argv( 1 ), atoi( CG_Argv( 2 ) ) );
 		return;
@@ -827,7 +1091,39 @@ static void CG_ServerCommand( void ) {
 	}
 
 	if ( !strcmp( cmd, "cp" ) ) {
-		CG_CenterPrint( CG_Argv( 1 ), SCREEN_HEIGHT - ( SCREEN_HEIGHT * 0.25 ), SMALLCHAR_WIDTH );
+		/* The native StringEd path handles ASCII 20/21 substitutions; RTCW
+		 * maps retain their original centerprint text. */
+		CG_CenterPrint( CG_Cod1HudEnabled() ? CG_Cod1PromptLocalize( CG_Argv( 1 ) ) : CG_Argv( 1 ),
+			SCREEN_HEIGHT - ( SCREEN_HEIGHT * 0.25 ), SMALLCHAR_WIDTH );
+		return;
+	}
+
+	/* The retail cgame DLL routes gm and obj_* through client callback 2,
+	 * and gmb through callback 3.  These two cached lines approximate those
+	 * channels; the retail engine's queue and timing rules remain unknown.
+	 * The legacy cod1ObjectiveMessage field now holds the bold channel. */
+	if ( !Q_stricmp( cmd, "gm" ) ) {
+		Q_strncpyz( cg.cod1GameMessage, CG_Argv( 1 ), sizeof( cg.cod1GameMessage ) );
+		cg.cod1GameMessageTime = cg.time;
+		cg.cod1ObjectiveMessageKind = 0; /* normal-channel text colour */
+		return;
+	}
+	if ( !Q_stricmp( cmd, "gmb" ) ) {
+		/* Retail 0x30020847 selects the game_message alias before argv(1)
+		 * and syscall-58 text composition. The renderer/audio devices stay
+		 * separate services in this port's cached message bridge. */
+		CG_Cod1MessageAliasSound( "game_message" );
+		Q_strncpyz( cg.cod1ObjectiveMessage, CG_Argv( 1 ),
+		            sizeof( cg.cod1ObjectiveMessage ) );
+		cg.cod1ObjectiveMessageTime = cg.time;
+		return;
+	}
+	if ( !Q_stricmp( cmd, "obj_update" ) || !Q_stricmp( cmd, "obj_complete" ) ) {
+		Q_strncpyz( cg.cod1GameMessage, CG_Argv( 1 ), sizeof( cg.cod1GameMessage ) );
+		cg.cod1ObjectiveMessageKind = !Q_stricmp( cmd, "obj_complete" ) ? 2 : 1;
+		cg.cod1GameMessageTime = cg.time;
+		CG_Cod1MessageAliasSound( cg.cod1ObjectiveMessageKind == 2 ?
+			"objective_complete" : "game_message" );
 		return;
 	}
 
@@ -938,6 +1234,8 @@ static void CG_ServerCommand( void ) {
 	// -NERVE - SMF
 
 
+	if (!strcmp(cmd,"cod1_mu_play")) {CG_Cod1MusicCommand(COD1_MUSIC_PLAY);return;}
+	if (!strcmp(cmd,"cod1_mu_stop")) {CG_Cod1MusicCommand(COD1_MUSIC_STOP);return;}
 	//
 	// music
 	//
@@ -984,6 +1282,7 @@ static void CG_ServerCommand( void ) {
 		return;
 	}
 
+    if (CG_Cod1MissionServerCommand(cmd)) return;
 	if ( !strcmp( cmd, "snd_fade" ) ) {
 		trap_S_FadeAllSound( atof( CG_Argv( 1 ) ), atoi( CG_Argv( 2 ) ) );
 		return;

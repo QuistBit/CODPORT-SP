@@ -1151,11 +1151,13 @@ char PS_NextWhiteSpaceChar( script_t *script ) {
 // Changes Globals:		-
 //============================================================================
 void StripDoubleQuotes( char *string ) {
-	if ( *string == '\"' ) {
-		strcpy( string, string + 1 );
+	size_t length = strlen( string );
+	if ( length && *string == '\"' ) {
+		memmove( string, string + 1, length );
+		--length;
 	} //end if
-	if ( string[strlen( string ) - 1] == '\"' ) {
-		string[strlen( string ) - 1] = '\0';
+	if ( length && string[length - 1] == '\"' ) {
+		string[length - 1] = '\0';
 	} //end if
 } //end of the function StripDoubleQuotes
 //============================================================================

@@ -48,6 +48,7 @@ static void CG_ResetEntity( centity_t *cent ) {
 	cent->previousEvent = 0;
 
 	cent->trailTime = cg.snap->serverTime;
+	cent->cod1TrailNextTime = cg.snap->serverTime;
 
 	// Ridah
 	cent->headJuncIndex = 0;
@@ -149,6 +150,16 @@ void CG_SetInitialSnapshot( snapshot_t *snap ) {
 
 	CG_ExecuteNewServerCommands( snap->serverCommandSequence );
 
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	/* CG_Init already loaded the world, which resets renderer fog. Process
+	 * pending direct commands first; use retained state only when none applied
+	 * this latest target. This avoids applying a replayed command twice. */
+	CG_Cod1DirectFogApplyRetained();
+	if ( CG_Cod1DirectFogOwnsState() ) {
+		trap_Cvar_Set( "r_savegameFogColor", "0" );
+	} else {
+#endif
+
 	trap_SendClientCommand( "fogswitch 0" );   // clear it out so the set below will take
 
 	trap_Cvar_VariableStringBuffer( "r_savegameFogColor", buf, sizeof( buf ) );
@@ -163,6 +174,9 @@ void CG_SetInitialSnapshot( snapshot_t *snap ) {
 		trap_Cvar_VariableStringBuffer( "r_mapFogColor", buf, sizeof( buf ) );
 		trap_SendClientCommand( va( "fogswitch %s", buf ) );
 	}
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	}
+#endif
 
 	// set our local weapon selection pointer to
 	// what the server has indicated the current weapon is
@@ -185,6 +199,7 @@ void CG_SetInitialSnapshot( snapshot_t *snap ) {
 
 	// DHM - Nerve :: Set cg.clientNum so that it may be used elsewhere
 	cg.clientNum = snap->ps.clientNum;
+	CG_Cod1PrepareInitialMountedActors(snap);
 
 	// NERVE - SMF
 	{

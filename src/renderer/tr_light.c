@@ -92,7 +92,7 @@ void R_DlightBmodel( bmodel_t *bmodel ) {
 		}
 
 		// we need to check this light
-		mask |= 1 << i;
+		mask |= 1u << i;
 	}
 
 	// RF, this is why some dlights wouldn't light up bmodels
@@ -306,6 +306,8 @@ void R_SetupEntityLighting( const trRefdef_t *refdef, trRefEntity_t *ent ) {
 		return;
 	}
 	ent->lightingCalculated = qtrue;
+	if ( R_Cod1PrepareEntityLighting( refdef, ent ) ) return;
+	ent->cod1ModelLighting.valid = 0;
 
 	//
 	// trace a sample point down to find ambient light

@@ -35,6 +35,10 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include "cg_local.h"
+#include "../game/bg_cod1_inventory.h"
+#include "../game/bg_cod1_script_entity.h"
+#include "cg_cod1_entity_visibility.h"
+#include <float.h>
 
 ///////////////////////
 extern int propellerModel;
@@ -481,7 +485,9 @@ static void CG_EntityEffects( centity_t *cent ) {
 	CG_SetEntitySoundPosition( cent );
 
 	// add loop sound
-	if ( cent->currentState.loopSound ) {
+	if (cent->currentState.cod1TurretVersion) {
+		CG_Cod1TurretShotLoop(&cent->currentState);
+	} else if ( cent->currentState.loopSound ) {
 		//----(SA)	hmm, the above (CG_SetEntitySoundPosition()) sets s_entityPosition[entityNum] with a valid
 		//			location, but the looping sound for a bmodel will never get it since that sound is
 		//			started with the lerpOriging right here. \/ \/	How do looping sounds ever work for bmodels?
@@ -553,19 +559,40 @@ static void CG_EntityEffects( centity_t *cent ) {
 
 }
 
+#include "cg_cod1_ammo_entity.inc"
+
 /*
 ==================
 CG_General
 ==================
 */
+#include "cg_cod1_actor_scene_entity.inc"
+
+#include "cg_cod1_turret.inc"
+#include "cg_cod1_turret_actor.inc"
 static void CG_General( centity_t *cent ) {
 	refEntity_t ent;
 	entityState_t       *s1;
+	qboolean cod1WorldModel;
 
 	s1 = &cent->currentState;
 
+    if(CG_Cod1TurretActorEntity(cent))return;
+    if(CG_Cod1TurretEntity(cent))return;
+
+	if ( CG_Cod1AmmoEntity( cent ) ) {
+		return;
+	}
+
+	if ( CG_Cod1EntityHidden( s1 ) ) {
+		return;
+	}
+
 	// if set to invisible, skip
 	if ( !s1->modelindex ) {
+		return;
+	}
+	if ( s1->modelindex < 1 || s1->modelindex >= MAX_MODELS ) {
 		return;
 	}
 
@@ -593,6 +620,16 @@ static void CG_General( centity_t *cent ) {
 	VectorCopy( cent->lerpOrigin, ent.oldorigin );
 
 	ent.hModel = cgs.gameModels[s1->modelindex];
+	cod1WorldModel = cgs.cod1MapEntities && s1->eType == ET_GENERAL &&
+		s1->density == COD1_SCRIPT_MODEL_NET_MARKER &&
+		!Q_strncmp( CG_ConfigString( CS_MODELS + s1->modelindex ), "xmodel/", 7 );
+	/* A retained script_model with unavailable visual assets remains a real
+	 * server entity. Do not submit renderer handle 0 as diagnostic axes. */
+    if(cod1WorldModel && CG_TrainingRig(cent))return;
+	if ( cod1WorldModel && !ent.hModel ) {
+		return;
+	}
+    if(CG_Cod1ActorSceneEntity(cent,&ent))return;
 
 	// player model
 	if ( s1->number == cg.snap->ps.clientNum ) {
@@ -601,6 +638,20 @@ static void CG_General( centity_t *cent ) {
 
 	// convert angles to axis
 	AnglesToAxis( cent->lerpAngles, ent.axis );
+	/* Only marked script models use angles2 for scale. The discriminator
+	 * distinguishes an authored zero scale from older generic entities whose
+	 * unset angles2 must retain unit scale. Signed and zero authored values
+	 * are preserved; nonfinite values do not reach render math. */
+	if ( cod1WorldModel &&
+	     s1->angles2[0] >= -FLT_MAX && s1->angles2[0] <= FLT_MAX &&
+	     s1->angles2[1] >= -FLT_MAX && s1->angles2[1] <= FLT_MAX &&
+	     s1->angles2[2] >= -FLT_MAX && s1->angles2[2] <= FLT_MAX &&
+	     ( s1->angles2[0] != 1.f || s1->angles2[1] != 1.f || s1->angles2[2] != 1.f ) ) {
+		VectorScale( ent.axis[0], s1->angles2[0], ent.axis[0] );
+		VectorScale( ent.axis[1], s1->angles2[1], ent.axis[1] );
+		VectorScale( ent.axis[2], s1->angles2[2], ent.axis[2] );
+		ent.nonNormalizedAxes = qtrue;
+	}
 
 	// scale gamemodels
 	if ( cent->currentState.eType == ET_GAMEMODEL ) {
@@ -953,12 +1004,29 @@ qboolean CG_PlayerSeesItem( playerState_t *ps, entityState_t *item, int atTime, 
 CG_Item
 ==================
 */
+/* The retail medkit flashes in the missing material/renderer path. Its
+ * original period and duty cycle cannot be read from the supplied cgame
+ * DLL; the fixed 200 ms on / 1000 ms cycle is a visual approximation. */
+static float CG_Cod1HealthFlashIntensity(int time) {
+	int phase=time%1000;
+	if (phase<0) phase+=1000;
+	return phase<200 ? 1.0f : 0.0f;
+}
+
+static qboolean CG_Cod1HealthKit(const gitem_t *item) {
+	return item->giType == IT_HEALTH &&
+		( !Q_stricmp(item->classname,"item_health_small") ||
+		  !Q_stricmp(item->classname,"item_health") ||
+		  !Q_stricmp(item->classname,"item_health_large") );
+}
+
 static void CG_Item( centity_t *cent ) {
 	refEntity_t ent;
 	entityState_t       *es;
 	gitem_t             *item;
 	float scale;
 	qboolean hasStand, highlight;
+	qboolean cod1HealthKit;
 	float highlightFadeScale = 1.0f;
 
 	es = &cent->currentState;
@@ -978,7 +1046,11 @@ static void CG_Item( centity_t *cent ) {
 	}
 
 	item = &bg_itemlist[ es->modelindex ];
+	cod1HealthKit = cg_gameType.integer == GT_SINGLE_PLAYER &&
+		cgs.cod1MapEntities && CG_Cod1HealthKit(item);
 
+	/* A simple item is an unlit sprite. Its optional RTCW presentation has no
+	 * model surface on which to show the CoD health-kit light flash. */
 	if ( cg_simpleItems.integer && item->giType != IT_TEAM ) {
 		memset( &ent, 0, sizeof( ent ) );
 		ent.reType = RT_SPRITE;
@@ -1041,17 +1113,20 @@ static void CG_Item( centity_t *cent ) {
 			ent.nonNormalizedAxes = qtrue;
 
 		} else {                                // then default to laying it on it's side
-			if ( !cg_items[es->modelindex].models[2] ) {
+            qboolean cod1MapItem=CW_WeaponDef(item->giTag) && !es->otherEntityNum2;
+			if ( !cod1MapItem && !cg_items[es->modelindex].models[2] ) {
 				cent->lerpAngles[2] += 90;
 			}
 
 			AnglesToAxis( cent->lerpAngles, ent.axis );
 
 			// increase the size of the weapons when they are presented as items
-			VectorScale( ent.axis[0], 1.5, ent.axis[0] );
-			VectorScale( ent.axis[1], 1.5, ent.axis[1] );
-			VectorScale( ent.axis[2], 1.5, ent.axis[2] );
-			ent.nonNormalizedAxes = qtrue;
+            if(!cod1MapItem) {
+				VectorScale( ent.axis[0], 1.5, ent.axis[0] );
+				VectorScale( ent.axis[1], 1.5, ent.axis[1] );
+				VectorScale( ent.axis[2], 1.5, ent.axis[2] );
+				ent.nonNormalizedAxes = qtrue;
+            }
 
 			VectorCopy( cent->lerpOrigin, ent.origin );
 			VectorCopy( cent->lerpOrigin, ent.oldorigin );
@@ -1081,6 +1156,12 @@ static void CG_Item( centity_t *cent ) {
 	if ( es->modelindex2 ) {   // modelindex2 was specified for the ent, meaning it probably has an alternate model (as opposed to the one in the itemlist)
 							   // try to load it first, and if it fails, default to the itemlist model
 		ent.hModel = cgs.gameModels[ es->modelindex2 ];
+		/* CoD map entities specify the health XModel directly.  The map can
+		 * reference small and large kits when their retail meshes have not
+		 * been supplied: use the registered item model (native or fallback). */
+		if ( !ent.hModel && cgs.cod1MapEntities && item->giType == IT_HEALTH ) {
+			ent.hModel = cg_items[es->modelindex].models[0];
+		}
 	} else {
 		if ( item->giType == IT_WEAPON && cg_items[es->modelindex].models[2] ) {   // check if there's a specific model for weapon pickup placement
 			ent.hModel = cg_items[es->modelindex].models[2];
@@ -1132,8 +1213,12 @@ static void CG_Item( centity_t *cent ) {
 	ent.renderfx |= RF_MINLIGHT;
 //	}
 
-	// highlighting items the player looks at
-	if ( cg_drawCrosshairPickups.integer ) {
+	/* These three CoD kits flash at a fixed strength whether or not the player
+	 * looks at them. Only the light changes; the model is never hidden. */
+	if ( cod1HealthKit ) {
+		ent.hilightIntensity = CG_Cod1HealthFlashIntensity(cg.time);
+		cent->highlighted = qfalse;
+	} else if ( cg_drawCrosshairPickups.integer ) {
 
 
 		if ( cg_drawCrosshairPickups.integer == 2 ) {  // '2' is 'force highlights'
@@ -1196,6 +1281,8 @@ static void CG_Missile( centity_t *cent ) {
 	refEntity_t ent;
 	entityState_t       *s1;
 	const weaponInfo_t      *weapon;
+    const cwDef_t *cod1Def;
+    qboolean cod1Grenade,cod1Projectile;
 
 	s1 = &cent->currentState;
 	if ( s1->weapon > WP_NUM_WEAPONS ) {
@@ -1203,8 +1290,19 @@ static void CG_Missile( centity_t *cent ) {
 	}
 	weapon = &cg_weapons[s1->weapon];
 
-	// calculate the axis
-	VectorCopy( s1->angles, cent->lerpAngles );
+    cod1Def = CW_WeaponDef( s1->weapon );
+    cod1Grenade = s1->eType == ET_MISSILE && cod1Def &&
+        !Q_stricmp( CW_String( cod1Def, "weaponType" ), "grenade" );
+    cod1Projectile = s1->eType == ET_MISSILE && cod1Def &&
+        !Q_stricmp( CW_String( cod1Def, "weaponType" ), "projectile" );
+
+    /* Grenades carry an angular trajectory.  CoD projectile WeaponDefs do not
+     * inherit RTCW's arbitrary time-based rocket roll; their forward axis is
+     * the actual linear trajectory.  Exact retail roll about that axis remains
+     * intentionally unclaimed until the original client path is fully decoded. */
+    if ( !cod1Grenade ) {
+        VectorCopy( s1->angles, cent->lerpAngles );
+    }
 
 	// add trails
 	if ( cent->currentState.eType == ET_FP_PARTS
@@ -1260,17 +1358,24 @@ static void CG_Missile( centity_t *cent ) {
 	}
 	ent.renderfx = weapon->missileRenderfx | RF_NOSHADOW;
 
-	// convert direction of travel into axis
-	if ( VectorNormalize2( s1->pos.trDelta, ent.axis[0] ) == 0 ) {
-		ent.axis[0][2] = 1;
-	}
-
-	// spin as it moves
-	if ( s1->pos.trType != TR_STATIONARY ) {
-		RotateAroundDirection( ent.axis, cg.time / 4 );
-	} else {
-		RotateAroundDirection( ent.axis, s1->time );
-	}
+    if ( cod1Grenade ) {
+        AnglesToAxis( cent->lerpAngles, ent.axis );
+    } else if ( cod1Projectile ) {
+        if ( VectorNormalize2( s1->pos.trDelta, ent.axis[0] ) == 0 ) {
+            VectorSet( ent.axis[0], 1, 0, 0 );
+        }
+        MakeNormalVectors( ent.axis[0], ent.axis[1], ent.axis[2] );
+    } else {
+        // Keep RTCW projectiles, rockets and effect entities unchanged.
+        if ( VectorNormalize2( s1->pos.trDelta, ent.axis[0] ) == 0 ) {
+            ent.axis[0][2] = 1;
+        }
+        if ( s1->pos.trType != TR_STATIONARY ) {
+            RotateAroundDirection( ent.axis, cg.time / 4 );
+        } else {
+            RotateAroundDirection( ent.axis, s1->time );
+        }
+    }
 
 	// Rafael
 	// Added this since it may be a propExlosion
@@ -1361,55 +1466,6 @@ static void CG_Bat( centity_t *cent ) {
 	// emit a sound
 	trap_S_AddLoopingSound( 0, refent.origin, vec3_origin, cgs.media.zombieSpiritLoopSound, 255 );
 }
-
-/*
-===============
-CG_Crowbar
-===============
-*/
-static void CG_Crowbar( centity_t *cent ) {
-	refEntity_t ent;
-	entityState_t       *s1;
-	const weaponInfo_t      *weapon;
-
-	s1 = &cent->currentState;
-	if ( s1->weapon > WP_NUM_WEAPONS ) {
-		s1->weapon = 0;
-	}
-	weapon = &cg_weapons[s1->weapon];
-
-	// calculate the axis
-	VectorCopy( s1->angles, cent->lerpAngles );
-
-	// create the render entity
-	memset( &ent, 0, sizeof( ent ) );
-	VectorCopy( cent->lerpOrigin, ent.origin );
-	VectorCopy( cent->lerpOrigin, ent.oldorigin );
-
-	// flicker between two skins
-	ent.skinNum = cg.clientFrame & 1;
-
-	ent.hModel = cgs.media.crowbar;
-
-	ent.renderfx = weapon->missileRenderfx | RF_NOSHADOW;
-
-	// convert direction of travel into axis
-	if ( VectorNormalize2( s1->pos.trDelta, ent.axis[0] ) == 0 ) {
-		ent.axis[0][2] = 1;
-	}
-
-	// spin as it moves
-	if ( s1->pos.trType != TR_STATIONARY ) {
-		RotateAroundDirection( ent.axis, cg.time / 4 );
-	} else {
-		RotateAroundDirection( ent.axis, s1->time );
-	}
-
-	// add to refresh list, possibly with quad glow
-	CG_AddRefEntityWithPowerups( &ent, s1->powerups, TEAM_FREE, s1, vec3_origin );
-
-}
-
 
 //----(SA)	animation_t struct changed, so changes are to keep this working
 static animation_t grabberAnims[] = {
@@ -1905,6 +1961,10 @@ static void CG_Mover( centity_t *cent ) {
 	entityState_t       *s1;
 
 	s1 = &cent->currentState;
+
+	if ( CG_Cod1EntityHidden( s1 ) ) {
+		return;
+	}
 
 	// create the render entity
 	memset( &ent, 0, sizeof( ent ) );
@@ -2402,9 +2462,6 @@ static void CG_ProcessEntity( centity_t *cent ) {
 	case ET_RAMJET:
 		CG_Missile( cent );
 		break;
-	case ET_CROWBAR:
-		CG_Crowbar( cent );
-		break;
 	case ET_ZOMBIESPIT:
 		CG_ZombieSpit( cent );
 		break;
@@ -2677,4 +2734,5 @@ void CG_AddPacketEntities( void ) {
 
 	// Ridah, add the flamethrower sounds
 	CG_UpdateFlamethrowerSounds();
+    CG_Cod1LoopFxFrame();
 }

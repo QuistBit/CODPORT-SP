@@ -28,6 +28,7 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include "server.h"
+#include <stdint.h>
 
 serverStatic_t svs;                 // persistant server info
 server_t sv;                        // local server
@@ -105,33 +106,6 @@ SV_ReplacePendingServerCommands
   This is ugly
 ======================
 */
-#if 0   // RF, not used anymore
-int SV_ReplacePendingServerCommands( client_t *client, const char *cmd ) {
-	int i, index, csnum1, csnum2;
-
-	for ( i = client->reliableSent + 1; i <= client->reliableSequence; i++ ) {
-		index = i & ( MAX_RELIABLE_COMMANDS - 1 );
-		//
-		//if ( !Q_strncmp(cmd, client->reliableCommands[ index ], strlen("cs")) ) {
-		if ( !Q_strncmp( cmd, SV_GetReliableCommand( client, index ), strlen( "cs" ) ) ) {
-			sscanf( cmd, "cs %i", &csnum1 );
-			//sscanf(client->reliableCommands[ index ], "cs %i", &csnum2);
-			sscanf( SV_GetReliableCommand( client, index ), "cs %i", &csnum2 );
-			if ( csnum1 == csnum2 ) {
-				//Q_strncpyz( client->reliableCommands[ index ], cmd, sizeof( client->reliableCommands[ index ] ) );
-
-				/*
-				if ( client->netchan.remoteAddress.type != NA_BOT ) {
-					Com_Printf( "WARNING: client %i removed double pending config string %i: %s\n", client-svs.clients, csnum1, cmd );
-				}
-				*/
-				return qtrue;
-			}
-		}
-	}
-	return qfalse;
-}
-#endif
 
 /*
 ======================
@@ -169,6 +143,102 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 	//Q_strncpyz( client->reliableCommands[ index ], cmd, sizeof( client->reliableCommands[ index ] ) );
 	SV_AddReliableCommand( client, index, cmd );
 }
+
+/* R128: this admission is for the aggregate reliable component only.  It
+ * does not reserve an arbitrary future snapshot/download payload, and an
+ * ordinary later SV_SendServerCommand still uses its legacy policy.
+ * No GAME/VM callbacks occur between validation and the queue commit. */
+static qboolean SV_Cod1QueueChecked( client_t *client, const char *text, int allowPrimed ) {
+	msg_t probe;
+	int i, length, next, savedOldsize;
+	char command[MAX_STRING_CHARS];
+	uintptr_t begin, limit;
+	/* MSG_WriteBits checks four logical bytes before a <=32-bit write.  One
+	 * such write emits at most four Huffman symbols.  A tree path cannot
+	 * exceed the actual node-array count.  Extra backing bytes protect that
+	 * last write; they are never added to the logical MAX_MSGLEN budget. */
+	byte encoded[MAX_MSGLEN + ( 4 * sizeof( ( (huff_t *)0 )->nodeList ) / sizeof( node_t ) + 7 ) / 8 + 1];
+	extern int oldsize;
+
+	if ( !text || !client ) return qfalse;
+	for ( length = 0; length < MAX_STRING_CHARS && text[length]; length++ ) {
+		/* Bound the borrowed input before making the immutable local copy. */
+	}
+	if ( length == MAX_STRING_CHARS ) {
+		return qfalse;
+	}
+	memcpy( command, text, length + 1 );
+	if ( (client->state != CS_ACTIVE && !(allowPrimed && client->state == CS_PRIMED)) ||
+		 ( client->gentity && client->gentity->r.svFlags & ( SVF_BOT | SVF_CASTAI ) ) ||
+		 !client->reliableCommands.buf || client->reliableCommands.bufSize <= 0 ||
+		 !client->reliableCommands.commands || !client->reliableCommands.commandLengths ||
+		 client->reliableAcknowledge < 0 || client->reliableSequence < client->reliableAcknowledge ||
+		 client->reliableSequence >= INT_MAX - 1 ||
+		 client->reliableSequence - client->reliableAcknowledge >= MAX_RELIABLE_COMMANDS - 1 ) {
+		return qfalse;
+	}
+	begin = (uintptr_t)client->reliableCommands.buf;
+	if ( (uintptr_t)client->reliableCommands.bufSize > UINTPTR_MAX - begin ) {
+		return qfalse;
+	}
+	limit = begin + (uintptr_t)client->reliableCommands.bufSize;
+	/* Keep the newest ACK slot for SV_Netchan_Decode, in addition to all
+	 * pending slots.  The legacy ring-overflow/drop path is not invoked. */
+	next = client->reliableSequence + 1;
+	for ( i = client->reliableAcknowledge ? client->reliableAcknowledge : 1; i < next; i++ ) {
+		int index = i & ( MAX_RELIABLE_COMMANDS - 1 );
+		int n = client->reliableCommands.commandLengths[index];
+		const char *pending = client->reliableCommands.commands[index];
+		uintptr_t stored = (uintptr_t)pending;
+		if ( !pending || n < 0 || n >= MAX_STRING_CHARS || stored < begin || stored >= limit ||
+			 (uintptr_t)n >= limit - stored ) {
+			return qfalse;
+		}
+		for ( length = 0; length <= n && pending[length]; length++ ) {
+		}
+		if ( length != n ) {
+			return qfalse;
+		}
+	}
+
+	MSG_Init( &probe, encoded, MAX_MSGLEN );
+	probe.allowoverflow = qtrue;
+	/* The encoder statistic is not a queue mutation, but a probe must not
+	 * grow it or overflow it after a long-running server's ordinary writes. */
+	savedOldsize = oldsize;
+	oldsize = 0;
+	MSG_WriteLong( &probe, client->lastClientCommand );
+	for ( i = client->reliableAcknowledge + 1; i < next && !probe.overflowed; i++ ) {
+		MSG_WriteByte( &probe, svc_serverCommand );
+		MSG_WriteLong( &probe, i );
+		MSG_WriteString( &probe, SV_GetReliableCommand( client, i & ( MAX_RELIABLE_COMMANDS - 1 ) ) );
+	}
+	if ( !probe.overflowed ) {
+		MSG_WriteByte( &probe, svc_serverCommand );
+		MSG_WriteLong( &probe, next );
+		MSG_WriteString( &probe, command );
+		/* SV_Netchan_Transmit appends this outer EOF to every real message. */
+		MSG_WriteByte( &probe, svc_EOF );
+	}
+	oldsize = savedOldsize;
+	if ( probe.overflowed || probe.cursize > MAX_MSGLEN || probe.bit > MAX_MSGLEN * 8 ) {
+		return qfalse;
+	}
+	/* SV_AddReliableCommand performs a nonmutating free-span search.  A
+	 * failure leaves bytes, pointers, lengths, rover and sequence unchanged. */
+	if ( !SV_AddReliableCommand( client, next & ( MAX_RELIABLE_COMMANDS - 1 ), command ) ) {
+		return qfalse;
+	}
+	client->reliableSequence = next;
+	return qtrue;
+}
+qboolean SV_Cod1TrySendServerCommand( int clientNum, const char *text ) {
+ if(!svs.clients||!sv_maxclients||sv_maxclients->integer<1||sv_maxclients->integer>MAX_CLIENTS||
+    clientNum<0||clientNum>=sv_maxclients->integer)return qfalse;
+ return SV_Cod1QueueChecked(&svs.clients[clientNum],text,0);
+}
+#include "sv_cod1_localized_queue.inc"
+
 
 
 /*

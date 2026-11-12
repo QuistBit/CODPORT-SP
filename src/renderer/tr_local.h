@@ -32,10 +32,14 @@ If you have questions concerning this license or the applicable additional terms
 #define TR_LOCAL_H
 
 #include "../game/q_shared.h"
+#include "../game/bg_cod1_native_runtime.h"
+#include "../game/bg_cod1_actor_runtime.h"
 #include "../qcommon/qfiles.h"
 #include "../qcommon/qcommon.h"
 #include "tr_public.h"
 #include "qgl.h"
+#include "cod1_native_snapshot_arena.h"
+#include "cod1_model_light_types.h"
 
 #define GL_INDEX_TYPE       GL_UNSIGNED_INT
 typedef unsigned int glIndex_t;
@@ -64,8 +68,19 @@ long myftol( float f );
 
 // a trRefEntity_t has all the information passed in by
 // the client game, as well as some locally derived info
+typedef struct cod1NativeSubmission_s cod1NativeSubmission_t;
+typedef struct cod1ActorSubmission_s cod1ActorSubmission_t;
+typedef struct cod1TurretSubmission_s cod1TurretSubmission_t;
+typedef struct cod1TurretActorSubmission_s cod1TurretActorSubmission_t;
+typedef struct cod1ModelLightSource_s cod1ModelLightSource_t;
+typedef struct cod1ModelLightColors_s cod1ModelLightColors_t;
 typedef struct {
 	refEntity_t e;
+	cod1NativeSubmission_t *cod1NativeSubmission; // renderer-owned snapshot; public refEntity_t is unchanged
+	cod1ActorSubmission_t *cod1ActorSubmission; // actor pose is specific to this entity
+	cod1TurretActorSubmission_t *cod1TurretActorSubmission;
+	cod1TurretSubmission_t *cod1TurretSubmission; // typed immutable MG42 frame
+	c1mModelLightFrame cod1ModelLighting; /* renderer-owned, frame-local prepared lights */
 
 	float axisLength;           // compensate for non-normalized axis
 
@@ -85,6 +100,18 @@ typedef struct {
 	float modelMatrix[16];
 } orientationr_t;
 
+/* Internal selectors, never passed to OpenGL as enumerants. */
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812f
+#endif
+#define COD1_IMAGE_CLAMP_X (-101)
+#define COD1_IMAGE_CLAMP_Y (-102)
+static int R_Cod1ImageWrapS(int mode) {
+    return mode==COD1_IMAGE_CLAMP_X?GL_CLAMP_TO_EDGE:mode==COD1_IMAGE_CLAMP_Y?GL_REPEAT:mode;
+}
+static int R_Cod1ImageWrapT(int mode) {
+    return mode==COD1_IMAGE_CLAMP_Y?GL_CLAMP_TO_EDGE:mode==COD1_IMAGE_CLAMP_X?GL_REPEAT:mode;
+}
 typedef struct image_s {
 	char imgName[MAX_QPATH];            // game path, including extension
 	int width, height;                      // source image
@@ -100,7 +127,11 @@ typedef struct image_s {
 	qboolean allowPicmip;
 	qboolean characterMIP;      // independant 'character' mip scale ----(SA)	added
 
-	int wrapClampMode;              // GL_CLAMP or GL_REPEAT
+	int wrapClampMode;              // GL mode or COD1_IMAGE_CLAMP_X/Y
+	qboolean cod1TypeVariant;        // exact image sampler/mip cache key
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	int cod1MultiplyIdentityShift;   // source RGB byte scaling; zero aliases ordinary exact type
+#endif
 
 	int hash;           // for fast building of the backupHash
 
@@ -109,31 +140,17 @@ typedef struct image_s {
 
 //===============================================================================
 
+/* R48: renderer-private queue ordinals from CoDSP 0x4ef7d0..0x4efaf8.
+ * No game/network/weapon enum is changed. Fog and stencil slots retain their
+ * backend purpose in the gaps; native names preserve their measured ordering. */
 typedef enum {
-	SS_BAD,
-	SS_PORTAL,          // mirrors, portals, viewscreens
-	SS_ENVIRONMENT,     // sky box
-	SS_OPAQUE,          // opaque
-
-	SS_DECAL,           // scorch marks, etc.
-	SS_SEE_THROUGH,     // ladders, grates, grills that may have small blended edges
-						// in addition to alpha test
-	SS_BANNER,
-
-	SS_FOG,
-
-	SS_UNDERWATER,      // for items that should be drawn in front of the water plane
-
-	SS_BLEND0,          // regular transparency and filters
-	SS_BLEND1,          // generally only used for additive type effects
-	SS_BLEND2,
-	SS_BLEND3,
-
-	SS_BLEND6,
-	SS_STENCIL_SHADOW,
-	SS_ALMOST_NEAREST,  // gun smoke puffs
-
-	SS_NEAREST          // blood blobs
+    SS_BAD=0, SS_PORTAL=1, SS_ENVIRONMENT=2,
+    SS_COD1_OCEAN=3, SS_COD1_BOATHULL=4,
+    SS_OPAQUE=5, SS_DECAL=6, SS_SEE_THROUGH=7, SS_BANNER=8,
+    SS_FOG=9, SS_UNDERWATER=10, SS_COD1_WATER=11, SS_COD1_CORONA=12,
+    SS_COD1_INNER_BLEND=13, SS_COD1_OUTER_BLEND=14,
+    SS_BLEND0=15, SS_BLEND2=16, SS_BLEND3=17, SS_BLEND6=18,
+    SS_BLEND1=19, SS_STENCIL_SHADOW=20, SS_ALMOST_NEAREST=21, SS_NEAREST=22
 } shaderSort_t;
 
 
@@ -198,7 +215,8 @@ typedef enum {
 	CGEN_WAVEFORM,          // programmatically generated
 	CGEN_LIGHTING_DIFFUSE,
 	CGEN_FOG,               // standard fog
-	CGEN_CONST              // fixed color
+	CGEN_CONST,             // fixed color
+	CGEN_COD1_PRECALC       // R52: independent packed model-instance colour
 } colorGen_t;
 
 typedef enum {
@@ -287,6 +305,9 @@ typedef struct {
 
 typedef struct {
 	image_t         *image[MAX_IMAGE_ANIMATIONS];
+	/* R53: source map policy; all current image loaders are eager. Keep the
+	 * request on the bundle, never mutate a shared cached image by consumer. */
+	unsigned cod1MapLoadFlags;
 	int numImageAnimations;
 	float imageAnimationSpeed;
 
@@ -302,7 +323,11 @@ typedef struct {
 	qboolean isVideoMap;
 } textureBundle_t;
 
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+#define NUM_TEXTURE_BUNDLES 3
+#else
 #define NUM_TEXTURE_BUNDLES 2
+#endif
 
 typedef struct {
 	qboolean active;
@@ -318,6 +343,17 @@ typedef struct {
 	byte constantColor[4];                      // for CGEN_CONST and AGEN_CONST
 
 	unsigned stateBits;                         // GLS_xxxx mask
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+	/* Opt-in CoD stage fog color translation; RTCW stages remain unchanged. */
+	qboolean cod1NativeFogColor;
+#endif
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	/* Zero keeps the legacy shader-wide combine. Native bundle one records
+	 * its validated environment independently for each stage. */
+	int cod1TexEnv;
+	/* The third authored bundle has its own downstream texture environment. */
+	int cod1TexEnv2;
+#endif
 
 	acff_t adjustColorsForFog;
 
@@ -327,6 +363,19 @@ typedef struct {
 	qboolean isDetail;
 	qboolean isFogged;              // used only for shaders that have fog disabled, so we can enable it for individual stages
 } shaderStage_t;
+
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+/* Authored perLight stages are retained apart from ordinary iteration.
+ * R62 consumes dynamic point lights; native prepared-static lists remain open. */
+typedef struct cod1PerlightRuntime_s {
+    unsigned sourceHash, sourceStageMask;
+    int numStages;
+    int needsBasis;
+    cvar_t *quality;
+    int dlightBundle[MAX_SHADER_STAGES];
+    shaderStage_t stage[MAX_SHADER_STAGES];
+} cod1PerlightRuntime_t;
+#endif
 
 struct shaderCommands_s;
 
@@ -357,10 +406,37 @@ typedef struct {
 	float depthForOpaque;
 } fogParms_t;
 
+typedef enum {
+	COD1_MATERIAL_UNRESOLVED,
+	COD1_MATERIAL_SCRIPT_LEGACY,
+	COD1_MATERIAL_SCRIPT_WINDOW,
+	COD1_MATERIAL_SCRIPT_IR,
+	COD1_MATERIAL_SCRIPT_WATER_CANDIDATE,
+	COD1_MATERIAL_SCRIPT_DIFFUSE,
+	COD1_MATERIAL_IMPLICIT_IMAGE,
+	COD1_MATERIAL_SCRIPT_PARSE_FAILED,
+	COD1_MATERIAL_MISSING_IMAGE,
+	COD1_MATERIAL_STYPE_SUBSET,
+	COD1_MATERIAL_STYPE_FAILED,
+    COD1_MATERIAL_SCRIPT_PERLIGHT_PARTIAL,
+	COD1_MATERIAL_ROUTE_COUNT
+} cod1MaterialRoute_t;
+
+typedef enum {
+	COD1_SURFACE_DRAWN,
+	COD1_SURFACE_DEFAULT_SHADER,
+	COD1_SURFACE_FLAG_SKIP,
+	COD1_SURFACE_SKY_SKIP
+} cod1SurfaceMaterialStatus_t;
+
 
 typedef struct shader_s {
 	char name[MAX_QPATH];               // game path, including extension
 	int lightmapIndex;                  // for a shader to match, both name and lightmapIndex must match
+#if COD1_NATIVE_LIGHTMAP_PACK
+	/* Set only when a positive packed group produced a lightmap-free shader. */
+	qboolean cod1PackedLightmapFree;
+#endif
 
 	int index;                          // this shader == tr.shaders[index]
 	int sortedIndex;                    // this shader == tr.sortedShaders[sortedIndex]
@@ -374,6 +450,38 @@ typedef struct shader_s {
 										// the same name, we don't try looking for it again
 
 	qboolean explicitlyDefined;         // found in a .shader file
+	/* How a CoD BSP59 world material was resolved. This describes the current
+	 * renderer, not a claim about the original engine's stage semantics. */
+	cod1MaterialRoute_t cod1MaterialRoute;
+	/* R47: immutable material provenance/cache role, not game/protocol data. */
+	qboolean cod1StaticModelSource;
+	qboolean cod1StaticLightingDiffuseBridge; /* native LightingDiffuse mapped to static exact-vertex RGB */
+	qboolean cod1ShaderType;
+	int cod1ShaderTypeLightmapKey;
+	unsigned cod1ShaderTypeHash;
+	unsigned cod1NativeSurfaceFlags; /* authored native .stype surfaceparm metadata */
+	char cod1ShaderTypePath[128];
+	unsigned cod1ScriptOffset; // offset in combined text, not a PK3 file identity
+	qboolean cod1HasScriptSource;
+	qboolean cod1MaterialFromBackup; // combined text offset may now be stale
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    cod1PerlightRuntime_t *cod1PerlightRuntime;
+    qboolean cod1SunDirectional; /* private sun disk: homogeneous vertex w=0 */
+    qboolean cod1SunFileSeen;
+    char cod1SunFile[64];
+#endif
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+	qboolean cod1Bsp59WorldMaterialSource; // renderer lookup originated in v59 material lump
+#endif
+#if defined(COD1_WATER_FIXED2_CANDIDATE) && COD1_WATER_FIXED2_CANDIDATE
+	qboolean cod1WaterFixed2Candidate;   // opt-in source-shape experiment only
+#endif
+
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+	qboolean cod1WaterProgramSource; /* also marks failed capability-dependent registrations */
+    int cod1WaterProgramLightmapKey; /* exact requested role/atlas, including cached failures */
+	struct cod1WaterMaterial_s *cod1WaterRuntime; /* immutable hunk-local program */
+#endif
 
 	int surfaceFlags;                   // if explicitlyDefined, this will have SURF_* flags
 	int contentFlags;
@@ -390,6 +498,9 @@ typedef struct shader_s {
 
 	cullType_t cullType;                // CT_FRONT_SIDED, CT_BACK_SIDED, or CT_TWO_SIDED
 	qboolean polygonOffset;             // set for decals and other items that must be offset
+	/* Native shader keyword selects the depth bias independently of material
+	 * name. Zero retains the ordinary RTCW/CoD polygonOffset behaviour. */
+	int cod1PolygonOffsetMode;           // 0: factor/units, 1: twice both, 2: constant units
 	qboolean noMipMaps;                 // for console fonts, 2D elements, etc.
 	qboolean noPicMip;                  // for images that must always be full resolution
 	qboolean characterMip;              // use r_picmip2 rather than r_picmip
@@ -481,6 +592,8 @@ typedef struct {
 
 	int num_dlights;
 	struct dlight_s *dlights;
+	int cod1PreparedDlightCount; /* full current scene slice for nonzero native mode */
+	struct dlight_s *cod1PreparedDlights;
 
 	int num_coronas;
 	struct corona_s *coronas;
@@ -544,6 +657,7 @@ typedef struct {
 	int viewportX, viewportY, viewportWidth, viewportHeight;
 	float fovX, fovY;
 	float projectionMatrix[16];
+	float depthHackProjectionMatrix[16]; // PATCH45: per-view weapon near plane
 	cplane_t frustum[4];
 	vec3_t visBounds[2];
 	float zFar;
@@ -679,6 +793,13 @@ typedef struct {
 
 	int numVerts;
 	drawVert_t      *verts;
+    /* R52: populated only by the static XModel producer, never by shaders.
+     * Keep separate from normal-dependent drawVert.color for mixed stages. */
+    qboolean cod1PrecalcValid;
+    byte cod1PrecalcRGBA[4];
+    const cod1ModelLightSource_t *cod1ModelLightSource; /* immutable world-owned model input */
+    cod1ModelLightColors_t *cod1ModelLightColors; /* backend-owned atomic RGBA cache */
+    qboolean cod1ModelLightBakedValid; /* every source vertex has native baked RGB */
 } srfTriangles_t;
 
 
@@ -737,9 +858,35 @@ typedef struct {
 	int numSurfaces;
 } bmodel_t;
 
+/* One source record per v59 triangle soup, including inline models. The raw
+ * signed atlas and BSP bits survive the RTCW shader/lightmap bridge. A shader
+ * may be shared by many records; its cache key is not this material ID. */
+typedef struct {
+	int materialIndex;
+	int sourceAtlas;
+	int requestedLightmap;
+	int effectiveLightmap;
+	int registeredLightmap;
+	int resolvedShaderIndex;
+	qboolean fromBackup;
+	unsigned surfaceFlags;
+	unsigned contentFlags;
+	cod1MaterialRoute_t route;
+	cod1SurfaceMaterialStatus_t status;
+} cod1SurfaceMaterial_t;
+
 typedef struct {
 	char name[MAX_QPATH];               // ie: maps/tim_dm2.bsp
 	char baseName[MAX_QPATH];           // ie: tim_dm2
+
+	/* CoD1 compatibility: the version-59 loader can leave intentional holes
+	 * where unsupported sky surfaces are skipped.  The backend uses this flag
+	 * to clear those holes every frame instead of showing stale framebuffer
+	 * contents (the classic hall-of-mirrors effect). */
+	qboolean isCod1;
+    int cod1FirstWorldSurface,cod1WorldSurfaceCount;
+    unsigned *cod1MarkFlags; /* original material bits, render-only metadata */
+	cod1SurfaceMaterial_t *cod1SurfaceMaterials;
 
 	int dataSize;
 
@@ -782,12 +929,21 @@ typedef struct {
 
 //======================================================================
 
+typedef struct cod1NativeModel_s cod1NativeModel_t;
+typedef struct cod1ActorModel_s cod1ActorModel_t;
+typedef struct cod1TurretModel_s cod1TurretModel_t;
+typedef struct cod1TurretActorModel_s cod1TurretActorModel_t;
+
 typedef enum {
 	MOD_BAD,
 	MOD_BRUSH,
 	MOD_MESH,
 	MOD_MDS,
-	MOD_MDC // Ridah
+	MOD_MDC, // Ridah
+	MOD_COD1_XMODEL,
+	MOD_COD1_ACTOR_XMODEL,
+	MOD_COD1_TURRET_XMODEL,
+	MOD_COD1_TURRET_ACTOR
 } modtype_t;
 
 typedef struct model_s {
@@ -800,6 +956,10 @@ typedef struct model_s {
 	md3Header_t *md3[MD3_MAX_LODS]; // only if type == MOD_MESH
 	mdsHeader_t *mds;               // only if type == MOD_MDS
 	mdcHeader_t *mdc[MD3_MAX_LODS]; // only if type == MOD_MDC
+	cod1NativeModel_t *cod1Native;    // only if type == MOD_COD1_XMODEL
+	cod1ActorModel_t *cod1Actor;      // only if type == MOD_COD1_ACTOR_XMODEL
+	cod1TurretModel_t *cod1Turret;
+	cod1TurretActorModel_t *cod1TurretActor;
 
 	int numLods;
 
@@ -814,6 +974,25 @@ void        R_ModelInit( void );
 model_t     *R_GetModelByHandle( qhandle_t hModel );
 int         R_LerpTag( orientation_t *tag, const refEntity_t *refent, const char *tagName, int startIndex );
 void        R_ModelBounds( qhandle_t handle, vec3_t mins, vec3_t maxs );
+void        R_AddCod1NativeSurfaces( trRefEntity_t *e );
+void        R_AddCod1ActorSurfaces( trRefEntity_t *e );
+void R_AddCod1TurretSurfaces(trRefEntity_t *e);
+void R_Cod1TurretReset(void);
+qhandle_t RE_RegisterCod1TurretActor(const cod1TurretActorResourceState_t *state);
+int RE_AddCod1TurretActorToScene(const cod1TurretActorRenderState_t *state);
+void R_Cod1TurretActorReset(void);
+void R_AddCod1TurretActorSurfaces(trRefEntity_t *ent);
+int RE_AddCod1TurretToScene(const cod1TurretRenderState_t *state);
+int RE_Cod1TurretTagFlash(const cod1TurretRenderState_t *state,float world[16]);
+void        R_Cod1ActorPreview_f( void );
+void        R_Cod1ActorPreviewReset( void );
+int         R_Cod1ActorPreviewSubmit( const refdef_t *fd );
+cod1NativeSubmission_t *R_Cod1NativeCapture( model_t *model, cnsArena_t *arena );
+cod1NativeSubmission_t *R_Cod1NativeCaptureAnimated( model_t *model,
+                                    cnsArena_t *arena,
+                                    const cod1NativeAnimState_t *state );
+void R_Cod1NativeSubmissionTags( const cod1NativeSubmission_t *snapshot,
+                                 cod1NativeViewTags_t *out );
 
 void        R_Modellist_f( void );
 
@@ -892,10 +1071,10 @@ typedef struct {
 
 // the renderer front end should never modify glstate_t
 typedef struct {
-	int currenttextures[2];
+	int currenttextures[NUM_TEXTURE_BUNDLES];
 	int currenttmu;
 	qboolean finishCalled;
-	int texEnv[2];
+	int texEnv[NUM_TEXTURE_BUNDLES];
 	int faceCulling;
 	unsigned long glStateBits;
 } glstate_t;
@@ -963,10 +1142,18 @@ typedef struct {
 	image_t                 *scratchImage[32];
 	image_t                 *fogImage;
 	image_t                 *dlightImage;   // inverse-square highlight for projective adding
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    image_t                 *cod1DlightImage; /* native 64-square radial image */
+#endif
+    int cod1ModelLightHardwareLimit; /* queried GL_MAX_LIGHTS, normalized to 1..16 */
 	image_t                 *flareImage;
 	image_t                 *whiteImage;            // full of 0xff
 	image_t                 *identityLightImage;    // full of tr.identityLightByte
 
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+	vec3_t cod1WaterSunDirection;
+	qboolean cod1WaterSunValid;
+#endif
 	shader_t                *defaultShader;
 	shader_t                *shadowShader;
 //	shader_t				*projectionShadowShader;
@@ -976,6 +1163,14 @@ typedef struct {
 	shader_t                *spotFlareShader;
 	char                    *sunShaderName;
 	shader_t                *sunShader;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    struct cod1SunRuntime_s *cod1SunRuntime;
+    char cod1SunFile[64];
+    vec3_t cod1SunWorldDirection;
+    qboolean cod1SunWorldDirectionValid;
+    vec3_t cod1SunPrimaryDirection; /* last BSP type-1 record, raw direction */
+    qboolean cod1SunPrimaryValid;
+#endif
 	shader_t                *sunflareShader[6];  //----(SA) for the camera lens flare effect for sun
 
 	int numLightmaps;
@@ -1066,6 +1261,7 @@ extern cvar_t   *r_ignore;              // used for debugging anything
 extern cvar_t   *r_verbose;             // used for verbose debug spew
 extern cvar_t   *r_ignoreFastPath;      // allows us to ignore our Tess fast paths
 
+extern cvar_t   *r_znear_depthhack;
 extern cvar_t   *r_znear;               // near Z clip plane
 extern cvar_t   *r_zfar;                // far Z clip plane
 
@@ -1106,6 +1302,7 @@ extern cvar_t  *r_speeds;               // various levels of information display
 extern cvar_t  *r_detailTextures;       // enables/disables detail texturing stages
 extern cvar_t  *r_novis;                // disable/enable usage of PVS
 extern cvar_t  *r_nocull;
+extern cvar_t  *r_cod1NativeXModel;
 extern cvar_t  *r_facePlaneCull;        // enables culling of planar surfaces with back side test
 extern cvar_t  *r_nocurves;
 extern cvar_t  *r_showcluster;
@@ -1322,12 +1519,26 @@ model_t     *R_AllocModel( void );
 void        R_Init( void );
 image_t     *R_FindImageFile( const char *name, qboolean mipmap, qboolean allowPicmip, int glWrapClampMode );
 image_t     *R_FindImageFileExt( const char *name, qboolean mipmap, qboolean allowPicmip, qboolean characterMip, int glWrapClampMode ); //----(SA)	added
+image_t *R_FindCod1TypeImage( const char *name, qboolean mipmap, qboolean allowPicmip, qboolean characterMip, int glWrapClampMode );
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+image_t *R_FindCod1MultiplyIdentityImage( const char *name, qboolean mipmap, qboolean allowPicmip, qboolean characterMip, int glWrapClampMode, float identityLight, qboolean *unsupported );
+#endif
 
 image_t     *R_CreateImage( const char *name, const byte *pic, int width, int height, qboolean mipmap
 							, qboolean allowPicmip, int wrapClampMode );
 //----(SA)	added (didn't want to modify all instances of R_CreateImage()
 image_t     *R_CreateImageExt( const char *name, const byte *pic, int width, int height, qboolean mipmap
 							   , qboolean allowPicmip, qboolean characterMip, int wrapClampMode );
+#if COD1_NATIVE_LIGHTMAP_PACK
+extern qboolean cod1PackedWorldShaders;
+#endif
+/* Set when the active (or currently loading) world was parsed as CoD BSP v59.
+ * tr.world is not assigned until after world shader registration. */
+extern qboolean cod1Bsp59MapActive;
+#if COD1_NATIVE_LIGHTMAP_GL
+/* BSP v59 only. Caller passes an already packed RGBA lightmap image. */
+image_t     *R_CreateCod1LightmapImage( const char *name, const byte *rgba, int width, int height );
+#endif
 //----(SA)	end
 qboolean    R_GetModeInfo( int *width, int *height, float *windowAspect, int mode );
 
@@ -1356,11 +1567,35 @@ qhandle_t        RE_RegisterShader( const char *name );
 qhandle_t        RE_RegisterShaderNoMip( const char *name );
 qhandle_t RE_RegisterShaderFromImage( const char *name, int lightmapIndex, image_t *image, qboolean mipRawImage );
 
+shader_t *R_FindCod1StaticModelShader( const char *name, qboolean mipRawImage );
 shader_t    *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImage );
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+shader_t    *R_FindCod1Bsp59WorldMaterialShader( const char *name, int lightmapIndex,
+		qboolean mipRawImage );
+static shader_t *R_FindShaderForBspMaterial( const char *name, int lightmapIndex,
+		qboolean mipRawImage, qboolean cod1Bsp59Source ) {
+	return cod1Bsp59Source ?
+		R_FindCod1Bsp59WorldMaterialShader( name, lightmapIndex, mipRawImage ) :
+		R_FindShader( name, lightmapIndex, mipRawImage );
+}
+#else
+#define R_FindShaderForBspMaterial(name,lightmapIndex,mipRawImage,cod1Bsp59Source) \
+	R_FindShader( name, lightmapIndex, mipRawImage )
+#endif
 shader_t    *R_GetShaderByHandle( qhandle_t hShader );
 shader_t    *R_GetShaderByState( int index, long *cycleTime );
 shader_t *R_FindShaderByName( const char *name );
 void        R_InitShaders( void );
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+void R_Cod1SunInit(void);
+void R_Cod1SunWorldReset(void);
+void R_Cod1SunLoadWorld(void);
+void RB_Cod1SunSky(void);
+qboolean RB_Cod1SunEffects(void);
+#endif
+#if defined(COD1_WATER_FIXED2_CANDIDATE) && COD1_WATER_FIXED2_CANDIDATE
+void        R_Cod1WaterCaptureGLProfile( const char *extensions );
+#endif
 void        R_ShaderList_f( void );
 void    R_RemapShader( const char *oldShader, const char *newShader, const char *timeOffset );
 
@@ -1410,6 +1645,7 @@ typedef struct shaderCommands_s
 	vec4_t normal[SHADER_MAX_VERTEXES];
 	vec2_t texCoords[SHADER_MAX_VERTEXES][2];
 	color4ub_t vertexColors[SHADER_MAX_VERTEXES];
+	color4ub_t cod1PrecalcColors[SHADER_MAX_VERTEXES];
 	int vertexDlightBits[SHADER_MAX_VERTEXES];
 
 	stageVars_t svars;
@@ -1421,6 +1657,7 @@ typedef struct shaderCommands_s
 	int fogNum;
 
 	int dlightBits;         // or together of all vertexDlightBits
+	qboolean cod1PreparedModelDiffuse; /* every appended vertex owns prepared model diffuse */
 
 	int numIndexes;
 	int numVertexes;
@@ -1444,6 +1681,9 @@ void RB_StageIteratorGeneric( void );
 void RB_StageIteratorSky( void );
 void RB_StageIteratorVertexLitTexture( void );
 void RB_StageIteratorLightmappedMultitexture( void );
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+void RB_Cod1FogSnapshotFlush( void );
+#endif
 
 void RB_AddQuadStamp( vec3_t origin, vec3_t left, vec3_t up, byte *color );
 void RB_AddQuadStampExt( vec3_t origin, vec3_t left, vec3_t up, byte *color, float s1, float t1, float s2, float t2 );
@@ -1488,6 +1728,17 @@ LIGHTS
 
 void R_DlightBmodel( bmodel_t *bmodel );
 void R_SetupEntityLighting( const trRefdef_t *refdef, trRefEntity_t *ent );
+qboolean R_Cod1PrepareEntityLighting( const trRefdef_t *refdef, trRefEntity_t *ent );
+qboolean R_Cod1ShadeEntityVertex( const trRefEntity_t *ent, const float *localXYZ,
+                                const float *localNormal, byte *RGBA );
+qboolean R_Cod1PrepareStaticLighting( const cod1ModelLightSource_t *source,
+                                    const trRefdef_t *refdef, c1mModelLightFrame *frame );
+qboolean R_Cod1ShadePreparedVertex( const c1mModelLightFrame *frame, const float *worldXYZ,
+                                  const float *worldNormal, byte *RGBA );
+/* A NULL color pointer on success means the exact map-load RGB is reusable. */
+qboolean R_Cod1StaticModelColors( const srfTriangles_t *surface,
+                                 const trRefdef_t *refdef, const byte **rgba );
+void R_Cod1ModelLightingReset( void );
 void R_TransformDlights( int count, dlight_t * dl, orientationr_t * or );
 int R_LightForPoint( vec3_t point, vec3_t ambientLight, vec3_t directedLight, vec3_t lightDir );
 
@@ -1558,6 +1809,11 @@ void R_ToggleSmpFrame( void );
 
 void RE_ClearScene( void );
 void RE_AddRefEntityToScene( const refEntity_t *ent );
+int RE_AddCod1NativeView( const refEntity_t *ent,
+                          const cod1NativeAnimState_t *state,
+                          cod1NativeViewTags_t *tags );
+int RE_AddCod1ActorAnimated( const refEntity_t *ent,
+                             const cod1ActorAnimState_t *state );
 void RE_AddPolyToScene( qhandle_t hShader, int numVerts, const polyVert_t *verts );
 // Ridah
 void RE_AddPolysToScene( qhandle_t hShader, int numVerts, const polyVert_t *verts, int numPolys );
@@ -1611,6 +1867,7 @@ void    RB_CalcAlphaFromEntity( unsigned char *dstColors );
 void    RB_CalcAlphaFromOneMinusEntity( unsigned char *dstColors );
 void    RB_CalcStretchTexCoords( const waveForm_t *wf, float *texCoords );
 void    RB_CalcColorFromEntity( unsigned char *dstColors );
+qboolean RB_CalcCod1PrecalcModelColor(const shaderStage_t *stage,unsigned char *colors);
 void    RB_CalcColorFromOneMinusEntity( unsigned char *dstColors );
 void    RB_CalcSpecularAlpha( unsigned char *alphas );
 void    RB_CalcDiffuseColor( unsigned char *colors );
@@ -1718,11 +1975,19 @@ typedef enum {
 // contained in a backEndData_t.  This entire structure is
 // duplicated so the front and back end can run in parallel
 // on an SMP machine
+#define COD1_NATIVE_FRAME_BYTES (8 * 1024 * 1024)
+#define COD1_ACTOR_FRAME_BYTES (8 * 1024 * 1024)
+#define COD1_TURRET_FRAME_BYTES (4 * 1024 * 1024)
 typedef struct {
 	drawSurf_t drawSurfs[MAX_DRAWSURFS];
 	dlight_t dlights[MAX_DLIGHTS];
 	corona_t coronas[MAX_CORONAS];          //----(SA)
 	trRefEntity_t entities[MAX_ENTITIES];
+	cnsArena_t cod1NativeArena;
+	qboolean cod1NativeOverflowReported;
+	cnsArena_t cod1ActorArena;
+	cnsArena_t cod1TurretArena;
+	qboolean cod1ActorOverflowReported;
 	srfPoly_t polys[MAX_POLYS];
 	polyVert_t polyVerts[MAX_POLYVERTS];
 	renderCommandList_t commands;
@@ -1809,15 +2074,11 @@ extern float r_anormals[NUMMDCVERTEXNORMALS][3];
 
 #define MDC_MAX_DIST        ( MDC_MAX_OFS * MDC_DIST_SCALE )
 
-#if 0
-void R_MDC_DecodeXyzCompressed( mdcXyzCompressed_t *xyzComp, vec3_t out, vec3_t normal );
-#else   // optimized version
 #define R_MDC_DecodeXyzCompressed( ofsVec, out, normal ) \
 	( out )[0] = ( (float)( ( ofsVec ) & 255 ) - MDC_MAX_OFS ) * MDC_DIST_SCALE; \
 	( out )[1] = ( (float)( ( ofsVec >> 8 ) & 255 ) - MDC_MAX_OFS ) * MDC_DIST_SCALE; \
 	( out )[2] = ( (float)( ( ofsVec >> 16 ) & 255 ) - MDC_MAX_OFS ) * MDC_DIST_SCALE; \
 	VectorCopy( ( r_anormals )[( ofsVec >> 24 )], normal );
-#endif
 
 void R_AddMDCSurfaces( trRefEntity_t *ent );
 // done.
@@ -1854,3 +2115,10 @@ void R_Hunk_End( void );
 void R_FreeImageBuffer( void );
 
 #endif //TR_LOCAL_H (THIS MUST BE LAST!!)
+
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+void R_Cod1WaterRuntimeCaptureProfile(const char *version,const char *extensions);
+void RB_StageIteratorCod1Water(void);
+void R_Cod1WaterRuntimeShutdown(void);
+void R_ReleaseCod1WaterTexnum(image_t *image);
+#endif

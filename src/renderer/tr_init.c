@@ -30,6 +30,34 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "tr_local.h"
 
+/* Show the options compiled into the renderer in the normal console log.
+ * A successful source build alone does not establish which executable the
+ * user launched, and the optional BSP59 paths are off in a plain Debug build. */
+#ifndef COD1_BSP59_EXACT_VERTEX_ALPHA
+#define COD1_BSP59_EXACT_VERTEX_ALPHA 0
+#endif
+#ifndef COD1_MATERIAL_STAGE_COMPILER
+#define COD1_MATERIAL_STAGE_COMPILER 0
+#endif
+#ifndef COD1_WATER_FIXED2_CANDIDATE
+#define COD1_WATER_FIXED2_CANDIDATE 0
+#endif
+#ifndef COD1_NATIVE_LIGHTMAP_RGB
+#define COD1_NATIVE_LIGHTMAP_RGB 0
+#endif
+#ifndef COD1_NATIVE_LIGHTMAP_GL
+#define COD1_NATIVE_LIGHTMAP_GL 0
+#endif
+#ifndef COD1_NATIVE_LIGHTMAP_PACK
+#define COD1_NATIVE_LIGHTMAP_PACK 0
+#endif
+
+#ifdef _DEBUG
+#define COD1_RENDERER_BUILD_CONFIG "Debug"
+#else
+#define COD1_RENDERER_BUILD_CONFIG "Release"
+#endif
+
 
 //#ifdef __USEA3D
 //// Defined in snd_a3dg_refcommon.c
@@ -58,6 +86,7 @@ cvar_t  *r_displayRefresh;
 cvar_t  *r_detailTextures;
 
 cvar_t  *r_znear;
+cvar_t  *r_znear_depthhack;
 cvar_t  *r_zfar;
 
 cvar_t  *r_smp;
@@ -88,6 +117,7 @@ cvar_t  *r_speeds;
 cvar_t  *r_fullbright;
 cvar_t  *r_novis;
 cvar_t  *r_nocull;
+cvar_t  *r_cod1NativeXModel;
 cvar_t  *r_facePlaneCull;
 cvar_t  *r_showcluster;
 cvar_t  *r_nocurves;
@@ -283,6 +313,7 @@ static void AssertCvarRange( cvar_t *cv, float minVal, float maxVal, qboolean sh
 */
 static void InitOpenGL( void ) {
 	char renderer_buffer[1024];
+	GLint cod1ModelLightLimit;
 
 	//
 	// initialize OS specific portions of the renderer
@@ -313,6 +344,13 @@ static void InitOpenGL( void ) {
 			glConfig.maxTextureSize = 0;
 		}
 	}
+
+	/* Native 4a538c..4a53c4 queries every renderer initialization. */
+	cod1ModelLightLimit = 0;
+	qglGetIntegerv( GL_MAX_LIGHTS, &cod1ModelLightLimit );
+	if ( cod1ModelLightLimit <= 0 ) cod1ModelLightLimit = 8;
+	if ( cod1ModelLightLimit > 16 ) cod1ModelLightLimit = 16;
+	tr.cod1ModelLightHardwareLimit = cod1ModelLightLimit;
 
 	// init command buffers and SMP
 	R_InitCommandBuffers();
@@ -392,7 +430,14 @@ vidmode_t r_vidModes[] =
 	{ "Mode  9: 1600x1200",      1600,   1200,   1 },
 	{ "Mode 10: 2048x1536",      2048,   1536,   1 },
 	{ "Mode 11: 856x480 (wide)",856, 480,    1 },
-	{ "Mode 12: 1920x1200 (wide)",1920,  1200,   1 }     //----(SA)	added
+	{ "Mode 12: 1920x1200 (wide)",1920,  1200,   1 },
+    { "Mode 13: 1280x720 (16:9)",1280,720,1 },
+    { "Mode 14: 1280x800 (16:10)",1280,800,1 },
+    { "Mode 15: 1920x1080 (16:9)",1920,1080,1 },
+    { "Mode 16: 1600x900 (16:9)",1600,900,1 },
+    { "Mode 17: 1680x1050 (16:10)",1680,1050,1 },
+    { "Mode 18: 2560x1440 (16:9)",2560,1440,1 },
+    { "Mode 19: 2560x1600 (16:10)",2560,1600,1 }     //----(SA)	added
 };
 static int s_numVidModes = ( sizeof( r_vidModes ) / sizeof( r_vidModes[0] ) );
 
@@ -409,7 +454,11 @@ qboolean R_GetModeInfo( int *width, int *height, float *windowAspect, int mode )
 	if ( mode == -1 ) {
 		*width = r_customwidth->integer;
 		*height = r_customheight->integer;
-		*windowAspect = r_customaspect->value;
+		if (*width < 320 || *height < 200 || *width > 16384 || *height > 16384)
+            return qfalse;
+        *windowAspect = r_customaspect->value;
+        if (*windowAspect <= 1.0f)
+            *windowAspect = (float)*width / *height;
 		return qtrue;
 	}
 
@@ -1032,6 +1081,8 @@ void R_Register( void ) {
 	r_flares = ri.Cvar_Get( "r_flares", "1", CVAR_ARCHIVE );
 	r_znear = ri.Cvar_Get( "r_znear", "4", CVAR_CHEAT );
 	AssertCvarRange( r_znear, 0.001f, 200, qtrue );
+	r_znear_depthhack = ri.Cvar_Get( "r_znear_depthhack", "0.1", CVAR_CHEAT );
+	AssertCvarRange( r_znear_depthhack, 0.001f, 200, qfalse );
 //----(SA)	added
 	r_zfar = ri.Cvar_Get( "r_zfar", "0", CVAR_CHEAT );
 //----(SA)	end
@@ -1099,6 +1150,7 @@ void R_Register( void ) {
 	// done
 
 	r_nocurves = ri.Cvar_Get( "r_nocurves", "0", CVAR_CHEAT );
+	r_cod1NativeXModel = ri.Cvar_Get( "r_cod1NativeXModel", "0", CVAR_ARCHIVE );
 	r_drawworld = ri.Cvar_Get( "r_drawworld", "1", CVAR_CHEAT );
 	r_lightmap = ri.Cvar_Get( "r_lightmap", "0", CVAR_CHEAT );
 	r_portalOnly = ri.Cvar_Get( "r_portalOnly", "0", CVAR_CHEAT );
@@ -1150,6 +1202,8 @@ void R_Register( void ) {
 	ri.Cmd_AddCommand( "screenshotJPEG", R_ScreenShotJPEG_f );
 	ri.Cmd_AddCommand( "gfxinfo", GfxInfo_f );
 	ri.Cmd_AddCommand( "taginfo", R_TagInfo_f );
+	R_Cod1ActorPreviewReset();
+	ri.Cmd_AddCommand( "cod1_actor_preview", R_Cod1ActorPreview_f );
 
 	// Ridah
 	ri.Cmd_AddCommand( "cropimages", R_CropImages_f );
@@ -1166,9 +1220,18 @@ void R_Init( void ) {
 	int i;
 
 	ri.Printf( PRINT_ALL, "----- R_Init -----\n" );
+	ri.Printf( PRINT_ALL,
+		"*** COD1_BSP59_BUILD_STAMP_V1: %s renderer, compiled %s %s; exactAlpha=%d materialCompiler=%d fixed2Water=%d nativeLightmapRGB=%d nativeLightmapGL=%d nativeLightmapPack=%d ***\n",
+		COD1_RENDERER_BUILD_CONFIG, __DATE__, __TIME__,
+		COD1_BSP59_EXACT_VERTEX_ALPHA, COD1_MATERIAL_STAGE_COMPILER,
+		COD1_WATER_FIXED2_CANDIDATE, COD1_NATIVE_LIGHTMAP_RGB,
+		COD1_NATIVE_LIGHTMAP_GL, COD1_NATIVE_LIGHTMAP_PACK );
 
+	R_Cod1TurretReset();
+    R_Cod1TurretActorReset();
 	// clear all our internal state
 	memset( &tr, 0, sizeof( tr ) );
+	cod1Bsp59MapActive = qfalse;
 	memset( &backEnd, 0, sizeof( backEnd ) );
 	memset( &tess, 0, sizeof( tess ) );
 
@@ -1223,22 +1286,51 @@ void R_Init( void ) {
 
 //	backEndData[0] = ri.Hunk_Alloc( sizeof( *backEndData[0] ), h_low );
 	backEndData[0] = ri.Hunk_Alloc( sizeof( *backEndData[0] ) + sizeof( srfPoly_t ) * max_polys + sizeof( polyVert_t ) * max_polyverts, h_low );
+	backEndData[0]->cod1NativeArena.data = ri.Hunk_Alloc( COD1_NATIVE_FRAME_BYTES, h_low );
+	backEndData[0]->cod1NativeArena.capacity = COD1_NATIVE_FRAME_BYTES;
+	backEndData[0]->cod1NativeArena.used = 0;
+	backEndData[0]->cod1ActorArena.data = ri.Hunk_Alloc( COD1_ACTOR_FRAME_BYTES, h_low );
+	backEndData[0]->cod1ActorArena.capacity = COD1_ACTOR_FRAME_BYTES;
+	backEndData[0]->cod1ActorArena.used = 0;
+    backEndData[0]->cod1TurretArena.data=ri.Hunk_Alloc(COD1_TURRET_FRAME_BYTES,h_low);
+    backEndData[0]->cod1TurretArena.capacity=COD1_TURRET_FRAME_BYTES;
+    backEndData[0]->cod1TurretArena.used=0;
 
 	if ( r_smp->integer ) {
 //		backEndData[1] = ri.Hunk_Alloc( sizeof( *backEndData[1] ), h_low );
 		backEndData[1] = ri.Hunk_Alloc( sizeof( *backEndData[1] ) + sizeof( srfPoly_t ) * max_polys + sizeof( polyVert_t ) * max_polyverts, h_low );
+		backEndData[1]->cod1NativeArena.data = ri.Hunk_Alloc( COD1_NATIVE_FRAME_BYTES, h_low );
+		backEndData[1]->cod1NativeArena.capacity = COD1_NATIVE_FRAME_BYTES;
+		backEndData[1]->cod1NativeArena.used = 0;
+		backEndData[1]->cod1ActorArena.data = ri.Hunk_Alloc( COD1_ACTOR_FRAME_BYTES, h_low );
+		backEndData[1]->cod1ActorArena.capacity = COD1_ACTOR_FRAME_BYTES;
+		backEndData[1]->cod1ActorArena.used = 0;
+        backEndData[1]->cod1TurretArena.data=ri.Hunk_Alloc(COD1_TURRET_FRAME_BYTES,h_low);
+        backEndData[1]->cod1TurretArena.capacity=COD1_TURRET_FRAME_BYTES;
+        backEndData[1]->cod1TurretArena.used=0;
 	} else {
 		backEndData[1] = NULL;
 	}
 	R_ToggleSmpFrame();
 
 	InitOpenGL();
+	/* The legacy glConfig string is bounded; cache the exact GL extension
+	 * operands before a long driver string can hide an authored requires. */
+#if defined(COD1_WATER_FIXED2_CANDIDATE) && COD1_WATER_FIXED2_CANDIDATE
+	R_Cod1WaterCaptureGLProfile( (const char *)qglGetString( GL_EXTENSIONS ) );
+#endif
 
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+    R_Cod1WaterRuntimeCaptureProfile(glConfig.version_string,(const char*)qglGetString(GL_EXTENSIONS));
+#endif
 	R_InitImages();
 
 
 
 	R_InitShaders();
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    R_Cod1SunInit();
+#endif
 
 	R_InitSkins();
 
@@ -1275,13 +1367,23 @@ void RE_Shutdown( qboolean destroyWindow ) {
 	ri.Cmd_RemoveCommand( "modelist" );
 	ri.Cmd_RemoveCommand( "shaderstate" );
 	ri.Cmd_RemoveCommand( "taginfo" );
+	ri.Cmd_RemoveCommand( "cod1_actor_preview" );
+	R_Cod1ActorPreviewReset();
 
 	// Ridah
 	ri.Cmd_RemoveCommand( "cropimages" );
 	// done.
 
+	if ( tr.registered ) R_SyncRenderThread();
+	R_Cod1TurretReset();
+    R_Cod1TurretActorReset();
+	R_Cod1ModelLightingReset();
 	R_ShutdownCommandBuffers();
 
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+    if(tr.registered)R_SyncRenderThread();
+    R_Cod1WaterRuntimeShutdown();
+#endif
 	// Ridah, keep a backup of the current images if possible
 	// clean out any remaining unused media from the last backup
 	R_PurgeShaders( 9999999 );
@@ -1300,7 +1402,18 @@ void RE_Shutdown( qboolean destroyWindow ) {
 
 				R_BackupModels();
 				R_BackupShaders();
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+				/* R50A: R_BackupImages is a no-op with shader caching off.
+				 * Do not forget live GL names when the next map resets the
+				 * registry (r_cache=1, r_cacheShaders=0). */
+				if ( r_cacheShaders->integer ) {
+					R_BackupImages();
+				} else {
+					R_DeleteTextures();
+				}
+#else
 				R_BackupImages();
+#endif
 			}
 		}
 	} else if ( tr.registered ) {
@@ -1322,6 +1435,7 @@ void RE_Shutdown( qboolean destroyWindow ) {
 	}
 
 	tr.registered = qfalse;
+	cod1Bsp59MapActive = qfalse;
 }
 
 
@@ -1349,15 +1463,16 @@ GetRefAPI
 refexport_t *GetRefAPI( int apiVersion, refimport_t *rimp ) {
 	static refexport_t re;
 
-	ri = *rimp;
-
-	memset( &re, 0, sizeof( re ) );
-
+	/* R56 imports add native visibility callbacks. Check the version before
+	 * copying the larger record from a caller compiled for API 8. */
+	if ( !rimp ) return NULL;
 	if ( apiVersion != REF_API_VERSION ) {
-		ri.Printf( PRINT_ALL, "Mismatched REF_API_VERSION: expected %i, got %i\n",
+		if ( rimp->Printf ) rimp->Printf( PRINT_ALL, "Mismatched REF_API_VERSION: expected %i, got %i\n",
 				   REF_API_VERSION, apiVersion );
 		return NULL;
 	}
+	ri = *rimp;
+	memset( &re, 0, sizeof( re ) );
 
 	// the RE_ functions are Renderer Entry points
 
@@ -1385,6 +1500,10 @@ refexport_t *GetRefAPI( int apiVersion, refimport_t *rimp ) {
 
 	re.ClearScene       = RE_ClearScene;
 	re.AddRefEntityToScene = RE_AddRefEntityToScene;
+    re.AddCod1TurretToScene=RE_AddCod1TurretToScene;
+    re.Cod1TurretTagFlash=RE_Cod1TurretTagFlash;
+    re.RegisterCod1TurretActor=RE_RegisterCod1TurretActor;
+    re.AddCod1TurretActorToScene=RE_AddCod1TurretActorToScene;
 	re.AddPolyToScene   = RE_AddPolyToScene;
 	// Ridah
 	re.AddPolysToScene  = RE_AddPolysToScene;
@@ -1414,4 +1533,3 @@ refexport_t *GetRefAPI( int apiVersion, refimport_t *rimp ) {
 
 	return &re;
 }
-

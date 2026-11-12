@@ -34,6 +34,11 @@ If you have questions concerning this license or the applicable additional terms
 // when the snapshot transitions like all the other entities
 
 #include "cg_local.h"
+#include "../game/bg_cod1_inventory.h"
+
+/* Implemented by the CoD HUD adapter in cg_draw.c. */
+void CG_Cod1HudModeReset(void);
+void CG_Cod1HudModeChanged(int weapon,int oldBits,int newBits);
 
 /*
 ==============
@@ -122,6 +127,8 @@ void CG_DamageFeedback( int yawByte, int pitchByte, int damage ) {
 	float yaw, pitch;
 	int slot;
 	viewDamage_t *vd;
+
+	CG_Cod1DamageFeedback(yawByte,pitchByte,damage);
 
 	// show the attacking player's head and name in corner
 	cg.attackerTime = cg.time;
@@ -234,6 +241,13 @@ A respawn happened this snapshot
 ================
 */
 void CG_Respawn( void ) {
+	/* A new player lifetime cannot retain a preceding stair camera offset. */
+	cg.stepChange = cg.cod1StepChange = 0;
+    /* A new player lifetime may reset the producer counter without rewinding
+     * render time. Do not carry casing identities across that boundary. */
+    CG_Cod1BrassClear();
+	CG_Cod1DamageReset();
+	CG_Cod1HudModeReset();
 	// no error decay on player movement
 	cg.thisFrameTeleport = qtrue;
 
@@ -302,6 +316,8 @@ void CG_CheckPlayerstateEvents_wolf( playerState_t *ps, playerState_t *ops ) {
 
 			cent->currentState.event = event;
 			cent->currentState.eventParm = ps->eventParms[ i & ( MAX_EVENTS - 1 ) ];
+            if(i >= ops->eventSequence) CG_Cod1BrassEvent(cent,event,i);
+            else CG_Cod1BrassCorrectionEvent(cent,ops->events[i & (MAX_EVENTS - 1)],event,i);
 			CG_EntityEvent( cent, cent->lerpOrigin );
 		}
 	}
@@ -331,6 +347,8 @@ void CG_CheckPlayerstateEvents( playerState_t *ps, playerState_t *ops ) {
 			event = ps->events[ i & ( MAX_EVENTS - 1 ) ];
 			cent->currentState.event = event;
 			cent->currentState.eventParm = ps->eventParms[ i & ( MAX_EVENTS - 1 ) ];
+            if(i >= ops->eventSequence) CG_Cod1BrassEvent(cent,event,i);
+            else CG_Cod1BrassCorrectionEvent(cent,ops->events[i & (MAX_EVENTS - 1)],event,i);
 			CG_EntityEvent( cent, cent->lerpOrigin );
 
 			cg.predictableEvents[ i & ( MAX_PREDICTED_EVENTS - 1 ) ] = event;
@@ -361,12 +379,16 @@ void CG_CheckChangedPredictableEvents( playerState_t *ps ) {
 			// if the new playerstate event is different from a previously predicted one
 			if ( ps->events[i & ( MAX_EVENTS - 1 )] != cg.predictableEvents[i & ( MAX_PREDICTED_EVENTS - 1 ) ] ) {
 
-				event = ps->events[ i & ( MAX_EVENTS - 1 ) ];
-				cent->currentState.event = event;
-				cent->currentState.eventParm = ps->eventParms[ i & ( MAX_EVENTS - 1 ) ];
-				CG_EntityEvent( cent, cent->lerpOrigin );
+				{
+					int oldEvent = cg.predictableEvents[ i & ( MAX_PREDICTED_EVENTS - 1 ) ];
+					event = ps->events[ i & ( MAX_EVENTS - 1 ) ];
+					cent->currentState.event = event;
+					cent->currentState.eventParm = ps->eventParms[ i & ( MAX_EVENTS - 1 ) ];
+                    CG_Cod1BrassCorrectionEvent(cent,oldEvent,event,i);
+					CG_EntityEvent( cent, cent->lerpOrigin );
 
-				cg.predictableEvents[ i & ( MAX_PREDICTED_EVENTS - 1 ) ] = event;
+					cg.predictableEvents[ i & ( MAX_PREDICTED_EVENTS - 1 ) ] = event;
+				}
 
 				if ( cg_showmiss.integer ) {
 					CG_Printf( "WARNING: changed predicted event\n" );
@@ -508,8 +530,10 @@ CG_TransitionPlayerState
 ===============
 */
 void CG_TransitionPlayerState( playerState_t *ps, playerState_t *ops ) {
+	qboolean respawned;
 	// check for changing follow mode
 	if ( ps->clientNum != ops->clientNum ) {
+        CG_Cod1BrassClear();
 		cg.thisFrameTeleport = qtrue;
 		// make sure we don't get any unwanted transition effects
 		*ops = *ps;
@@ -525,6 +549,9 @@ void CG_TransitionPlayerState( playerState_t *ps, playerState_t *ops ) {
 		CG_DamageFeedback( ps->damageYaw, ps->damagePitch, ps->damageCount );
 	}
 
+	/* Do not animate a previous life's firing mode after respawn/restart. */
+	respawned=(ps->persistant[PERS_SPAWN_COUNT] != ops->persistant[PERS_SPAWN_COUNT]) ||
+	    cg.mapRestart;
 	// respawning
 	if ( ps->persistant[PERS_SPAWN_COUNT] != ops->persistant[PERS_SPAWN_COUNT] ) {
 		CG_Respawn();
@@ -540,6 +567,21 @@ void CG_TransitionPlayerState( playerState_t *ps, playerState_t *ops ) {
 		CG_CheckLocalSounds( ps, ops );
 	}
 
+    if(!ps->aiChar && !(ps->pm_flags&PMF_FOLLOW) && ps->stats[STAT_HEALTH]>0) {
+        int selected=CW_ReconcileSelection(ps,ops,cg.weaponSelect);
+        if(selected!=cg.weaponSelect)CG_FinishWeaponChange(cg.weaponSelect,selected);
+		/* CoD's mode variants share one RTCW weapon ID. Selection alone
+		 * cannot reopen the native 1800 ms "weapon / mode" label. */
+		if(!respawned && ps->weapon==ops->weapon &&
+		   selected==ps->weapon && CW_ModeBit(ps->weapon) &&
+		   ((ps->stats[STAT_COD1_MODE]^ops->stats[STAT_COD1_MODE]) &
+		    CW_ModeBit(ps->weapon))) {
+			cg.weaponSelectTime=cg.time;
+			CG_Cod1HudModeChanged(ps->weapon,ops->stats[STAT_COD1_MODE],
+			                         ps->stats[STAT_COD1_MODE]);
+		}
+    }
+
 	// check for going low on ammo
 	CG_CheckAmmo();
 
@@ -552,4 +594,3 @@ void CG_TransitionPlayerState( playerState_t *ps, playerState_t *ops ) {
 		cg.duckTime = cg.time;
 	}
 }
-

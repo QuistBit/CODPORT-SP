@@ -29,6 +29,7 @@ If you have questions concerning this license or the applicable additional terms
 // cl_scrn.c -- master for refresh, status bar, console, chat, notify, etc
 
 #include "client.h"
+#include "../qcommon/cod1_client_trace_r241.h"
 
 qboolean scr_initialized;           // ready to draw
 
@@ -179,17 +180,29 @@ void SCR_DrawSmallChar( int x, int y, int ch ) {
 		return;
 	}
 
+	if ( cls.consoleFontValid && cls.consoleFont.glyphs[ch].glyph ) {
+		glyphInfo_t *g = &cls.consoleFont.glyphs[ch];
+		float scale = cls.consoleFontScale > 0.0f ? cls.consoleFontScale : 1.0f;
+		float w = g->imageWidth * scale;
+		float h = g->imageHeight * scale;
+		float gx = x + ( SMALLCHAR_WIDTH - w ) * 0.5f;
+		float gy = y + cls.consoleFontBaseline - g->top * scale;
+
+		/* Draw native glyph dimensions inside the fixed 8x16 console cell.
+		 * This keeps wrapping/input behaviour stable but no longer stretches
+		 * every glyph to the full line height. */
+		re.DrawStretchPic( gx, gy, w, h,
+					   g->s, g->t, g->s2, g->t2, g->glyph );
+		return;
+	}
+
 	row = ch >> 4;
 	col = ch & 15;
-
 	frow = row * 0.0625;
 	fcol = col * 0.0625;
 	size = 0.0625;
-
 	re.DrawStretchPic( x, y, SMALLCHAR_WIDTH, SMALLCHAR_HEIGHT,
-					   fcol, frow,
-					   fcol + size, frow + size,
-					   cls.charSetShader );
+					   fcol, frow, fcol + size, frow + size, cls.charSetShader );
 }
 
 
@@ -545,11 +558,13 @@ void SCR_UpdateScreen( void ) {
 		SCR_DrawScreenField( STEREO_CENTER );
 	}
 
+    CL_R241TraceMark(CT241_END_ENTER);
 	if ( com_speeds->integer ) {
 		re.EndFrame( &time_frontend, &time_backend );
 	} else {
 		re.EndFrame( NULL, NULL );
 	}
+    CL_R241TraceMark(CT241_END_EXIT);
 
 	recursive = 0;
 }

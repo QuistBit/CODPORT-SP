@@ -29,6 +29,7 @@ If you have questions concerning this license or the applicable additional terms
 // cg_marks.c -- wall marks
 
 #include "cg_local.h"
+#include "../game/bg_cod1_impact.h"
 
 /*
 ===================================================================
@@ -147,9 +148,9 @@ passed to the renderer.
 //#define	MARK_TOTAL_TIME		20000	// (SA) made this a cvar: cg_markTime  (we could cap the time or remove marks quicker if too long a time starts to cause new marks to not appear)
 #define MARK_FADE_TIME      10000
 
-void CG_ImpactMark( qhandle_t markShader, const vec3_t origin, const vec3_t dir,
+static void CG_ImpactMarkEx( qhandle_t markShader, const vec3_t origin, const vec3_t dir,
 					float orientation, float red, float green, float blue, float alpha,
-					qboolean alphaFade, float radius, qboolean temporary, int duration ) {
+					qboolean alphaFade, float radius, qboolean temporary, int duration, qboolean nativeTriangles ) {
 	vec3_t axis[3];
 	float texCoordScale;
 	vec3_t originalPoints[4];
@@ -200,7 +201,7 @@ void CG_ImpactMark( qhandle_t markShader, const vec3_t origin, const vec3_t dir,
 	// get the fragments
 	//VectorScale( dir, -20, projection );
 	VectorScale( dir, radius * 2, projection );
-	numFragments = trap_CM_MarkFragments( (int)orientation, (void *)originalPoints,
+	numFragments = trap_CM_MarkFragments( nativeTriangles ? (((int)orientation % 360 + 360) % 360)|COD1_MARK_TRIANGLES : (int)orientation, (void *)originalPoints,
 										  projection, MAX_MARK_POINTS, (float *)&markPoints[0],
 										  MAX_MARK_FRAGMENTS * multMaxFragments, markFragments );
 
@@ -264,6 +265,17 @@ void CG_ImpactMark( qhandle_t markShader, const vec3_t origin, const vec3_t dir,
 	}
 }
 
+
+/* Legacy callers retain exactly the old projection path. Only tagged bullet
+ * impacts request CoD world triangles; grenade rendering is not widened here. */
+void CG_ImpactMark(qhandle_t h,const vec3_t o,const vec3_t n,float a,float r,float g,float b,float alpha,
+    qboolean fade,float radius,qboolean temporary,int duration) {
+    CG_ImpactMarkEx(h,o,n,a,r,g,b,alpha,fade,radius,temporary,duration,qfalse);
+}
+void CG_Cod1ImpactMark(qhandle_t h,const vec3_t o,const vec3_t n,float a,float r,float g,float b,float alpha,
+    qboolean fade,float radius,qboolean temporary,int duration) {
+    CG_ImpactMarkEx(h,o,n,a,r,g,b,alpha,fade,radius,temporary,duration,qtrue);
+}
 
 /*
 ===============

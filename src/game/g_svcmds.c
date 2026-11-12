@@ -1,3 +1,4 @@
+#include "g_cod1_gsc_test.h"
 /*
 ===========================================================================
 
@@ -442,6 +443,7 @@ qboolean    ConsoleCommand( void ) {
 	char cmd[MAX_TOKEN_CHARS];
 
 	trap_Argv( 0, cmd, sizeof( cmd ) );
+    if(G_Cod1GscTestGraphCommand(cmd))return qtrue;
 
 	// Ridah, savegame
 	if ( Q_stricmp( cmd, "savegame" ) == 0 ) {

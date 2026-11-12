@@ -43,6 +43,7 @@ typedef struct {
 static WinMouseVars_t s_wmv;
 
 static int window_center_x, window_center_y;
+static qboolean win32MouseCentered;
 
 //
 // MIDI definitions
@@ -130,14 +131,17 @@ void IN_ShutdownWin32Mouse( void ) {
 IN_ActivateWin32Mouse
 ================
 */
-void IN_ActivateWin32Mouse( void ) {
+static qboolean IN_ActivateWin32Mouse( void ) {
 	int width, height;
 	RECT window_rect;
 
 	width = GetSystemMetrics( SM_CXSCREEN );
 	height = GetSystemMetrics( SM_CYSCREEN );
 
-	GetWindowRect( g_wv.hWnd, &window_rect );
+	win32MouseCentered = qfalse;
+	if ( width <= 0 || height <= 0 || !GetWindowRect( g_wv.hWnd, &window_rect ) ) {
+		return qfalse;
+	}
 	if ( window_rect.left < 0 ) {
 		window_rect.left = 0;
 	}
@@ -153,12 +157,13 @@ void IN_ActivateWin32Mouse( void ) {
 	window_center_x = ( window_rect.right + window_rect.left ) / 2;
 	window_center_y = ( window_rect.top + window_rect.bottom ) / 2;
 
-	SetCursorPos( window_center_x, window_center_y );
+	win32MouseCentered = SetCursorPos( window_center_x, window_center_y ) != 0;
 
 	SetCapture( g_wv.hWnd );
 	ClipCursor( &window_rect );
 	while ( ShowCursor( FALSE ) >= 0 )
 		;
+	return qtrue;
 }
 
 /*
@@ -167,6 +172,7 @@ IN_DeactivateWin32Mouse
 ================
 */
 void IN_DeactivateWin32Mouse( void ) {
+	win32MouseCentered = qfalse;
 	ClipCursor( NULL );
 	ReleaseCapture();
 	while ( ShowCursor( TRUE ) < 0 )
@@ -181,14 +187,20 @@ IN_Win32Mouse
 void IN_Win32Mouse( int *mx, int *my ) {
 	POINT current_pos;
 
-	// find mouse movement
-	GetCursorPos( &current_pos );
+	qboolean hadCenter = win32MouseCentered;
 
-	// force the mouse to the center, so there's room to move
-	SetCursorPos( window_center_x, window_center_y );
-
-	*mx = current_pos.x - window_center_x;
-	*my = current_pos.y - window_center_y;
+	*mx = *my = 0;
+	if ( !GetCursorPos( &current_pos ) ) {
+		win32MouseCentered = qfalse;
+		return;
+	}
+	/* A delta belongs to the interval between two successful recenters.
+	 * After losing the desktop, establish a new origin before reporting motion. */
+	win32MouseCentered = SetCursorPos( window_center_x, window_center_y ) != 0;
+	if ( hadCenter && win32MouseCentered ) {
+		*mx = current_pos.x - window_center_x;
+		*my = current_pos.y - window_center_y;
+	}
 }
 
 
@@ -285,9 +297,7 @@ void IN_ActivateMouse( void ) {
 		return;
 	}
 
-	s_wmv.mouseActive = qtrue;
-
-	IN_ActivateWin32Mouse();
+	s_wmv.mouseActive = IN_ActivateWin32Mouse();
 }
 
 
@@ -495,7 +505,9 @@ void IN_Frame( void ) {
 	IN_ActivateMouse();
 
 	// post events to the system que
-	IN_MouseMove();
+	if ( s_wmv.mouseActive ) {
+		IN_MouseMove();
+	}
 
 }
 

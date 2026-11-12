@@ -29,6 +29,12 @@ If you have questions concerning this license or the applicable additional terms
 // cl_cgame.c  -- client system interaction with client game
 
 #include "client.h"
+#include "../qcommon/cod1_client_trace_r241.h"
+#include "../qcommon/vm_local.h"
+#include "cl_cod1_keybinding.inc"
+#include "cl_cod1_ambient.inc"
+#include "../game/bg_cod1_native_runtime.h"
+#include "../game/bg_cod1_actor_runtime.h"
 
 #include "../game/botlib.h"
 
@@ -41,6 +47,18 @@ extern qboolean getCameraInfo( int camNum, int time, vec3_t *origin, vec3_t *ang
 // RF, this is only used when running a local server
 extern void SV_SendMoveSpeedsToGame( int entnum, char *text );
 extern qboolean SV_GetModelInfo( int clientNum, char *modelName, animModelInfo_t **modelInfo );
+
+/* Renderer is a static library linked into WolfSP.exe; keep this typed entry
+ * outside refexport_t so the established renderer API layout is unchanged. */
+extern int RE_AddCod1NativeView( const refEntity_t *re,
+                                const cod1NativeAnimState_t *state,
+                                cod1NativeViewTags_t *tags );
+extern int RE_AddCod1TurretToScene(const cod1TurretRenderState_t *);
+extern int RE_Cod1TurretTagFlash(const cod1TurretRenderState_t *,float[16]);
+extern qhandle_t RE_RegisterCod1TurretActor(const cod1TurretActorResourceState_t *);
+extern int RE_AddCod1TurretActorToScene(const cod1TurretActorRenderState_t *);
+extern int RE_AddCod1ActorAnimated( const refEntity_t *re,
+                                    const cod1ActorAnimState_t *state );
 
 
 /*
@@ -264,6 +282,7 @@ void CL_ConfigstringModified( void ) {
 	if ( index == CS_SYSTEMINFO ) {
 		// parse serverId and other cvars
 		CL_SystemInfoChanged();
+		CL_Cod1AmbientSystemInfoChanged();
 	}
 
 }
@@ -305,6 +324,7 @@ qboolean CL_GetServerCommand( int serverCommandNumber ) {
 rescan:
 	Cmd_TokenizeString( s );
 	cmd = Cmd_Argv( 0 );
+    if(CL_Cod1AmbientStaleCommand(serverCommandNumber))return qfalse;
 
 	if ( !strcmp( cmd, "disconnect" ) ) {
 		Com_Error( ERR_SERVERDISCONNECT,"Server disconnected\n" );
@@ -406,6 +426,8 @@ CL_ShutdonwCGame
 ====================
 */
 void CL_ShutdownCGame( void ) {
+    CL_R241TraceMapReset();
+    CL_Cod1KeyBindingStop();
 	cls.keyCatchers &= ~KEYCATCH_CGAME;
 	cls.cgameStarted = qfalse;
 	if ( !cgvm ) {
@@ -414,6 +436,9 @@ void CL_ShutdownCGame( void ) {
 	VM_Call( cgvm, CG_SHUTDOWN );
 	VM_Free( cgvm );
 	cgvm = NULL;
+    S_Cod1AmbientModuleReset();
+    S_Cod1VoiceModuleReset();
+    S_Cod1LoopModuleReset();
 }
 
 static int  FloatAsInt( float f ) {
@@ -463,6 +488,9 @@ int CL_CgameSystemCalls( int *args ) {
 	case CG_ARGS:
 		Cmd_ArgsBuffer( VMA( 1 ), args[2] );
 		return 0;
+    case CG_COD1_FS_GETFILELIST:
+        if(args[4]<=0 || args[4]>65536)return 0;
+        return FS_GetFileList(VMA(1),VMA(2),VMA(3),args[4]);
 	case CG_FS_FOPENFILE:
 		return FS_FOpenFileByMode( VMA( 1 ), VMA( 2 ), args[3] );
 	case CG_FS_READ:
@@ -529,6 +557,16 @@ int CL_CgameSystemCalls( int *args ) {
 	case CG_S_STARTSOUNDEX:
 		S_StartSoundEx( VMA( 1 ), args[2], args[3], args[4], args[5] );
 		return 0;
+	case CG_COD1_ALIAS_SLAVE:
+        S_Cod1AliasSlave(VMA(1));return 0;
+	case CG_COD1_LOOP_STREAM:
+        return S_Cod1LoopStream(VMA(1));
+	case CG_COD1_VOICE_STREAM:
+        return S_Cod1VoiceStream(VMA(1));
+	case CG_COD1_SOUND_DURATION:
+        return S_Cod1SoundDuration(args[1],VMF(2));
+	case CG_COD1_STARTALIASESOUND:
+		return S_StartSoundCod1( VMA( 1 ), args[2], args[3], args[4], VMF( 5 ), VMF( 6 ), VMF( 7 ), VMF( 8 ) );
 //----(SA)	end
 	case CG_S_STARTLOCALSOUND:
 		S_StartLocalSound( args[1], args[2] );
@@ -578,6 +616,10 @@ int CL_CgameSystemCalls( int *args ) {
 #else
 		return S_RegisterSound( VMA( 1 ), qfalse );
 #endif  ///// (SA) DOOMSOUND
+	case CG_COD1_SCRIPT_MUSIC:
+		return S_Cod1ScriptMusic(VMA(1));
+	case CG_COD1_SCRIPT_AMBIENT:
+		return S_Cod1ScriptAmbient(VMA(1));
 	case CG_S_STARTBACKGROUNDTRACK:
 		S_StartBackgroundTrack( VMA( 1 ), VMA( 2 ), args[3] );  //----(SA)	added fadeup time
 		return 0;
@@ -617,6 +659,18 @@ int CL_CgameSystemCalls( int *args ) {
 	case CG_R_ADDREFENTITYTOSCENE:
 		re.AddRefEntityToScene( VMA( 1 ) );
 		return 0;
+	case CG_COD1_NATIVE_VIEW:
+		return RE_AddCod1NativeView( VMA( 1 ), VMA( 2 ), VMA( 3 ) );
+    case CG_COD1_TURRET:
+        return RE_AddCod1TurretToScene(VMA(1));
+    case CG_COD1_TURRET_TAG_FLASH:
+        return RE_Cod1TurretTagFlash(VMA(1),VMA(2));
+    case CG_COD1_TURRET_ACTOR_REGISTER:
+        return RE_RegisterCod1TurretActor(VMA(1));
+    case CG_COD1_TURRET_ACTOR_ADD:
+        return RE_AddCod1TurretActorToScene(VMA(1));
+	case CG_COD1_ACTOR_ANIM:
+		return RE_AddCod1ActorAnimated( VMA( 1 ), VMA( 2 ) );
 	case CG_R_ADDPOLYTOSCENE:
 		re.AddPolyToScene( args[1], args[2], VMA( 3 ) );
 		return 0;
@@ -676,6 +730,12 @@ int CL_CgameSystemCalls( int *args ) {
 		return CL_GetCurrentCmdNumber();
 	case CG_GETUSERCMD:
 		return CL_GetUserCmd( args[1], VMA( 2 ) );
+    case CG_COD1_SETWEAPONANGLES:
+        cl.cgameCod1AimValid = args[1] && VMF(2)>=-360 && VMF(2)<=360 &&
+            VMF(3)>=-360 && VMF(3)<=360;
+        cl.cgameCod1WeaponAngles[0] = cl.cgameCod1AimValid ? VMF(2) : 0;
+        cl.cgameCod1WeaponAngles[1] = cl.cgameCod1AimValid ? VMF(3) : 0;
+        return 0;
 	case CG_SETUSERCMDVALUE:
 		CL_SetUserCmdValue( args[1], args[2], VMF( 3 ), args[4] );    //----(SA)	modified	// NERVE - SMF - added fourth arg [cld]
 		return 0;
@@ -816,7 +876,11 @@ int CL_CgameSystemCalls( int *args ) {
 				VM_Call( uivm, UI_SET_ACTIVE_MENU, UIMENU_BOOK2 );
 			} else if ( VMA( 1 ) && !Q_stricmp( VMA( 1 ), "hbook3" ) )    { //----(SA)
 				VM_Call( uivm, UI_SET_ACTIVE_MENU, UIMENU_BOOK3 );
-			} else if ( VMA( 1 ) && !Q_stricmp( VMA( 1 ), "pregame" ) )    { //----(SA) added
+			} else if ( VMA( 1 ) && !Q_stricmp( VMA( 1 ), "deadscreen" ) ) {
+                VM_Call( uivm, UI_SET_ACTIVE_MENU, UIMENU_COD1_DEATH );
+            } else if ( VMA( 1 ) && !Q_stricmp( VMA( 1 ), "victoryscreen" ) ) {
+                VM_Call( uivm, UI_SET_ACTIVE_MENU, UIMENU_COD1_VICTORY );
+            } else if ( VMA( 1 ) && !Q_stricmp( VMA( 1 ), "pregame" ) )    { //----(SA) added
 				VM_Call( uivm, UI_SET_ACTIVE_MENU, UIMENU_PREGAME );
 			} else {
 				VM_Call( uivm, UI_SET_ACTIVE_MENU, UIMENU_CLIPBOARD );
@@ -835,6 +899,11 @@ int CL_CgameSystemCalls( int *args ) {
 		}
 		return 0;
 		// - NERVE - SMF
+
+	case CG_COD1_KEYBINDING_CONTEXT:
+        return CL_Cod1KeyBindingContext((cod1KeyBindingQuery_t *)CL_Cod1KeyBindingPointer(args[1],args[2]));
+	case CG_COD1_KEYBINDING_SCAN:
+        return CL_Cod1KeyBindingScan(args[1],(char *)CL_Cod1KeyBindingPointer(args[2],args[3]),args[4]);
 
 	case CG_GETMODELINFO:
 		return SV_GetModelInfo( args[1], VMA( 2 ), VMA( 3 ) );
@@ -957,8 +1026,17 @@ void CL_InitCGame( void ) {
 	const char          *mapname;
 	int t1, t2;
 	vmInterpret_t interpret;
+    CL_R241TraceMapReset();
+    CL_Cod1KeyBindingStop();
+    S_Cod1AmbientModuleReset();
+    S_Cod1VoiceModuleReset();
+    S_Cod1LoopModuleReset();
 
 	t1 = Sys_Milliseconds();
+    Cvar_Get("com_cod1ImpactProtocol","0",CVAR_ROM);
+    Cvar_Set("com_cod1ImpactProtocol","1");
+    Cvar_Get("com_cod1BrassProtocol","0",CVAR_ROM);
+    Cvar_Set("com_cod1BrassProtocol","1");
 
 	// put away the console
 	Con_Close();
@@ -980,12 +1058,17 @@ void CL_InitCGame( void ) {
 	if ( !cgvm ) {
 		Com_Error( ERR_DROP, "VM_Create on cgame failed" );
 	}
+	Com_Printf("CoD1 actor: checking cgame ABI; use matching cgamex86.dll\n");
+	if (VM_Call(cgvm, CG_COD1_STATE_ABI, sizeof(playerState_t), sizeof(usercmd_t)) != COD1_ACTOR_CGAME_ABI) {
+		Com_Error(ERR_DROP, "CoD1 actor: rebuild and copy cgamex86.dll together with WolfSP.exe");
+	}
 	cls.state = CA_LOADING;
 
 	// init for this gamestate
 	// use the lastExecutedServerCommand instead of the serverCommandSequence
 	// otherwise server commands sent just before a gamestate are dropped
 	VM_Call( cgvm, CG_INIT, clc.serverMessageSequence, clc.lastExecutedServerCommand, clc.clientNum );
+    CL_Cod1KeyBindingStart();
 //	VM_Call( cgvm, CG_INIT, clc.serverMessageSequence, clc.serverCommandSequence );
 
 	// we will send a usercmd this frame, which
@@ -1036,7 +1119,9 @@ CL_CGameRendering
 =====================
 */
 void CL_CGameRendering( stereoFrame_t stereo ) {
+    CL_R241TraceCGameBegin(stereo);
 	VM_Call( cgvm, CG_DRAW_ACTIVE_FRAME, cl.serverTime, stereo, clc.demoplaying );
+    CL_R241TraceCGameEnd();
 	VM_Debug( 0 );
 }
 

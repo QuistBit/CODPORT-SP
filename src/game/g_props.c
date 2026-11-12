@@ -946,7 +946,7 @@ void Just_Got_Thrown( gentity_t *self ) {
 
 				// player can throw, then switch to a two handed weapon before catching.
 				// need to catch this (no pun intended)
-				if ( player->s.weapon && !( WEAPS_ONE_HANDED & ( 1 << ( player->s.weapon ) ) ) ) {
+				if ( player->s.weapon && !( BG_IsOneHandedWeapon(player->s.weapon) ) ) {
 					reGrab = qfalse;
 				}
 

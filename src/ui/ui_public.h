@@ -176,7 +176,9 @@ typedef enum {
 	UIMENU_WM_PICKPLAYER,   // NERVE - SMF - for multiplayer only
 	UIMENU_WM_QUICKMESSAGE, // NERVE - SMF
 	UIMENU_WM_LIMBO,        // NERVE - SMF
-	UIMENU_BRIEFING         //----(SA)	added
+	UIMENU_BRIEFING,        //----(SA)	added
+    UIMENU_COD1_VICTORY,    // R229 original victoryscreen popup
+    UIMENU_COD1_DEATH
 } uiMenuCommand_t;
 
 #define SORT_HOST           0

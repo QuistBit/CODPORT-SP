@@ -304,11 +304,21 @@ void Con_CheckResize( void ) {
 	int i, j, width, oldwidth, oldtotallines, numlines, numchars;
 	MAC_STATIC short tbuf[CON_TEXTSIZE];
 
-	width = ( SCREEN_WIDTH / SMALLCHAR_WIDTH ) - 2;
+	/* Small console glyphs are drawn in native pixels, so wrap against the
+	 * actual framebuffer width instead of the legacy 640 virtual width. */
+	if ( cls.glconfig.vidWidth > 0 ) {
+		width = ( cls.glconfig.vidWidth / SMALLCHAR_WIDTH ) - 2;
+	} else {
+		width = DEFAULT_CONSOLE_WIDTH;
+	}
 
 	if ( width == con.linewidth ) {
 		return;
 	}
+
+	/* Keep the command field in step with the console's native-pixel width. */
+	g_console_field_width = width;
+	g_consoleField.widthInChars = width;
 
 	if ( width < 1 ) {        // video hasn't been initialized yet
 		width = DEFAULT_CONSOLE_WIDTH;
@@ -638,48 +648,39 @@ void Con_DrawSolidConsole( float frac ) {
 	con.xadjust = 0;
 	SCR_AdjustFrom640( &con.xadjust, NULL, NULL, NULL );
 
-	// draw the background
+	// draw a clean CoD-style background; do not depend on RTCW console/console2 art
 	y = frac * SCREEN_HEIGHT - 2;
 	if ( y < 1 ) {
 		y = 0;
 	} else {
-		SCR_DrawPic( 0, 0, SCREEN_WIDTH, y, cls.consoleShader );
-
-		if ( frac >= 0.5f ) {  // only draw when the console is down all the way (for now)
-			color[0] = color[1] = color[2] = frac * 2.0f;
-			color[3] = 1.0f;
-			re.SetColor( color );
-
-			// draw the logo
-			SCR_DrawPic( 192, 70, 256, 128, cls.consoleShader2 );
-			re.SetColor( NULL );
-		}
+		color[0] = 0.055f;
+		color[1] = 0.055f;
+		color[2] = 0.055f;
+		color[3] = 0.97f;
+		SCR_FillRect( 0, 0, SCREEN_WIDTH, y, color );
 	}
 
-	color[0] = 0;
-	color[1] = 0;
-	color[2] = 0;
-	color[3] = 0.6f;
+	color[0] = 0.22f;
+	color[1] = 0.22f;
+	color[2] = 0.22f;
+	color[3] = 1.0f;
 	SCR_FillRect( 0, y, SCREEN_WIDTH, 2, color );
 
-	// draw the version number
-
-	re.SetColor( g_color_table[ColorIndex( COLNSOLE_COLOR )] );
-
-	i = strlen( Q3_VERSION );
-
-	for ( x = 0 ; x < i ; x++ ) {
-
-		SCR_DrawSmallChar( cls.glconfig.vidWidth - ( i - x ) * SMALLCHAR_WIDTH,
-
-						   ( lines - ( SMALLCHAR_HEIGHT + SMALLCHAR_HEIGHT / 2 ) ), Q3_VERSION[x] );
-
+	// draw a project build stamp instead of the RTCW "Wolf 1.41" footer
+	{
+		const char *version = va( "COD1 PORT dev %s %s", __DATE__, CPUSTRING );
+		re.SetColor( g_color_table[ColorIndex( COLNSOLE_COLOR )] );
+		i = strlen( version );
+		for ( x = 0 ; x < i ; x++ ) {
+			SCR_DrawSmallChar( cls.glconfig.vidWidth - 8 - ( i - x ) * SMALLCHAR_WIDTH,
+						   ( lines - ( SMALLCHAR_HEIGHT + SMALLCHAR_HEIGHT / 2 ) ), version[x] );
+		}
 	}
 
 
 	// draw the text
 	con.vislines = lines;
-	rows = ( lines - SMALLCHAR_WIDTH ) / SMALLCHAR_WIDTH;     // rows of text to draw
+	rows = ( lines - SMALLCHAR_HEIGHT ) / SMALLCHAR_HEIGHT;   // rows of text to draw
 
 	y = lines - ( SMALLCHAR_HEIGHT * 3 );
 

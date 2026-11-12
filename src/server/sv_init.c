@@ -34,6 +34,7 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "server.h"
+#include <stdint.h>
 
 /*
 ===============
@@ -123,6 +124,10 @@ SV_GetConfigstring
 
 ===============
 */
+#include "sv_cod1_localized_map.inc"
+
+#include "sv_cod1_hud_marker.inc"
+
 void SV_GetConfigstring( int index, char *buffer, int bufferSize ) {
 	if ( bufferSize < 1 ) {
 		Com_Error( ERR_DROP, "SV_GetConfigstring: bufferSize == %i", bufferSize );
@@ -306,60 +311,86 @@ char *SV_GetReliableCommand( client_t *cl, int index ) {
 SV_AddReliableCommand
 ===============
 */
+/* R128: find a complete free allocation, including the terminating byte.
+ * Pointer/length metadata defines occupied spans, including empty commands.
+ * A failed search never moves the rover or overwrites a pending/ACK string. */
 qboolean SV_AddReliableCommand( client_t *cl, int index, const char *cmd ) {
-	int length, i, j;
-	char    *ch, *ch2;
-	//
-	if ( !cl->reliableCommands.bufSize ) {
+	int i, pass, start, end, advance, chosen = -1;
+	size_t length;
+	uintptr_t begin, limit, pointer;
+	char *old;
+	int oldLength;
+
+	if ( !cl || !cmd || index < 0 || index >= MAX_RELIABLE_COMMANDS ||
+		 !cl->reliableCommands.buf || cl->reliableCommands.bufSize <= 0 ||
+		 !cl->reliableCommands.commands || !cl->reliableCommands.commandLengths ) {
 		return qfalse;
 	}
-	//
 	length = strlen( cmd );
-	//
-	if ( ( cl->reliableCommands.rover - cl->reliableCommands.buf ) + length + 1 >= cl->reliableCommands.bufSize ) {
-		// go back to the start
-		cl->reliableCommands.rover = cl->reliableCommands.buf;
+	if ( length >= (size_t)cl->reliableCommands.bufSize ) {
+		return qfalse;
 	}
-	//
-	// make sure this position won't overwrite another command
-	for ( i = length, ch = cl->reliableCommands.rover; i && !*ch; i--, ch++ ) {
-		// keep going until we find a bad character, or enough space is found
+	begin = (uintptr_t)cl->reliableCommands.buf;
+	if ( (uintptr_t)cl->reliableCommands.bufSize > UINTPTR_MAX - begin ) {
+		return qfalse;
 	}
-	// if the test failed
-	if ( i ) {
-		// find a valid spot to place the new string
-		// start at the beginning (keep it simple)
-		for ( i = 0, ch = cl->reliableCommands.buf; i < cl->reliableCommands.bufSize; i++, ch++ ) {
-			if ( !*ch && ( !i || !*( ch - 1 ) ) ) { // make sure we dont start at the terminator of another string
-				// see if this is the start of a valid segment
-				for ( ch2 = ch, j = 0; i < cl->reliableCommands.bufSize - 1 && j < length + 1 && !*ch2; i++, ch2++, j++ ) {
-					// loop
-				}
-				//
-				if ( j == length + 1 ) {
-					// valid segment found
-					cl->reliableCommands.rover = ch;
-					break;
-				}
-				//
-				if ( i == cl->reliableCommands.bufSize - 1 ) {
-					// ran out of room, not enough space for string
-					return qfalse;
-				}
-				//
-				ch = &cl->reliableCommands.buf[i];  // continue where ch2 left off
-			}
+	limit = begin + (uintptr_t)cl->reliableCommands.bufSize;
+	pointer = (uintptr_t)cl->reliableCommands.rover;
+	if ( pointer < begin || pointer > limit ||
+		 length + 1 > UINTPTR_MAX - (uintptr_t)cmd ||
+		 ( (uintptr_t)cmd < limit && begin < (uintptr_t)cmd + length + 1 ) ) {
+		return qfalse;
+	}
+	/* Validate every stored interval before searching.  All engine allocation
+	 * sites provide MAX_RELIABLE_COMMANDS metadata slots. */
+	for ( i = 0; i < MAX_RELIABLE_COMMANDS; i++ ) {
+		int n = cl->reliableCommands.commandLengths[i];
+		int j;
+		pointer = (uintptr_t)cl->reliableCommands.commands[i];
+		if ( !pointer ) {
+			if ( n ) return qfalse;
+			continue;
+		}
+		if ( n < 0 || pointer < begin || pointer >= limit ||
+			 (uintptr_t)n >= limit - pointer ) {
+			return qfalse;
+		}
+		for ( j = 0; j < i; j++ ) {
+			uintptr_t earlier = (uintptr_t)cl->reliableCommands.commands[j];
+			if ( earlier && pointer < earlier + cl->reliableCommands.commandLengths[j] + 1 &&
+				 earlier < pointer + n + 1 ) return qfalse;
 		}
 	}
-	//
-	// insert the command at the rover
-	cl->reliableCommands.commands[index] = cl->reliableCommands.rover;
-	Q_strncpyz( cl->reliableCommands.commands[index], cmd, length + 1 );
-	cl->reliableCommands.commandLengths[index] = length;
-	//
-	// move the rover along
-	cl->reliableCommands.rover += length + 1;
-	//
+	for ( pass = 0; pass < 2 && chosen < 0; pass++ ) {
+		start = pass ? 0 : (int)( (uintptr_t)cl->reliableCommands.rover - begin );
+		while ( (size_t)start + length + 1 <= (size_t)cl->reliableCommands.bufSize ) {
+			end = start + (int)length + 1;
+			advance = start;
+			for ( i = 0; i < MAX_RELIABLE_COMMANDS; i++ ) {
+				int occupied, occupiedEnd;
+				if ( i == index || !cl->reliableCommands.commands[i] ) continue;
+				occupied = (int)( (uintptr_t)cl->reliableCommands.commands[i] - begin );
+				occupiedEnd = occupied + cl->reliableCommands.commandLengths[i] + 1;
+				if ( start < occupiedEnd && occupied < end && occupiedEnd > advance ) {
+					advance = occupiedEnd;
+				}
+			}
+			if ( advance == start ) {
+				chosen = start;
+				break;
+			}
+			start = advance;
+		}
+	}
+	if ( chosen < 0 ) return qfalse;
+
+	old = cl->reliableCommands.commands[index];
+	oldLength = cl->reliableCommands.commandLengths[index];
+	if ( old ) memset( old, 0, (size_t)oldLength + 1 );
+	cl->reliableCommands.commands[index] = cl->reliableCommands.buf + chosen;
+	memcpy( cl->reliableCommands.commands[index], cmd, length + 1 );
+	cl->reliableCommands.commandLengths[index] = (int)length;
+	cl->reliableCommands.rover = cl->reliableCommands.commands[index] + length + 1;
 	return qtrue;
 }
 
@@ -594,6 +625,7 @@ SV_ClearServer
 */
 void SV_ClearServer( void ) {
 	int i;
+	SV_Cod1LocalizedClearMap();
 
 	for ( i = 0 ; i < MAX_CONFIGSTRINGS ; i++ ) {
 		if ( sv.configstrings[i] ) {
@@ -903,6 +935,8 @@ void SV_Init( void ) {
 	// Rafael gameskill
 	sv_gameskill = Cvar_Get( "g_gameskill", "1", CVAR_SERVERINFO | CVAR_LATCH );
 	// done
+	// Resume Game needs the last successfully committed save across launches.
+	Cvar_Get( "g_lastSaveGame", "", CVAR_ARCHIVE );
 
 	Cvar_Get( "sv_keywords", "", CVAR_SERVERINFO );
 	Cvar_Get( "protocol", va( "%i", PROTOCOL_VERSION ), CVAR_SERVERINFO | CVAR_ROM );

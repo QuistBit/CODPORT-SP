@@ -39,6 +39,42 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "g_local.h"
+#include "g_cod1_dropped_item.h"
+#include "bg_cod1_inventory.h"
+#include "g_cod1_health_fence.inc"
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+#include "g_cod1_entity_host.h"
+#include "g_cod1_gsc_test.h"
+
+static int G_Cod1PickupFiniteBounds(const gentity_t *item) {
+	int i;
+	for (i = 0; i < 3; ++i) {
+		if (!(item->r.absmin[i] >= -3.402823466e38f && item->r.absmin[i] <= 3.402823466e38f) ||
+			!(item->r.absmax[i] >= -3.402823466e38f && item->r.absmax[i] <= 3.402823466e38f) ||
+			item->r.absmin[i] > item->r.absmax[i]) return 0;
+	}
+	return 1;
+}
+
+typedef struct {
+	vec3_t mins, maxs;
+	int linked;
+} Cod1PickupBounds;
+
+static void G_Cod1PickupCaptureBounds(const gentity_t *item, Cod1PickupBounds *bounds) {
+	VectorCopy(item->r.absmin, bounds->mins);
+	VectorCopy(item->r.absmax, bounds->maxs);
+	bounds->linked = item->r.linked;
+}
+
+static int G_Cod1PickupSameBounds(const gentity_t *item, const Cod1PickupBounds *bounds) {
+	int i;
+	if (item->r.linked != bounds->linked) return 0;
+	for (i = 0; i < 3; ++i)
+		if (item->r.absmin[i] != bounds->mins[i] || item->r.absmax[i] != bounds->maxs[i]) return 0;
+	return 1;
+}
+#endif
 
 
 
@@ -53,6 +89,305 @@ If you have questions concerning this license or the applicable additional terms
 #define RESPAWN_POWERUP     120
 #define RESPAWN_PARTIAL     998     // for multi-stage ammo/health
 #define RESPAWN_PARTIAL_DONE 999    // for multi-stage ammo/health
+
+qboolean G_Cod1NativeHealthItem( const gitem_t *item ) {
+	return G_Cod1MapEntities() && item && item->giType == IT_HEALTH && item->classname &&
+		( !Q_stricmp( item->classname, "item_health_small" ) ||
+		  !Q_stricmp( item->classname, "item_health" ) ||
+		  !Q_stricmp( item->classname, "item_health_large" ) );
+}
+
+/* Native gamex86 0x2001d270..0x2001d6d6 examines nearby item bbox centers:
+ * eye-to-center <=72, forward cosine >=.76, then occlusion.  Use the same
+ * candidate for the server hint and +activate, including empty hands.
+ * Health also uses this path when a passive map trigger masks the item. */
+static gentity_t *G_Cod1AimedPickupItem( gentity_t *player, int itemType,
+	float *candidateScore ) {
+	vec3_t eye, forward, right, up, mins, maxs;
+	vec3_t reach = { 72.0f, 72.0f, 72.0f };
+	int indices[MAX_GENTITIES], count, i;
+	float bestScore = 1.0e30f;
+	gentity_t *best = NULL;
+	playerState_t *ps;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	Cod1PickupBounds bestBounds;
+	int checkedGeometry = 0;
+#endif
+
+	if ( candidateScore ) {
+		*candidateScore = bestScore;
+	}
+	if ( !player || !player->client || g_gametype.integer != GT_SINGLE_PLAYER ||
+		 player->health <= 0 || player->client->sess.sessionTeam == TEAM_SPECTATOR ||
+		 ( player->client->ps.pm_flags & PMF_LIMBO ) || player->client->ps.aiChar ) {
+		return NULL;
+	}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if (!G_Cod1UseSelectionReady(player)) return NULL;
+#endif
+	ps = &player->client->ps;
+	AngleVectors( ps->viewangles, forward, right, up );
+	CalcMuzzlePointForActivate( player, forward, right, up, eye );
+	VectorSubtract( eye, reach, mins );
+	VectorAdd( eye, reach, maxs );
+	count = trap_EntitiesInBox( mins, maxs, indices, MAX_GENTITIES );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if (!G_Cod1UseSelectionReady(player)) return NULL;
+	checkedGeometry = G_Cod1GscTestUseSelectionActive();
+	if (checkedGeometry) {
+		if (count < 0 || count > MAX_GENTITIES) { G_Cod1UseSelectionReject(); return NULL; }
+		for (i = 0; i < count; ++i)
+			if (indices[i] < 0 || indices[i] >= level.num_entities || indices[i] >= MAX_GENTITIES) { G_Cod1UseSelectionReject(); return NULL; }
+	}
+#endif
+	for ( i = 0; i < count; i++ ) {
+		gentity_t *item = &g_entities[indices[i]];
+		vec3_t center, direction;
+		trace_t tr;
+		float distance, cosine, score;
+		int weapon = WP_NONE;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+		Cod1PickupBounds queryBounds;
+#endif
+
+		if ( !item->inuse || item->s.eType != ET_ITEM || !item->item || !item->touch ||
+			 ( item->item->giType != IT_WEAPON &&
+			   !G_Cod1NativeHealthItem( item->item ) ) ||
+			 ( itemType && item->item->giType != itemType ) ||
+			 !( item->r.contents & CONTENTS_TRIGGER ) ||
+			 ( item->flags & FL_NODRAW ) ||
+			 item->s.modelindex <= 0 || item->s.modelindex >= bg_numItems ) {
+			continue;
+		}
+		if ( item->item->giType == IT_WEAPON ) {
+			weapon = item->item->giTag;
+			if ( !CW_WeaponDef( weapon ) ||
+				 ( item->cod1DroppedAmmo && item->cod1DropOwner == player->s.number &&
+				   level.time < item->cod1DropOwnerUntil ) ||
+				 ( !COM_BitCheck( ps->weapons, weapon ) &&
+				   !CW_PickupSlot( ps, weapon, qtrue ) ) ) {
+				continue;
+			}
+		}
+		/* The hint and USE candidate must agree with Touch_Item's shared
+		 * eligibility gate.  An aid kit at full health is not a USE target. */
+		if ( !BG_CanItemBeGrabbed( &item->s, ps ) ) {
+			continue;
+		}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+		if (G_Cod1GscTestUseSelectionActive() && !G_Cod1PickupFiniteBounds(item)) { G_Cod1UseSelectionReject(); return NULL; }
+#endif
+		VectorAdd( item->r.absmin, item->r.absmax, center );
+		VectorScale( center, 0.5f, center );
+		VectorSubtract( center, eye, direction );
+		distance = VectorNormalize( direction );
+		if ( distance > 72.0f || distance <= 0.0f ) {
+			continue;
+		}
+		cosine = DotProduct( direction, forward );
+		if ( cosine < 0.76f ) {
+			continue;
+		}
+		/* Original 0x2001d51e..0x2001d5a7 weights distance and angle.
+		 * The port currently adapts CoD weapons and the three aid kits. */
+		score = distance + 144.0f * ( 1.0f - ( cosine - 0.76f ) / 0.24f );
+		if ( score >= bestScore ) {
+			continue;
+		}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+		if (checkedGeometry) G_Cod1PickupCaptureBounds(item, &queryBounds);
+#endif
+		/* Training's two M1A1 carbines sit inside playerclip volumes. These
+		 * block player movement but not sight of the weapons on the table.
+		 * Keep solid world and actors in this visibility trace. */
+		trap_Trace( &tr, eye, NULL, NULL, center, player->s.number,
+			CONTENTS_SOLID | CONTENTS_BODY | CONTENTS_CORPSE );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+		if (!G_Cod1UseSelectionReady(player)) return NULL;
+		/* A same-allocation move during this or a later candidate's LOS
+		 * invalidates the point, visibility and score just calculated. */
+		if (checkedGeometry &&
+			(!G_Cod1PickupSameBounds(item, &queryBounds) ||
+			 (best && !G_Cod1PickupSameBounds(best, &bestBounds)))) {
+			G_Cod1UseSelectionReject(); return NULL;
+		}
+		if (G_Cod1GscTestUseSelectionActive() &&
+			(!(tr.fraction >= 0.0f && tr.fraction <= 1.0f) ||
+			 tr.entityNum < 0 || tr.entityNum >= MAX_GENTITIES ||
+			 (tr.entityNum != ENTITYNUM_WORLD && tr.entityNum != ENTITYNUM_NONE &&
+			  (tr.entityNum >= level.num_entities || !g_entities[tr.entityNum].inuse ||
+			   g_entities[tr.entityNum].s.number != tr.entityNum)) ||
+			 !(tr.plane.normal[0] >= -3.402823466e38f && tr.plane.normal[0] <= 3.402823466e38f) ||
+			 !(tr.plane.normal[1] >= -3.402823466e38f && tr.plane.normal[1] <= 3.402823466e38f) ||
+			 !(tr.plane.normal[2] >= -3.402823466e38f && tr.plane.normal[2] <= 3.402823466e38f) ||
+			 !(tr.endpos[0] >= -3.402823466e38f && tr.endpos[0] <= 3.402823466e38f) ||
+			 !(tr.endpos[1] >= -3.402823466e38f && tr.endpos[1] <= 3.402823466e38f) ||
+			 !(tr.endpos[2] >= -3.402823466e38f && tr.endpos[2] <= 3.402823466e38f))) { G_Cod1UseSelectionReject(); return NULL; }
+#endif
+		if ( tr.startsolid || ( tr.fraction < 1.0f && tr.entityNum != item->s.number ) ) {
+			continue;
+		}
+		bestScore = score;
+		best = item;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+		if (checkedGeometry) bestBounds = queryBounds;
+#endif
+	}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if (checkedGeometry && best && !G_Cod1PickupSameBounds(best, &bestBounds)) {
+		G_Cod1UseSelectionReject(); return NULL;
+	}
+#endif
+	if ( candidateScore ) {
+		*candidateScore = bestScore;
+	}
+	return best;
+}
+
+gentity_t *G_Cod1AimedPickupCandidate( gentity_t *player, float *score ) {
+	return G_Cod1AimedPickupItem( player, 0, score );
+}
+
+gentity_t *G_Cod1AimedWeaponItem( gentity_t *player ) {
+	return G_Cod1AimedPickupItem( player, IT_WEAPON, NULL );
+}
+
+/* The training carbine and aid-kit tables are enclosed by trigger_multiple
+ * brushes.  They fire when touched and are not direct USE targets, although
+ * the point trace (which includes CONTENTS_TRIGGER) can hit them first.
+ * Only bypass these passive volumes; doors, actors and other items keep their
+ * normal direct interaction priority. The candidate's own visibility trace
+ * still rejects solid occlusion. */
+qboolean G_Cod1AimedWeaponLookTraceAllows( const trace_t *lookTrace ) {
+	gentity_t *hit;
+	if ( !lookTrace ) {
+		return qfalse;
+	}
+	if ( lookTrace->fraction >= 1.0f ||
+		 lookTrace->entityNum == ENTITYNUM_WORLD ||
+		 lookTrace->entityNum == ENTITYNUM_NONE ) {
+		return qtrue;
+	}
+	if ( lookTrace->entityNum < 0 || lookTrace->entityNum >= MAX_GENTITIES ) {
+		return qfalse;
+	}
+	hit = &g_entities[lookTrace->entityNum];
+	if ( hit->s.eType == ET_ITEM && hit->item &&
+		 ( G_Cod1NativeHealthItem( hit->item ) ||
+		   ( hit->item->giType == IT_WEAPON && CW_WeaponDef( hit->item->giTag ) ) ) ) {
+		return qtrue;
+	}
+	if ( hit->classname && !Q_stricmp( hit->classname, "trigger_multiple" ) &&
+		 ( hit->r.contents & CONTENTS_TRIGGER ) ) {
+		return qtrue;
+	}
+	return qfalse;
+}
+
+/* The unified native selector already chose this item by distance, angle and
+ * visibility.  Applying it must not query again or let the old point trace
+ * veto a valid item behind a passive trigger. */
+qboolean G_Cod1ApplyAimedPickupCandidate( gentity_t *player, gentity_t *item,
+	qboolean hint ) {
+	trace_t itemTrace;
+	int pickupPreference;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	GscEntityRef pickupPlayer, pickupItem;
+	int checkedPlayer = 0;
+#endif
+	if ( !player || !player->client || g_gametype.integer != GT_SINGLE_PLAYER ||
+		 player->health <= 0 || player->client->sess.sessionTeam == TEAM_SPECTATOR ||
+		 ( player->client->ps.pm_flags & PMF_LIMBO ) || player->client->ps.aiChar ) {
+		return qfalse;
+	}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if (!G_Cod1UseSelectionReady(player)) return qfalse;
+#endif
+	if ( !item || !item->inuse || item->s.eType != ET_ITEM || !item->item ||
+		 !item->touch || !( item->r.contents & CONTENTS_TRIGGER ) ||
+		 ( item->flags & FL_NODRAW ) || item->s.modelindex <= 0 ||
+		 item->s.modelindex >= bg_numItems ||
+		 ( item->item->giType != IT_WEAPON && !G_Cod1NativeHealthItem( item->item ) ) ||
+		 !BG_CanItemBeGrabbed( &item->s, &player->client->ps ) ) {
+		return qfalse;
+	}
+	if ( item->item->giType == IT_WEAPON ) {
+		int weapon = item->item->giTag;
+		if ( !CW_WeaponDef( weapon ) ||
+			 ( item->cod1DroppedAmmo && item->cod1DropOwner == player->s.number &&
+			   level.time < item->cod1DropOwnerUntil ) ||
+			 ( !COM_BitCheck( player->client->ps.weapons, weapon ) &&
+			   !CW_PickupSlot( &player->client->ps, weapon, qtrue ) ) ) {
+			return qfalse;
+		}
+	}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if (G_Cod1GscTestUseSelectionActive()) {
+		if (!G_Cod1EntityCapture(player, &pickupPlayer) ||
+			!G_Cod1EntityCapture(item, &pickupItem) ||
+			!G_Cod1UseSelectionStable(player) ||
+			!G_Cod1EntitySameAllocation(&pickupPlayer) ||
+			!G_Cod1EntitySameAllocation(&pickupItem)) return qfalse;
+		checkedPlayer = 1;
+	}
+#endif
+	if ( hint ) {
+		if ( item->s.modelindex >= 256 ) {
+			return qfalse;
+		}
+		if ( item->item->giType == IT_HEALTH ) {
+			player->client->ps.serverCursorHint = HINT_HEALTH;
+		} else {
+			player->client->ps.serverCursorHint =
+				COM_BitCheck( player->client->ps.weapons, item->item->giTag ) ?
+				HINT_AMMO : HINT_WEAPON;
+		}
+		player->client->ps.serverCursorHintVal = item->s.modelindex;
+		return qtrue;
+	}
+	memset( &itemTrace, 0, sizeof( itemTrace ) );
+	pickupPreference = player->client->pers.autoActivate;
+	player->client->pers.autoActivate = PICKUP_FORCE;
+	item->active = qtrue;
+	item->touch( item, player, &itemTrace );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	/* An accepted pickup may retire the item; restore only the initiating player. */
+	if (checkedPlayer && (!G_Cod1EntitySameAllocation(&pickupPlayer) || !player->client)) return qtrue;
+#endif
+	player->client->pers.autoActivate = pickupPreference;
+	return qtrue;
+}
+
+qboolean G_Cod1ApplyAimedWeaponHint( gentity_t *player ) {
+	return G_Cod1ApplyAimedPickupCandidate( player,
+		G_Cod1AimedWeaponItem( player ), qtrue );
+}
+
+qboolean G_Cod1ApplyAimedPickupHint( gentity_t *player ) {
+	return G_Cod1ApplyAimedPickupCandidate( player,
+		G_Cod1AimedPickupItem( player, 0, NULL ), qtrue );
+}
+
+/* The legacy direct door, actor and item priorities remain in these wrappers.
+ * The unified native selector applies its chosen candidate directly. */
+static qboolean G_Cod1TryAimedPickupUseType( gentity_t *player,
+	const trace_t *lookTrace, int itemType ) {
+	if ( !player || !player->client || !lookTrace ||
+		 g_gametype.integer != GT_SINGLE_PLAYER || player->client->ps.aiChar ||
+		 !G_Cod1AimedWeaponLookTraceAllows( lookTrace ) ) {
+		return qfalse;
+	}
+	return G_Cod1ApplyAimedPickupCandidate( player,
+		G_Cod1AimedPickupItem( player, itemType, NULL ), qfalse );
+}
+
+qboolean G_Cod1TryAimedWeaponUse( gentity_t *player, const trace_t *lookTrace ) {
+	return G_Cod1TryAimedPickupUseType( player, lookTrace, IT_WEAPON );
+}
+
+qboolean G_Cod1TryAimedPickupUse( gentity_t *player, const trace_t *lookTrace ) {
+	return G_Cod1TryAimedPickupUseType( player, lookTrace, 0 );
+}
 
 
 //======================================================================
@@ -277,7 +612,7 @@ Fill_Clip
 */
 void Fill_Clip( playerState_t *ps, int weapon ) {
 	int inclip, maxclip, ammomove;
-	int ammoweap = BG_FindAmmoForWeapon( weapon );
+	int ammoweap = BG_PlayerAmmoIndex(ps,weapon);
 
 	if ( weapon < WP_LUGER || weapon >= WP_NUM_WEAPONS ) {
 		return;
@@ -288,9 +623,10 @@ void Fill_Clip( playerState_t *ps, int weapon ) {
 	}
 
 	inclip  = ps->ammoclip[BG_FindClipForWeapon( weapon )];
-	maxclip = ammoTable[weapon].maxclip;
+	maxclip = CW_MaxClip(ps,weapon);
 
 	ammomove = maxclip - inclip;    // max amount that can be moved into the clip
+    if(!ps->aiChar && CW_WeaponDef(weapon) && ammomove<0)ammomove=0;
 
 	// cap move amount if it's more than you've got in reserve
 	if ( ammomove > ps->ammo[ammoweap] ) {
@@ -315,7 +651,7 @@ Add_Ammo
 ==============
 */
 void Add_Ammo( gentity_t *ent, int weapon, int count, qboolean fillClip ) {
-	int ammoweap = BG_FindAmmoForWeapon( weapon );
+	int ammoweap = BG_PlayerAmmoIndex(&ent->client->ps,weapon);
 	qboolean noPack = qfalse;       // no extra ammo in your 'pack'
 
 	ent->client->ps.ammo[ammoweap] += count;
@@ -325,6 +661,8 @@ void Add_Ammo( gentity_t *ent, int weapon, int count, qboolean fillClip ) {
 
 	case WP_GRENADE_LAUNCHER:       // make sure if he picks up a grenade that he get's the "launcher" too
 	case WP_GRENADE_PINEAPPLE:
+	case WP_MK1:
+	case WP_RGD33:
 	case WP_DYNAMITE:
 		COM_BitSet( ent->client->ps.weapons, ammoweap );
 
@@ -335,6 +673,8 @@ void Add_Ammo( gentity_t *ent, int weapon, int count, qboolean fillClip ) {
 	default:
 		break;
 	}
+
+    if(!ent->client->ps.aiChar && CW_Number(CW_WeaponDef(weapon),"clipOnly"))noPack=qtrue;
 
 	if ( fillClip || noPack ) {
 		Fill_Clip( &ent->client->ps, weapon );
@@ -348,18 +688,23 @@ void Add_Ammo( gentity_t *ent, int weapon, int count, qboolean fillClip ) {
 	if ( noPack ) {
 		ent->client->ps.ammo[ammoweap] = 0;
 	} else {
-		if ( ent->client->ps.ammo[ammoweap] > ammoTable[ammoweap].maxammo ) {
-			ent->client->ps.ammo[ammoweap] = ammoTable[ammoweap].maxammo;
+		if ( ent->client->ps.ammo[ammoweap] > CW_MaxAmmo(&ent->client->ps,weapon) ) {
+			ent->client->ps.ammo[ammoweap] = CW_MaxAmmo(&ent->client->ps,weapon);
 		}
 
-		if ( count >= 999 ) { // 'really, give /all/'
+		if ( count >= 999 && (ent->client->ps.aiChar || !CW_WeaponDef(weapon)) ) { // 'really, give /all/'
 			ent->client->ps.ammo[ammoweap] = count;
 		}
 	}
 
+    if(!ent->client->ps.aiChar && CW_WeaponDef(weapon)) {
+        int clip=BG_FindClipForWeapon(weapon),maximum=CW_MaxClip(&ent->client->ps,weapon);
+        if(ent->client->ps.ammoclip[clip]>maximum)ent->client->ps.ammoclip[clip]=maximum;
+    } else {
 	if ( ent->client->ps.ammoclip[ammoweap] > ammoTable[ammoweap].maxclip ) {
 		ent->client->ps.ammoclip[ammoweap] = ammoTable[ammoweap].maxclip;
 	}
+    }
 
 }
 
@@ -400,12 +745,83 @@ int Pickup_Ammo( gentity_t *ent, gentity_t *other ) {
 //======================================================================
 
 
+/* A dropped CoD weapon retains two distinct ammunition quantities. Zero is
+ * literal, unlike RTCW's count==0 default/random ammunition convention. */
+static gentity_t *G_Cod1DropInventoryWeapon(gentity_t *other,gentity_t *pickup,int weapon) {
+    playerState_t *ps=&other->client->ps;
+    gitem_t *item=BG_FindItemForWeapon(weapon);
+    gentity_t *drop;int clip=BG_FindClipForWeapon(weapon),ammo=BG_PlayerAmmoIndex(ps,weapon),i;
+    if(!item)return NULL;
+    /* A slot exchange inherits the world placement of the item taken.
+     * The inventory bookkeeping below still owns the old clip and reserve. */
+    drop=LaunchItem(item,pickup->r.currentOrigin,vec3_origin);
+    if(!drop)return NULL;
+    G_SetOrigin(drop,pickup->r.currentOrigin);
+    G_SetAngle(drop,pickup->r.currentAngles);
+    drop->s.groundEntityNum=pickup->s.groundEntityNum;
+    drop->s.otherEntityNum2=pickup->s.otherEntityNum2;
+    drop->s.eFlags &= ~EF_BOUNCE_HALF;
+    VectorCopy(pickup->r.mins,drop->r.mins);
+    VectorCopy(pickup->r.maxs,drop->r.maxs);
+    trap_LinkEntity(drop);
+    if(g_debugMove.integer)G_Printf("[Training exchange] take=%d old=%d source=%d placed=%d xyz=%.3f %.3f %.3f item=%.3f %.3f %.3f presentation=%d/%d stationary=%d\n",
+        pickup->item->giTag,weapon,pickup->s.number,drop->s.number,pickup->r.currentOrigin[0],pickup->r.currentOrigin[1],pickup->r.currentOrigin[2],
+        drop->r.currentOrigin[0],drop->r.currentOrigin[1],drop->r.currentOrigin[2],pickup->s.otherEntityNum2,drop->s.otherEntityNum2,drop->s.pos.trType==TR_STATIONARY);
+    drop->cod1DroppedAmmo=qtrue;
+    drop->cod1DropClip=ps->ammoclip[clip];drop->cod1DropReserve=ps->ammo[ammo];
+    drop->cod1DropOwner=other->s.number;drop->cod1DropOwnerUntil=level.time+500;
+    ps->ammoclip[clip]=0;ps->ammo[ammo]=0;
+    COM_BitClear(ps->weapons,weapon);
+    for(i=1;i<CW_SLOT_COUNT;i++)if(ps->cod1Slots[i]==weapon)ps->cod1Slots[i]=0;
+    return drop;
+}
+static int G_Cod1PickupWeapon(gentity_t *ent,gentity_t *other) {
+    playerState_t *ps=&other->client->ps;
+    int weapon=ent->item->giTag,slot,old,owned,clip,ammo,quantity;
+    CW_SyncSlots(ps);owned=COM_BitCheck(ps->weapons,weapon);
+    if(!owned && CW_WeaponDef(ps->weapon) && !COM_BitCheck(ps->weapons,ps->weapon))return 0;
+    if(ent->cod1DroppedAmmo && ent->cod1DropOwner==other->s.number && level.time<ent->cod1DropOwnerUntil)return 0;
+    slot=CW_PickupSlot(ps,weapon,other->client->pers.autoActivate==PICKUP_FORCE);
+    if(!slot && !owned)return 0;
+    old=slot?ps->cod1Slots[slot]:0;
+    if(!owned && old && old!=weapon && !(CW_SlotStackable(old)&&CW_SlotStackable(weapon))) {
+        if(!G_Cod1DropInventoryWeapon(other,ent,old))return 0;
+    }
+    COM_BitSet(ps->weapons,weapon);
+    if(slot && (!old || !CW_SlotStackable(weapon)))ps->cod1Slots[slot]=weapon;
+    clip=BG_FindClipForWeapon(weapon);ammo=BG_PlayerAmmoIndex(ps,weapon);
+    if(ent->cod1DroppedAmmo) {
+        if(!owned) {
+            ps->ammoclip[clip]=ent->cod1DropClip;
+            ps->ammo[ammo]=ent->cod1DropReserve;
+        } else Add_Ammo(other,weapon,ent->cod1DropClip+ent->cod1DropReserve,qfalse);
+    } else {
+        quantity=ent->count<0?0:ent->count;
+        if(!ent->count)quantity=(int)CW_Number(CW_WeaponDef(weapon),"startAmmo");
+        Add_Ammo(other,weapon,quantity,!owned);
+    }
+    CW_SyncSlots(ps);
+    /* A forced slot replacement can drop the selected gun before another
+     * client command arrives. Do not expose an unowned current weapon to
+     * GSC in that intervening server frame. The next genuine PM command
+     * raises the newly selected owned weapon through the normal path. */
+    if(!owned && old && old!=weapon && ps->weapon==old && !COM_BitCheck(ps->weapons,old)) {
+        ps->weapon=WP_NONE;ps->weaponstate=WEAPON_READY;
+        ps->weaponTime=ps->weaponDelay=ps->grenadeTimeLeft=ps->weapAnimTimer=0;
+        ps->stats[STAT_COD1_RELOAD]=ps->stats[STAT_COD1_SWITCH_TARGET]=0;
+        ps->stats[STAT_COD1_ADS]=ps->stats[STAT_COD1_ADS_REMAINDER]=0;
+    }
+    if(g_gametype.integer==GT_SINGLE_PLAYER && !(ent->spawnflags&8))return RESPAWN_SP;
+    return g_gametype.integer==GT_TEAM?g_weaponTeamRespawn.integer:g_weaponRespawn.integer;
+}
+
 int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 	int quantity;
 	qboolean alreadyHave = qfalse;
 	int weapon;
 
 	weapon = ent->item->giTag;
+    if(!other->client->ps.aiChar && CW_WeaponDef(weapon))return G_Cod1PickupWeapon(ent,other);
 
 	if ( ent->count < 0 ) {
 		quantity = 0; // None for you, sir!
@@ -436,7 +852,7 @@ int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 
 	//----(SA)	added
 	// check for special colt->akimbo add (if you've got a colt already, add the second now)
-	if ( weapon == WP_COLT ) {
+	if ( weapon == WP_COLT && (other->client->ps.aiChar || !CW_WeaponDef(weapon)) ) {
 		if ( COM_BitCheck( other->client->ps.weapons, WP_COLT ) ) {
 			weapon = WP_AKIMBO;
 		}
@@ -453,13 +869,13 @@ int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 	// snooper/garand
 	if ( weapon == WP_SNOOPERSCOPE ) {
 		COM_BitSet( other->client->ps.weapons, WP_GARAND );
-	} else if ( weapon == WP_GARAND ) {
+	} else if ( weapon == WP_GARAND && (other->client->ps.aiChar || !CW_WeaponDef(weapon)) ) {
 		COM_BitSet( other->client->ps.weapons, WP_SNOOPERSCOPE );
 	}
 	// fg42/scope
 	else if ( weapon == WP_FG42SCOPE ) {
 		COM_BitSet( other->client->ps.weapons, WP_FG42 );
-	} else if ( weapon == WP_FG42 ) {
+	} else if ( weapon == WP_FG42 && (other->client->ps.aiChar || !CW_WeaponDef(weapon)) ) {
 		COM_BitSet( other->client->ps.weapons, WP_FG42SCOPE );
 	} else if ( weapon == WP_SNIPERRIFLE ) {
 		COM_BitSet( other->client->ps.weapons, WP_MAUSER );
@@ -498,6 +914,61 @@ int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 int Pickup_Health( gentity_t *ent, gentity_t *other ) {
 	int max;
 	int quantity = 0;
+
+	/* In CoD SP the three aid kits give a percentage of maximum health:
+	 * 10/25/50, or the entity's count override.  The native code adjusts
+	 * integer truncation so the resulting health percentage matches its
+	 * requested percentage.  RTCW's food and wall boxes keep their own
+	 * multi-stage and skill-dependent rules below. */
+	if ( g_gametype.integer == GT_SINGLE_PLAYER &&
+		 G_Cod1NativeHealthItem( ent->item ) ) {
+		int maxHealth = other->client->ps.stats[STAT_MAX_HEALTH];
+		int currentPercent, targetPercent, resultPercent;
+		int result;
+		/* The shared item table retains RTCW's small-health quantity 5:
+		 * changing it would also alter RTCW overhealth rules.  Native CoD
+		 * instead defines small/medium/large as 10/25/50 percent. */
+		if ( ent->count ) {
+			quantity = ent->count;
+		} else if ( !Q_stricmp( ent->item->classname, "item_health_small" ) ) {
+			quantity = 10;
+		} else if ( !Q_stricmp( ent->item->classname, "item_health_large" ) ) {
+			quantity = 50;
+		} else {
+			quantity = 25;
+		}
+		if ( maxHealth <= 0 ) {
+			return RESPAWN_SP;
+		}
+		result = other->health + maxHealth * quantity / 100;
+		currentPercent = other->health * 100 / maxHealth;
+		if ( currentPercent < 1 ) {
+			currentPercent = 1;
+		} else if ( currentPercent > 100 ) {
+			currentPercent = 100;
+		}
+		targetPercent = currentPercent + quantity;
+		if ( targetPercent < 1 ) {
+			targetPercent = 1;
+		} else if ( targetPercent > 100 ) {
+			targetPercent = 100;
+		}
+		resultPercent = result * 100 / maxHealth;
+		if ( resultPercent < 1 ) {
+			resultPercent = 1;
+		} else if ( resultPercent > 100 ) {
+			resultPercent = 100;
+		}
+		if ( resultPercent != targetPercent ) {
+			result = maxHealth * targetPercent / 100;
+		}
+		if ( result > maxHealth ) {
+			result = maxHealth;
+		}
+		other->health = result;
+		other->client->ps.stats[STAT_HEALTH] = result;
+		return RESPAWN_SP;
+	}
 
 	// small and mega healths will go over the max
 	if ( ent->item->quantity != 5 && ent->item->quantity != 100  ) {
@@ -623,17 +1094,49 @@ Touch_Item
 	if other->client->pers.autoActivate == PICKUP_FORCE		(2), he will pickup the next item when touched (and reset to PICKUP_ACTIVATE when done)
 ==============
 */
+qboolean G_ItemAutoTouchAllowed( gentity_t *ent, gentity_t *other ) {
+	/* CoD map GSCs can disable automatic touch via setautopickup(false),
+	 * which the port cannot execute yet.  Keep weapons for the aimed Use
+	 * interaction until that script flag exists, without changing automatic
+	 * ammo/health pickup.  Cmd_Activate_f sets PICKUP_FORCE explicitly. */
+	if ( !ent || !other || !other->client ||
+		 other->client->pers.autoActivate == PICKUP_ACTIVATE ) {
+		return qfalse;
+	}
+	if ( g_gametype.integer == GT_SINGLE_PLAYER && ent->item &&
+		 ent->item->giType == IT_WEAPON && CW_WeaponDef( ent->item->giTag ) &&
+		 !other->client->ps.aiChar &&
+		 other->client->pers.autoActivate != PICKUP_FORCE ) {
+		return qfalse;
+	}
+	return qtrue;
+}
+
 void Touch_Item_Auto( gentity_t *ent, gentity_t *other, trace_t *trace ) {
-	if ( other->client->pers.autoActivate == PICKUP_ACTIVATE ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    GscEntityRef cod1DropTouchRef;int cod1DropTouchOwned=G_Cod1DroppedItemPickupBegin(ent,other,&cod1DropTouchRef);
+    if(cod1DropTouchOwned<0)return;
+#endif
+	if ( !G_ItemAutoTouchAllowed( ent, other ) ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+        if(cod1DropTouchOwned)G_Cod1DroppedItemPickupEnd(&cod1DropTouchRef);
+#endif
 		return;
 	}
 
 	ent->active = qtrue;
 	Touch_Item( ent, other, trace );
 
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(cod1DropTouchOwned&&!G_Cod1DroppedItemPickupPlayerAlive(&cod1DropTouchRef,other)){G_Cod1DroppedItemPickupEnd(&cod1DropTouchRef);return;}
+#endif
 	if ( other->client->pers.autoActivate == PICKUP_FORCE ) {      // autoactivate probably forced by the "Cmd_Activate_f()" function
 		other->client->pers.autoActivate = PICKUP_ACTIVATE;     // so reset it.
 	}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(cod1DropTouchOwned)G_Cod1DroppedItemPickupEnd(&cod1DropTouchRef);
+#endif
+
 }
 
 
@@ -643,8 +1146,13 @@ Touch_Item
 ===============
 */
 void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    GscEntityRef cod1DropTouchRef;int cod1DropTouchOwned=G_Cod1DroppedItemPickupOwner(ent,&cod1DropTouchRef);
+    if(cod1DropTouchOwned<0)return;
+#endif
 	int respawn;
 	int makenoise = EV_ITEM_PICKUP;
+	int healthBefore;
 
 	// only activated items can be picked up
 	if ( !ent->active ) {
@@ -665,12 +1173,19 @@ void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 	if ( !BG_CanItemBeGrabbed( &ent->s, &other->client->ps ) ) {
 		return;
 	}
+	healthBefore = other->client->ps.stats[STAT_HEALTH];
 
 	G_LogPrintf( "Item: %i %s\n", other->s.number, ent->item->classname );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(cod1DropTouchOwned&&!G_Cod1DroppedItemPickupCurrent(&cod1DropTouchRef))return;
+#endif
 
 	// call the item-specific pickup function
 	switch ( ent->item->giType ) {
 	case IT_WEAPON:
+        if(!other->client->ps.aiChar && CW_WeaponDef(ent->item->giTag) &&
+           COM_BitCheck(other->client->ps.weapons,ent->item->giTag))
+            makenoise=EV_COD1_WEAPON_AMMO_PICKUP;
 		respawn = Pickup_Weapon( ent, other );
 		break;
 	case IT_AMMO:
@@ -714,6 +1229,20 @@ void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 		return;
 	}
 
+	/* The retail game emits game-message commands alongside pickup events.
+	 * Keep its health amount accurate after skill-dependent pickup rules, and
+	 * send ammo's pickup name through the same status channel. */
+	if ( g_gametype.integer == GT_SINGLE_PLAYER && ent->item->giType == IT_HEALTH &&
+		 other->client->ps.stats[STAT_HEALTH] > healthBefore ) {
+		trap_SendServerCommand( other->s.number,
+			va( "gm \"GAME_PICKUP_HEALTH%c%d\"", 21,
+				other->client->ps.stats[STAT_HEALTH] - healthBefore ) );
+	} else if ( g_gametype.integer == GT_SINGLE_PLAYER && ent->item->giType == IT_AMMO &&
+				ent->item->pickup_name && ent->item->pickup_name[0] ) {
+		trap_SendServerCommand( other->s.number,
+			va( "gm \"GAME_PICKUP_AMMO%c%s\"", 20, ent->item->pickup_name ) );
+	}
+
 	// play sounds
 	if ( ent->noise_index ) {
 		// (SA) a sound was specified in the entity, so play that sound
@@ -748,6 +1277,19 @@ void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 
 	// fire item targets
 	G_UseTargets( ent, other );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    /* Original2001B845: completed -1 pickup frees immediately. This selected
+     * branch consumes only the captured dropped allocation, not RTCW items. */
+    if(cod1DropTouchOwned&&G_Cod1DroppedItemPickupCommit(&cod1DropTouchRef,respawn))return;
+#endif
+
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+    if (G_Cod1GscTestCarbineActive() && ent->item && ent->item->giType==IT_WEAPON &&
+        G_Cod1GscTestCarbineSpawnAllowed(ent->classname) && respawn<0 && !ent->wait &&
+        !ent->targetname && !ent->target) {
+        G_FreeEntity(ent);return;
+    }
+#endif
 
 	// wait of -1 will not respawn
 	if ( ent->wait == -1 ) {
@@ -929,6 +1471,12 @@ void FinishSpawningItem( gentity_t *ent ) {
 	vec3_t dest;
 	vec3_t maxs;
 
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    GscEntityRef healthRef;gentity_t healthBefore;
+    int healthOwned=G_Cod1PathHealthFinishStart(ent,&healthRef);
+    if(healthOwned<0)return;
+#endif
+
 	if ( ent->spawnflags & 1 ) { // suspended
 		VectorSet( ent->r.mins, -ITEM_RADIUS, -ITEM_RADIUS, -ITEM_RADIUS );
 		VectorSet( ent->r.maxs, ITEM_RADIUS, ITEM_RADIUS, ITEM_RADIUS );
@@ -952,7 +1500,8 @@ void FinishSpawningItem( gentity_t *ent ) {
 //----(SA)	we don't use this (yet, anyway) so I'm taking it so you can specify a model for treasure items and clipboards
 //	ent->s.modelindex2 = 0; // zero indicates this isn't a dropped item
 	if ( ent->model ) {
-		ent->s.modelindex2 = G_ModelIndex( ent->model );
+		C1_HEALTH_BEFORE;
+        {int model=G_ModelIndex(ent->model);C1_HEALTH_AFTER;ent->s.modelindex2=model;}
 	}
 
 
@@ -984,7 +1533,9 @@ void FinishSpawningItem( gentity_t *ent ) {
 	} else {
 
 		VectorSet( dest, ent->s.origin[0], ent->s.origin[1], ent->s.origin[2] - 4096 );
+		C1_HEALTH_BEFORE;
 		trap_Trace( &tr, ent->s.origin, ent->r.mins, maxs, dest, ent->s.number, MASK_SOLID );
+        C1_HEALTH_AFTER;
 
 		if ( tr.startsolid ) {
 			vec3_t temp;
@@ -993,16 +1544,15 @@ void FinishSpawningItem( gentity_t *ent ) {
 			temp[2] -= ITEM_RADIUS;
 
 			VectorSet( dest, ent->s.origin[0], ent->s.origin[1], ent->s.origin[2] - 4096 );
-			trap_Trace( &tr, temp, ent->r.mins, maxs, dest, ent->s.number, MASK_SOLID );
+			C1_HEALTH_BEFORE;
+		trap_Trace( &tr, temp, ent->r.mins, maxs, dest, ent->s.number, MASK_SOLID );
+        C1_HEALTH_AFTER;
 		}
 
-#if 0
-		// drop to floor
-		VectorSet( dest, ent->s.origin[0], ent->s.origin[1], ent->s.origin[2] - 4096 );
-		trap_Trace( &tr, ent->s.origin, ent->r.mins, maxs, dest, ent->s.number, MASK_SOLID );
-#endif
 		if ( tr.startsolid ) {
+			C1_HEALTH_BEFORE;
 			G_Printf( "FinishSpawningItem: %s startsolid at %s\n", ent->classname, vtos( ent->s.origin ) );
+            C1_HEALTH_AFTER;
 			G_FreeEntity( ent );
 			return;
 		}
@@ -1054,7 +1604,14 @@ void FinishSpawningItem( gentity_t *ent ) {
 		return;
 	}
 
-	trap_LinkEntity( ent );
+    C1_HEALTH_BEFORE;
+    trap_LinkEntity(ent);
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(healthOwned){
+        if(!Cod1HealthLinkFence(ent,&healthRef,&healthBefore))return;
+        G_Cod1PathHealthFinished(ent,&healthRef);
+    }
+#endif
 }
 
 
@@ -1154,9 +1711,42 @@ Items can't be immediately dropped to floor, because they might
 be on an entity that hasn't spawned yet.
 ============
 */
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+int G_Cod1SpawnTrainingWeapon(const char *name,const float origin[3],int32_t flags,GscEntityRef *out,char *error,size_t size) {
+    GscEntityRef ref;gentity_t *e;gitem_t *item=NULL;int i;vec3_t position;
+    if(!name||!origin||!out||flags||G_Cod1EntityStorageProtected(origin,sizeof(vec3_t))||
+       G_Cod1EntityStorageProtected(out,sizeof(*out))||G_Cod1EntityStorageProtected(error,size)||
+       (size&&(!error||(uintptr_t)error>UINTPTR_MAX-size)))return 0;
+    /* Owned inputs are copied before the first admission callback. */
+    if(!strcmp(name,"weapon_m1carbine"))name="weapon_m1carbine";
+    else if(!strcmp(name,"weapon_springfield"))name="weapon_springfield";
+    else if(!strcmp(name,"weapon_thompson"))name="weapon_thompson";else return 0;
+    VectorCopy(origin,position);
+    for(i=0;i<3;i++)if(!isfinite(position[i]))return 0;
+    if(level.spawning||level.restarted||!G_Cod1GscTestCarbineSpawnAllowed(name))return 0;
+    for(i=1;i<bg_numItems;i++)if(bg_itemlist[i].classname&&!strcmp(bg_itemlist[i].classname,name)&&bg_itemlist[i].giType==IT_WEAPON&&CW_WeaponDef(bg_itemlist[i].giTag)){item=&bg_itemlist[i];break;}
+    if(!item||(level.num_entities>=ENTITYNUM_MAX_NORMAL&&!G_EntitiesFree()))return 0;
+    e=G_Spawn();if(!G_Cod1EntityCapture(e,&ref))return 0;e->classname=G_NewString(name);VectorCopy(position,e->s.origin);
+    /* With empty authored vars, no model/noise/clipboard branch can call an
+     * engine service here. Restore the parser view before Finish's trace. */
+    {int vars=level.numSpawnVars;level.numSpawnVars=0;G_SpawnItem(e,item);level.numSpawnVars=vars;}
+    if(!G_Cod1EntitySameAllocation(&ref)||!G_Cod1GscTestCarbineSpawnAllowed(name))goto failed;
+    e->nextthink=0;e->think=NULL;FinishSpawningItem(e);
+    if(!G_Cod1EntitySameAllocation(&ref)||!e->r.linked||!e->touch||!G_Cod1GscTestCarbineSpawnAllowed(name))goto failed;
+    *out=ref;return 1;
+failed:
+    if(G_Cod1EntitySameAllocation(&ref))G_FreeEntity(&g_entities[ref.slot]);
+    if(error&&size)snprintf(error,size,"original native carbine item construction lost current registration");return 0;
+}
+#endif
 void G_SpawnItem( gentity_t *ent, gitem_t *item ) {
 	char    *noise;
 	int page;
+
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    GscEntityRef healthRef;gentity_t healthBefore;
+    int healthOwned=G_Cod1PathHealthStart(ent,item,&healthRef);
+#endif
 
 	G_SpawnFloat( "random", "0", &ent->random );
 	G_SpawnFloat( "wait", "0", &ent->wait );
@@ -1169,13 +1759,15 @@ void G_SpawnItem( gentity_t *ent, gitem_t *item ) {
 	ent->think = FinishSpawningItem;
 
 	if ( G_SpawnString( "noise", 0, &noise ) ) {
-		ent->noise_index = G_SoundIndex( noise );
+		C1_HEALTH_BEFORE;
+        {int sound=G_SoundIndex(noise);C1_HEALTH_AFTER;ent->noise_index=sound;}
 	}
 
 	ent->physicsBounce = 0.50;      // items are bouncy
 
 	if ( ent->model ) {
-		ent->s.modelindex2 = G_ModelIndex( ent->model );
+		C1_HEALTH_BEFORE;
+        {int model=G_ModelIndex(ent->model);C1_HEALTH_AFTER;ent->s.modelindex2=model;}
 	}
 
 	if ( item->giType == IT_CLIPBOARD ) {
@@ -1192,7 +1784,11 @@ void G_SpawnItem( gentity_t *ent, gitem_t *item ) {
 		level.numTreasure++;
 		G_SendMissionStats();
 	}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(healthOwned)G_Cod1PathHealthPending(ent,&healthRef);
+#endif
 }
+
 
 
 /*
@@ -1282,6 +1878,9 @@ G_RunItem
 ================
 */
 void G_RunItem( gentity_t *ent ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if(G_Cod1DroppedItemFrame(ent))return;
+#endif
 	vec3_t origin;
 	trace_t tr;
 	int contents;
@@ -1345,4 +1944,3 @@ void G_RunItem( gentity_t *ent ) {
 
 	G_BounceItem( ent, &tr );
 }
-

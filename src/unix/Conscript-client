@@ -157,7 +157,6 @@ $env = new cons(
 @RENDERER_FILES = qw(
   ../renderer/tr_animation.c   
   ../renderer/tr_backend.c   
-  ../renderer/tr_bsp.c   
   ../renderer/tr_cmds.c   
   ../renderer/tr_cmesh.c
   ../renderer/tr_curve.c   
@@ -182,6 +181,15 @@ $env = new cons(
   );
 $RENDERER_REF = \@RENDERER_FILES;  
 
+# R72 prepared model-light math must not inherit release fast-math.
+$MODEL_LIGHT_CFLAGS = $BASE_CFLAGS;
+$MODEL_LIGHT_CFLAGS =~ s/(?:^|\s)-ffast-math(?=\s|$)/ /g;
+$env_model_light = new cons(
+  CC => $CC, CXX => $CXX, LINK => $LINK,
+  CFLAGS => $MODEL_LIGHT_CFLAGS . ' -fno-fast-math -frounding-math -ffp-contract=off '
+);
+@MODEL_LIGHT_OBJECTS = Objects $env_model_light '../renderer/tr_bsp.c';
+
 @CLIENT_FILES = qw(
   ../client/cl_cgame.c   
   ../client/cl_cin.c       
@@ -197,6 +205,15 @@ $RENDERER_REF = \@RENDERER_FILES;
 $CLIENT_REF = \@CLIENT_FILES;
 
 @COMMON_FILES = qw(
+  ../qcommon/cod1_bsp.c
+  ../qcommon/cod1_collision.c
+  ../qcommon/cm_v59.c
+../qcommon/v59/v59_load.c
+../qcommon/v59/v59_query.c
+../qcommon/v59/v59_narrow.c
+../qcommon/v59/v59_curve_build.c
+../qcommon/v59/v59_polylib.c
+../qcommon/v59/v59_math.c
   ../qcommon/cm_load.c        
   ../qcommon/cm_patch.c       
   ../qcommon/cm_polylib.c     
@@ -259,6 +276,6 @@ $VM_REF = \@VM_FILES;
 
 # FIXME: import the CPU string to build the name of the target
 Program $env 'wolfsp.x86', '../game/q_shared.c', '../game/q_math.c',
-  @$RENDERER_REF, @$CLIENT_REF, @$COMMON_REF, @$SOUND_REF,
+  @MODEL_LIGHT_OBJECTS, @$RENDERER_REF, @$CLIENT_REF, @$COMMON_REF, @$SOUND_REF,
   @$UNIX_REF, @$SERVER_REF, @$VM_REF;
 Install $env '#' . $CONFIG_DIR . '/out', 'wolfsp.x86';

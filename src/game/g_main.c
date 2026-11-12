@@ -30,8 +30,19 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include "g_local.h"
+#include "g_cod1_node_host.h"
+#include "g_cod1_path_entity_host.h"
+#include "g_cod1_node_host.h"
+#include "g_cod1_gsc_test.h"
+#include "g_cod1_author_fog.h"
+#include "g_cod1_entity_host.h"
+#include "bg_cod1_weapon_io.h"
+#include "bg_cod1_inventory.h"
 
 level_locals_t level;
+
+/* One source-owned GAME RNG state; no standalone object. */
+#include "g_cod1_rng_owner.inc"
 
 typedef struct {
 	vmCvar_t    *vmCvar;
@@ -117,6 +128,8 @@ vmCvar_t ai_scriptName;         // name of AI script file to run (instead of def
 vmCvar_t g_scriptName;          // name of script file to run (instead of default for that map)
 
 vmCvar_t g_developer;
+/* Native table200A5440: real cached engine cvar, updated by G_UpdateCvars. */
+vmCvar_t g_cod1AIDebugThreat,g_cod1AIDisableSpawn;
 
 vmCvar_t g_userAim;
 
@@ -227,6 +240,8 @@ cvarTable_t gameCvarTable[] = {
 	{ &g_missionStats, "g_missionStats", "0", CVAR_ROM, 0, qfalse },
 
 	{ &g_developer, "developer", "0", CVAR_TEMP, 0, qfalse },
+	{ &g_cod1AIDebugThreat, "ai_debugThreat", "0", CVAR_CHEAT, 0, qfalse },
+	{ &g_cod1AIDisableSpawn, "ai_disableSpawn", "0", CVAR_CHEAT, 0, qfalse },
 
 	{ &g_rankings, "g_rankings", "0", 0, 0, qfalse},
 
@@ -283,13 +298,31 @@ int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int a
 #pragma export off
 #endif
 	switch ( command ) {
+	case GAME_COD1_STATE_ABI:
+		return arg0 == sizeof(playerState_t) && arg1 == sizeof(usercmd_t) ? COD1_STATE_ABI : -1;
+	case GAME_COD1_NAV_RESOURCE_RETIRED:
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+		G_Cod1NodeResourceRetire((uint64_t)(uint32_t)arg0|((uint64_t)(uint32_t)arg1<<32));
+		return 0;
+#else
+		return -1;
+#endif
 	case GAME_INIT:
+		{ char protocol[16];
+		  trap_Cvar_VariableStringBuffer("protocol", protocol, sizeof(protocol));
+		  if (atoi(protocol) != COD1_STATE_PROTOCOL)
+		      G_Error("PATCH56: matching WolfSP.exe is required (protocol 54)");
+		}
 		G_InitGame( arg0, arg1, arg2 );
 		return 0;
 	case GAME_SHUTDOWN:
 		G_ShutdownGame( arg0 );
 		return 0;
 	case GAME_CLIENT_CONNECT:
+        if(!G_Cod1GscTestGraphBeforePlayer(arg0))return (int)"CoD1 pre-player graph unavailable";
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+        if (arg0 == 0) G_Cod1PrepareTrainingGoals();
+#endif
 		return (int)ClientConnect( arg0, arg1, arg2 );
 	case GAME_CLIENT_THINK:
 		ClientThink( arg0 );
@@ -435,6 +468,15 @@ void G_CheckForCursorHints( gentity_t *ent ) {
 	qboolean zooming, indirectHit;      // indirectHit means the checkent was not the ent hit by the trace (checkEnt!=traceEnt)
 	int trace_contents;                 // DHM - Nerve
 
+	/* R90 shares the native 72-unit center cone and ranked candidate with activation.
+	 * A stable legacy door/actor keeps the unchanged cursor-hint tail. */
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if (nextCheckTime <= level.time && G_Cod1UseSelect(ent, qtrue)) {
+		nextCheckTime = level.time + 100;
+		return;
+	}
+#endif
+
 	// FIXME:	no need at all to do this trace/string comparison every frame.
 	//			stagger it at least a little bit
 
@@ -497,6 +539,16 @@ void G_CheckForCursorHints( gentity_t *ent ) {
 	} else {
 		dist        = tr->fraction * CH_MAX_DIST;
 		hintDist    = CH_MAX_DIST;
+	}
+
+	/* Native gamex86 scans nearby item bbox centers in a 72-unit cone.
+	 * Passive trigger volumes around a weapon or aid kit cannot veto it;
+	 * doors, actors and other directly usable entities retain precedence. */
+	if ( !zooming && g_gametype.integer == GT_SINGLE_PLAYER &&
+		 G_Cod1AimedWeaponLookTraceAllows( tr ) ) {
+		if ( G_Cod1ApplyAimedPickupHint( ent ) ) {
+			return;
+		}
 	}
 
 	if ( tr->fraction == 1 ) {
@@ -684,12 +736,21 @@ void G_CheckForCursorHints( gentity_t *ent ) {
 				}
 			} else if ( checkEnt->s.eType == ET_ITEM )      {
 				gitem_t *it;
+				int itemIndex;
 				it = &bg_itemlist[checkEnt->item - bg_itemlist];
+				itemIndex = checkEnt->item - bg_itemlist;
 
 				hintDist = CH_ACTIVATE_DIST;
 
 				switch ( it->giType ) {
 				case IT_HEALTH:
+					/* A native kit which Touch_Item cannot collect must not
+					 * regain a USE prompt through an authored hint override. */
+					if ( g_gametype.integer == GT_SINGLE_PLAYER &&
+						 G_Cod1NativeHealthItem( it ) &&
+						 !BG_CanItemBeGrabbed( &checkEnt->s, ps ) ) {
+						return;
+					}
 					if ( !( checkEnt->s.density == ( 1 << 9 ) ) ) { // (10 bits of data transmission for density)
 						hintType = HINT_HEALTH;
 					}
@@ -702,6 +763,13 @@ void G_CheckForCursorHints( gentity_t *ent ) {
 					break;
 				case IT_WEAPON:
 					hintType = HINT_WEAPON;
+					if ( g_gametype.integer == GT_SINGLE_PLAYER && !ps->aiChar &&
+						 CW_WeaponDef( it->giTag ) ) {
+						/* The nearby-item candidate path above handles CoD
+						 * weapons; this narrow ray must not bypass its 72-unit
+						 * eye-to-bbox-center range and occlusion checks. */
+						hintType = HINT_NONE;
+					}
 					break;
 				case IT_AMMO:
 					hintType = HINT_AMMO;
@@ -724,6 +792,20 @@ void G_CheckForCursorHints( gentity_t *ent ) {
 				case IT_BAD:
 				default:
 					break;
+				}
+				/* RTCW only sent the hint type for items, so its client could not
+				 * name the item underneath the reticle.  Its hint value is an
+				 * eight-bit snapshot field.  CoD single player uses that otherwise
+				 * unused value for the authoritative item-list index. */
+				if ( g_gametype.integer == GT_SINGLE_PLAYER && CW_Count() > 0 && hintType != HINT_NONE ) {
+					if ( !BG_CanItemBeGrabbed( &checkEnt->s, ps ) ||
+						 ( it->giType == IT_WEAPON && CW_WeaponDef( it->giTag ) &&
+							( ( checkEnt->cod1DroppedAmmo && checkEnt->cod1DropOwner == ent->s.number && level.time < checkEnt->cod1DropOwnerUntil ) ||
+							  ( !COM_BitCheck( ps->weapons, it->giTag ) && !CW_PickupSlot( ps, it->giTag, qtrue ) ) ) ) ) {
+						hintType = HINT_NONE;
+					} else if ( itemIndex > 0 && itemIndex < 256 ) {
+						hintVal = itemIndex;
+					}
 				}
 			} else if ( checkEnt->s.eType == ET_MOVER )     {
 				if ( !Q_stricmp( checkEnt->classname, "func_door_rotating" ) ) {
@@ -1086,12 +1168,20 @@ G_SpawnScriptCamera
 	create the game entity that's used for camera<->script communication and portal location for camera view
 ==============
 */
+#include "g_cod1_script_helper.inc"
 void G_SpawnScriptCamera( void ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	GscEntityRef helperRef={0};
+	Cod1ScriptHelperBegin();
+#endif
 	if ( g_camEnt ) {
 		G_FreeEntity( g_camEnt );
 	}
 
 	g_camEnt = G_Spawn();
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	G_Cod1EntityCapture(g_camEnt,&helperRef);
+#endif
 
 	g_camEnt->scriptName = "scriptcamera";
 
@@ -1110,6 +1200,10 @@ void G_SpawnScriptCamera( void ) {
 		G_Script_ScriptParse( g_camEnt );
 		G_Script_ScriptEvent( g_camEnt, "spawn", "" );
 	}
+
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	Cod1ScriptHelperBorn(&helperRef);
+#endif
 
 }
 
@@ -1187,6 +1281,10 @@ extern void trap_Cvar_Reset( const char *var_name );
 void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	int i;
 
+	G_Cod1RngOwnerEnd();
+	G_Cod1GscTestShutdown();
+	G_Cod1EntityMapBegin();
+
 	if ( trap_Cvar_VariableIntegerValue( "g_gametype" ) != GT_SINGLE_PLAYER ) {
 		G_Printf( "------- Game Initialization -------\n" );
 		G_Printf( "gamename: %s\n", GAMEVERSION );
@@ -1200,11 +1298,15 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	G_ProcessIPBans();
 
 	G_InitMemory();
+	CW_InitEngineWeapons();
 
 	// set some level globals
 	memset( &level, 0, sizeof( level ) );
 	level.time = levelTime;
 	level.startTime = levelTime;
+
+	/* New no-save GAME epoch seed (initial or fast restart) precedes spawn. */
+	G_Cod1RngOwnerBegin( restart );
 
 	level.numSecrets = 0;   //----(SA)	added
 
@@ -1213,8 +1315,6 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 
 	level.bulletRicochetSound = G_SoundIndex( "bulletRicochet" );
 
-	level.snipersound = G_SoundIndex( "sound/weapons/mauser/mauserf1.wav" );
-
 	//----(SA)	added sound caching
 	level.knifeSound[0] = G_SoundIndex( "sound/weapons/knife/knife_hitwall1.wav" );
 	//----(SA)	end
@@ -1222,6 +1322,21 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	// RF, init the anim scripting
 	level.animScriptData.soundIndex = G_SoundIndex;
 	level.animScriptData.playSound = G_AnimScriptSound;
+
+	/*
+	 * CoD1 compatibility bootstrap:
+	 * bg_animation.c keeps a module-local pointer to the active animation
+	 * script data.  Normally BG_AnimParseAnimScript() assigns it while
+	 * parsing RTCW wolfanim.script.  Retail CoD1 has no wolfanim.script and
+	 * our temporary XAnim bootstrap deliberately returns before that parser,
+	 * leaving the pointer NULL.  Later move-speed/model lookups then abort in
+	 * BG_ModelInfoForModelname().  Bind it up-front to this level's storage;
+	 * this is also the object the normal RTCW parser receives.
+	 */
+	{
+		extern animScriptData_t *globalScriptData;
+		globalScriptData = &level.animScriptData;
+	}
 
 	if ( g_gametype.integer != GT_SINGLE_PLAYER && g_log.string[0] ) {
 		if ( g_logSync.integer ) {
@@ -1334,6 +1449,10 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 
 	G_RemapTeamShaders();
 
+	G_Cod1AuthorFogInitAfterMapBootstrap( level.time );
+	G_Cod1EntityMapReady();
+	G_Cod1GscTestInitAfterMapBootstrap( level.time );
+
 }
 
 
@@ -1344,6 +1463,8 @@ G_ShutdownGame
 =================
 */
 void G_ShutdownGame( int restart ) {
+	G_Cod1RngOwnerEnd();
+	G_Cod1GscTestShutdown();
 	if ( g_gametype.integer != GT_SINGLE_PLAYER ) {
 		G_Printf( "==== ShutdownGame ====\n" );
 	}
@@ -2373,6 +2494,14 @@ void G_RunThink( gentity_t *ent ) {
 		G_Script_ScriptRun( ent );
 	}
 
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+ /* Retail1E8F0 compares signed integer time. Keep the legacy float lane
+  * for other RTCW thinks; it rounds these exact native due times above2^24. */
+ if(ent->think==G_Cod1SpawnPointThink){
+  if(ent->nextthink<=0||ent->nextthink>level.time)return;
+  ent->nextthink=0;ent->think(ent);return;
+ }
+#endif
 	thinktime = ent->nextthink;
 	if ( thinktime <= 0 ) {
 		return;
@@ -2403,6 +2532,8 @@ void G_RunFrame( int levelTime ) {
 
 	// if we are waiting for the level to restart, do nothing
 	if ( level.restarted ) {
+		G_Cod1RngOwnerEnd();
+		G_Cod1GscTestShutdown();
 		return;
 	}
 
@@ -2420,6 +2551,10 @@ void G_RunFrame( int levelTime ) {
 
 	// get any cvar changes
 	G_UpdateCvars();
+
+	G_Cod1GscTestRunFrame( level.time );
+	/* Retire delivered loop owners even after VM completion or destruction. */
+	G_Cod1GscLoopSoundFrame();
 
 	//
 	// go through all allocated objects
@@ -2511,11 +2646,6 @@ void G_RunFrame( int levelTime ) {
 			continue;
 		}
 
-		if ( ent->s.eType == ET_CROWBAR ) {
-			G_RunCrowbar( ent );
-			continue;
-		}
-
 		if ( ent->s.eType == ET_ITEM || ent->physicsObject ) {
 			G_RunItem( ent );
 			continue;
@@ -2539,6 +2669,9 @@ void G_RunFrame( int levelTime ) {
 			continue;
 		}
 
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+        if(!G_Cod1EntityLinkRunEntity(ent)){G_Error("CoD structural link frame lost its current owner");continue;}
+#endif
 		G_RunThink( ent );
 	}
 //end = trap_Milliseconds();

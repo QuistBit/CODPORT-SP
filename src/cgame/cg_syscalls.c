@@ -90,6 +90,10 @@ void    trap_Args( char *buffer, int bufferLength ) {
 	syscall( CG_ARGS, buffer, bufferLength );
 }
 
+int trap_Cod1FS_GetFileList(const char *path,const char *extension,char *list,int capacity) {
+    return syscall(CG_COD1_FS_GETFILELIST,path,extension,list,capacity);
+}
+
 int     trap_FS_FOpenFile( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
 	return syscall( CG_FS_FOPENFILE, qpath, f, mode );
 }
@@ -191,6 +195,26 @@ void    trap_S_StartSound( vec3_t origin, int entityNum, int entchannel, sfxHand
 void    trap_S_StartSoundEx( vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfx, int flags ) {
 	syscall( CG_S_STARTSOUNDEX, origin, entityNum, entchannel, sfx, flags );
 }
+
+void trap_Cod1AliasSlave(const struct cod1AliasSlaveRequest_s *r){syscall(CG_COD1_ALIAS_SLAVE,r);}
+int trap_Cod1LoopStream(const struct cod1LoopStreamRequest_s *r){return syscall(CG_COD1_LOOP_STREAM,r);}
+int trap_Cod1VoiceStream(const struct cod1VoiceRequest_s *request) {
+ return syscall(CG_COD1_VOICE_STREAM,request);
+}
+
+int trap_Cod1SoundDuration(sfxHandle_t sfx,float pitch) {
+    return syscall(CG_COD1_SOUND_DURATION,sfx,PASSFLOAT(pitch));
+}
+
+int trap_Cod1TryStartAliasSound( vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfx,
+                                float gain, float pitch, float distMin, float distMax ) {
+    return syscall(CG_COD1_STARTALIASESOUND, origin, entityNum, entchannel, sfx,
+        PASSFLOAT(gain), PASSFLOAT(pitch), PASSFLOAT(distMin), PASSFLOAT(distMax));
+}
+void trap_Cod1StartAliasSound( vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfx,
+                               float gain, float pitch, float distMin, float distMax ) {
+    trap_Cod1TryStartAliasSound(origin, entityNum, entchannel, sfx, gain, pitch, distMin, distMax);
+}
 //----(SA)	end
 
 void    trap_S_StartLocalSound( sfxHandle_t sfx, int channelNum ) {
@@ -203,6 +227,11 @@ void    trap_S_ClearLoopingSounds( qboolean killall ) {
 
 void    trap_S_AddLoopingSound( int entityNum, const vec3_t origin, const vec3_t velocity, sfxHandle_t sfx, int volume ) {
 	syscall( CG_S_ADDLOOPINGSOUND, entityNum, origin, velocity, 1250, sfx, volume );     // volume was previously removed from CG_S_ADDLOOPINGSOUND.  I added 'range'
+}
+/* Existing engine service carries range and volume together. The selected
+ * turret alias consumer retains both; no new syscall or pitch claim. */
+void trap_Cod1AddLoopingAliasSound(int entityNum,const vec3_t origin,const vec3_t velocity,int range,sfxHandle_t sfx,int volume) {
+	syscall(CG_S_ADDLOOPINGSOUND,entityNum,origin,velocity,range,sfx,volume);
 }
 
 //----(SA)	added
@@ -307,6 +336,23 @@ void    trap_R_ClearScene( void ) {
 
 void    trap_R_AddRefEntityToScene( const refEntity_t *re ) {
 	syscall( CG_R_ADDREFENTITYTOSCENE, re );
+}
+
+int trap_R_AddCod1NativeView( const refEntity_t *re,
+                             const cod1NativeAnimState_t *state,
+                             cod1NativeViewTags_t *tags ) {
+    return syscall( CG_COD1_NATIVE_VIEW, re, state, tags );
+}
+
+int trap_R_AddCod1TurretToScene(const cod1TurretRenderState_t *state) {
+    return syscall(CG_COD1_TURRET,state);
+}
+int trap_R_Cod1TurretTagFlash(const cod1TurretRenderState_t *state,float world[16]) {
+    return syscall(CG_COD1_TURRET_TAG_FLASH,state,world);
+}
+int trap_R_AddCod1ActorAnimated( const refEntity_t *re,
+                                 const cod1ActorAnimState_t *state ) {
+    return syscall( CG_COD1_ACTOR_ANIM, re, state );
 }
 
 void    trap_R_AddPolyToScene( qhandle_t hShader, int numVerts, const polyVert_t *verts ) {
@@ -540,3 +586,27 @@ void trap_UI_ClosePopup( const char *arg0 ) {
 qboolean trap_GetModelInfo( int clientNum, char *modelName, animModelInfo_t **modelInfo ) {
 	return syscall( CG_GETMODELINFO, clientNum, modelName, modelInfo );
 }
+/* PATCH56: equivalent of the angular part of CoD cgame import 0x58. */
+void trap_Cod1SetWeaponAngles(int valid,float pitch,float yaw) {
+    syscall(CG_COD1_SETWEAPONANGLES,valid,PASSFLOAT(pitch),PASSFLOAT(yaw));
+}
+
+int trap_Cod1ScriptMusic(const struct cod1MusicPlayback_s *event) {
+    return syscall(CG_COD1_SCRIPT_MUSIC,event);
+}
+int trap_Cod1ScriptAmbient(const struct cod1AmbientPlayback_s *event) {
+    return syscall(CG_COD1_SCRIPT_AMBIENT,event);
+}
+
+/* R135 native-only pointers split into two32-bit arguments; no QVM ABI. */
+qboolean trap_Cod1KeyBindingContext(cod1KeyBindingQuery_t *query) {
+    uint64_t pointer=(uint64_t)(uintptr_t)query;
+    return syscall(CG_COD1_KEYBINDING_CONTEXT,(int)(uint32_t)pointer,(int)(uint32_t)(pointer>>32))?qtrue:qfalse;
+}
+qboolean trap_Cod1KeyBindingScan(int retail,char *buffer,int capacity) {
+    uint64_t pointer=(uint64_t)(uintptr_t)buffer;
+    return syscall(CG_COD1_KEYBINDING_SCAN,retail,(int)(uint32_t)pointer,(int)(uint32_t)(pointer>>32),capacity)?qtrue:qfalse;
+}
+
+qhandle_t trap_R_RegisterCod1TurretActor(const cod1TurretActorResourceState_t *resource){return syscall(CG_COD1_TURRET_ACTOR_REGISTER,resource);}
+int trap_R_AddCod1TurretActorToScene(const cod1TurretActorRenderState_t *state){return syscall(CG_COD1_TURRET_ACTOR_ADD,state);}

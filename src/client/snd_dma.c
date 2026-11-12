@@ -38,6 +38,8 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "snd_local.h"
 #include "client.h"
+#include "snd_cod1_mp3.h"
+#include "snd_cod1_alias.h"
 
 void S_Play_f( void );
 void S_SoundList_f( void );
@@ -49,6 +51,14 @@ void S_ClearSounds( qboolean clearStreaming, qboolean clearMusic ); //----(SA)	m
 void S_Update_Mix();
 void S_StopAllSounds( void );
 void S_UpdateStreamingSounds( void );
+static void S_Cod1AmbientClear(void);
+static void S_Cod1VoiceClear(void);
+static int SCV_Reserved(int index);
+static int SCV_Tick(int index);
+static int SCL_Reserved(int index);
+static void S_Cod1LoopClear(void);
+static int SCV_MasterActive(void);
+#include "../game/bg_cod1_alias_slave.h"
 
 snd_t snd;  // globals for sound
 
@@ -148,7 +158,11 @@ void S_SoundInfo_f( void ) {
 	Com_Printf( "----------------------\n" );
 }
 
+static void S_AL_LabInit(void);
+static void S_AL_LabShutdown(void);
+static int alLabRawChannels[MAX_STREAMING_SOUNDS];
 void S_ChannelSetup();
+#include "snd_cod1_menu.inc"
 
 /*
 ================
@@ -168,6 +182,7 @@ void S_Init( void ) {
 	s_separation = Cvar_Get( "s_separation", "0.5", CVAR_ARCHIVE );
 	s_doppler = Cvar_Get( "s_doppler", "1", CVAR_ARCHIVE );
 	s_khz = Cvar_Get( "s_khz", "22", CVAR_ARCHIVE );
+	S_Cod1SoundMenuInit();
 	s_mixahead = Cvar_Get( "s_mixahead", "0.5", CVAR_ARCHIVE );    //DAJ was 0.2
 	s_debugMusic = Cvar_Get( "s_debugMusic", "0", CVAR_TEMP );
 
@@ -203,6 +218,7 @@ void S_Init( void ) {
 	Com_Printf( "------------------------------------\n" );
 
 	if ( r ) {
+        S_AL_LabInit();
 		Com_Memset( &snd, 0, sizeof( snd ) );
 //		Com_Memset(snd.sfxHash, 0, sizeof(sfx_t *)*LOOP_HASH);
 
@@ -229,6 +245,7 @@ S_ChannelFree
 ================
 */
 void S_ChannelFree( channel_t *v ) {
+    ALab_StopVoice((int)(v-s_channels));
 	v->thesfx = NULL;
 	v->threadReady = qfalse;
 #ifdef _DEBUG
@@ -303,6 +320,7 @@ void S_Shutdown( void ) {
 
 	Sys_EnterCriticalSection( crit );
 
+    S_AL_LabShutdown();
 	SNDDMA_Shutdown();
 
 	snd.s_soundStarted = 0;
@@ -611,6 +629,20 @@ void S_SpatializeOrigin( vec3_t origin, int master_vol, int *left_vol, int *righ
 	}
 }
 
+
+/* Exact CoD1 attenuation below distMax is still not claimed.  The old bridge
+ * nevertheless had a concrete bug: after accepting a CoD alias out to its
+ * retail distMax it spatialized it with RTCW's fixed 1250-unit range, making
+ * long-range explosion aliases effectively silent.  Preserve RTCW's known
+ * panning/falloff shape for now, but scale it so its zero point matches the
+ * alias maximum distance. */
+static void S_Cod1SpatializeOrigin( vec3_t origin, int master_vol, int *left_vol, int *right_vol, float distMin, float distMax ) {
+    float range=S_Cod1AliasRtcwRange(distMin,distMax,SOUND_RANGE_DEFAULT);
+    S_SpatializeOrigin(origin,master_vol,left_vol,right_vol,range);
+}
+
+static float S_Cod1SlaveScale(const vec3_t origin,float range,float gain,float cap){vec3_t d;float attenuation;if(cap<0||!SCV_MasterActive()||gain<=0||range<=0)return 1;VectorSubtract(origin,listener_origin,d);attenuation=VectorNormalize(d)-range*.064f;if(attenuation<0)attenuation=0;attenuation=1-attenuation/range;if(attenuation<=0||gain*attenuation<=cap)return 1;return cap/(gain*attenuation);}
+static void S_Cod1SpatializeSlave(const vec3_t origin,int master,int *left,int *right,float dmin,float dmax,float cap){float range=S_Cod1AliasRtcwRange(dmin,dmax,SOUND_RANGE_DEFAULT),scale;S_SpatializeOrigin((float *)origin,master,left,right,range);scale=S_Cod1SlaveScale(origin,range,(float)master/127,cap);*left=(int)(*left*scale);*right=(int)(*right*scale);}
 /*
 ====================
 S_StartSound
@@ -627,6 +659,8 @@ Entchannel 0 will never override a playing sound
 	SND_CUTOFF_ALL		0x008	- cut off all sounds on this channel
 ====================
 */
+static int S_ThreadStartSoundExParams( vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfxHandle, int flags,
+    float gain, float cod1Pitch, float cod1DistMin, float cod1DistMax, qboolean cod1Alias, float cod1SlaveCap );
 void S_ThreadStartSoundEx( vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfxHandle, int flags );
 
 void S_StartSoundEx( vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfxHandle, int flags ) {
@@ -640,7 +674,7 @@ void S_StartSoundEx( vec3_t origin, int entityNum, int entchannel, sfxHandle_t s
 	}
 
 	// RF, make the call now, or else we could override following streaming sounds in the same frame, due to the delay
-	S_ThreadStartSoundEx( origin, entityNum, entchannel, sfxHandle, flags );
+	S_ThreadStartSoundExParams( origin, entityNum, entchannel, sfxHandle, flags, 1.0f, 1.0f, 0.0f, 0.0f, qfalse, -1 );
 /*
 	if (snd.tart < MAX_PUSHSTACK) {
 		sfx_t		*sfx;
@@ -665,14 +699,15 @@ void S_StartSoundEx( vec3_t origin, int entityNum, int entchannel, sfxHandle_t s
 */
 }
 
-void S_ThreadStartSoundEx( vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfxHandle, int flags ) {
+static int S_ThreadStartSoundExParams( vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfxHandle, int flags,
+    float gain, float cod1Pitch, float cod1DistMin, float cod1DistMax, qboolean cod1Alias, float cod1SlaveCap ) {
 	channel_t   *ch;
 	sfx_t       *sfx;
 	int i, oldest, chosen;
 
 	chosen = -1;
 	if ( !snd.s_soundStarted || snd.s_soundMute ) {
-		return;
+		return 0;
 	}
 
 	if ( !origin && ( entityNum < 0 || entityNum > MAX_GENTITIES ) ) {
@@ -681,10 +716,24 @@ void S_ThreadStartSoundEx( vec3_t origin, int entityNum, int entchannel, sfxHand
 
 	if ( sfxHandle < 0 || sfxHandle >= snd.s_numSfx ) {
 		Com_Printf( S_COLOR_YELLOW, "S_StartSound: handle %i out of range\n", sfxHandle );
-		return;
+		return 0;
 	}
 
 	sfx = &s_knownSfx[ sfxHandle ];
+
+    if(cod1Alias) {
+        vec3_t delta;float distance;
+        if(!isfinite(gain)||gain<0)gain=0;if(gain>2.0f)gain=2.0f;
+        if(!isfinite(cod1Pitch)||cod1Pitch<=0)cod1Pitch=1.0f;
+        if(cod1Pitch<0.25f)cod1Pitch=0.25f;if(cod1Pitch>4.0f)cod1Pitch=4.0f;
+        if(!isfinite(cod1DistMin)||cod1DistMin<0)cod1DistMin=120.0f;
+        if(!isfinite(cod1DistMax)||cod1DistMax<0)cod1DistMax=0.0f;
+        if(cod1DistMax>0) {
+            const vec_t *source=origin;
+            if(!source && entityNum>=0 && entityNum<MAX_GENTITIES)source=snd.entityPositions[entityNum];
+            if(source) {VectorSubtract(source,listener_origin,delta);distance=VectorLength(delta);if(!S_Cod1AliasStartAllowed(distance,cod1DistMax))return 0;}
+        }
+    }
 
 	if ( s_show->integer == 1 ) {
 		Com_Printf( "%i : %s\n", s_paintedtime, sfx->soundName );
@@ -789,8 +838,8 @@ void S_ThreadStartSoundEx( vec3_t origin, int entityNum, int entchannel, sfxHand
 				}
 			}
 			if ( chosen == -1 ) {
-				if ( ch->entnum == listener_number ) {
-					for ( i = 0 ; i < MAX_CHANNELS ; i++, ch++ ) {
+				if ( entityNum == listener_number ) {
+					for ( i = 0, ch = s_channels ; i < MAX_CHANNELS ; i++, ch++ ) {
 						if ( ch->allocTime < oldest ) {
 							oldest = ch->allocTime;
 							chosen = i;
@@ -799,7 +848,7 @@ void S_ThreadStartSoundEx( vec3_t origin, int entityNum, int entchannel, sfxHand
 				}
 				if ( chosen == -1 ) {
 					//Com_Printf("dropping sound\n");
-					return;
+					return 0;
 				}
 			}
 		}
@@ -810,9 +859,10 @@ void S_ThreadStartSoundEx( vec3_t origin, int entityNum, int entchannel, sfxHand
 #ifdef _DEBUG
 	if ( ch > &s_channels[MAX_CHANNELS] || ch < &s_channels[0] ) { //DAJ	extra check
 		Com_DPrintf( "s_channel OUT OF BOUNDS\n" );
-		return;
+		return 0;
 	}
 #endif
+    ALab_StopVoice((int)(ch-s_channels));
 	if ( origin ) {
 		VectorCopy( origin, ch->origin );
 		ch->fixed_origin = qtrue;
@@ -821,22 +871,50 @@ void S_ThreadStartSoundEx( vec3_t origin, int entityNum, int entchannel, sfxHand
 	}
 
 	ch->flags = flags;  //----(SA)	added
-	ch->master_vol = 127;
+	ch->master_vol = cod1Alias ? (int)(127.0f*gain+0.5f) : 127;
+    if(ch->master_vol<0)ch->master_vol=0;if(ch->master_vol>255)ch->master_vol=255;
 	ch->entnum = entityNum;
 	ch->thesfx = sfx;
 	ch->entchannel = entchannel;
 	ch->leftvol = ch->master_vol;       // these will get calced at next spatialize
 	ch->rightvol = ch->master_vol;      // unless the game isn't running
 	ch->doppler = qfalse;
+    ch->cod1SlaveCap=cod1Alias?cod1SlaveCap:-1;ch->cod1Alias=cod1Alias;ch->cod1Pitch=cod1Alias?cod1Pitch:1.0f;
+    ch->cod1DistMin=cod1Alias?cod1DistMin:0.0f;ch->cod1DistMax=cod1Alias?cod1DistMax:0.0f;
 
 	if ( ch->fixed_origin ) {
-		S_SpatializeOrigin( ch->origin, ch->master_vol, &ch->leftvol, &ch->rightvol, SOUND_RANGE_DEFAULT );
+        if(ch->cod1Alias)S_Cod1SpatializeSlave(ch->origin,ch->master_vol,&ch->leftvol,&ch->rightvol,ch->cod1DistMin,ch->cod1DistMax,ch->cod1SlaveCap);
+		else S_SpatializeOrigin( ch->origin, ch->master_vol, &ch->leftvol, &ch->rightvol, SOUND_RANGE_DEFAULT );
 	} else {
-		S_SpatializeOrigin( snd.entityPositions[ ch->entnum ], ch->master_vol, &ch->leftvol, &ch->rightvol, SOUND_RANGE_DEFAULT );
+        if(ch->cod1Alias)S_Cod1SpatializeSlave(snd.entityPositions[ch->entnum],ch->master_vol,&ch->leftvol,&ch->rightvol,ch->cod1DistMin,ch->cod1DistMax,ch->cod1SlaveCap);
+		else S_SpatializeOrigin( snd.entityPositions[ ch->entnum ], ch->master_vol, &ch->leftvol, &ch->rightvol, SOUND_RANGE_DEFAULT );
 	}
 
 	ch->startSample = START_SAMPLE_IMMEDIATE;
 	ch->threadReady = qtrue;
+	return 1;
+}
+
+void S_ThreadStartSoundEx( vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfxHandle, int flags ) {
+    S_ThreadStartSoundExParams(origin,entityNum,entchannel,sfxHandle,flags,1.0f,1.0f,0.0f,0.0f,qfalse,-1);
+}
+
+#include "../game/bg_cod1_sound_duration.h"
+int S_Cod1SoundDuration(sfxHandle_t handle,float pitch) {
+    sfx_t *sfx;
+    if(!snd.s_soundStarted||handle<=0||handle>=snd.s_numSfx)return -1;
+    sfx=&s_knownSfx[handle];
+    /* Registration/start own loading. Never load or synthesize a fallback
+     * merely to answer a script duration query. */
+    if(!sfx->inMemory||sfx->defaultSound||!sfx->soundData)return -1;
+    return C1N_SampleDuration(sfx->soundLength,dma.speed,pitch);
+}
+
+int S_StartSoundCod1( vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfxHandle,
+                       float gain, float pitch, float distMin, float distMax ) {
+    if(!snd.s_soundStarted || snd.s_soundMute || (cls.state!=CA_ACTIVE && cls.state!=CA_DISCONNECTED))return 0;
+    if(!sfxHandle && entchannel!=CHAN_WEAPON)return 0;
+    return S_ThreadStartSoundExParams(origin,entityNum,entchannel,sfxHandle,0,gain,pitch,distMin,distMax,qtrue,-1);
 }
 
 /*
@@ -981,9 +1059,11 @@ void S_AddLoopingSound( int entityNum, const vec3_t origin, const vec3_t velocit
 	if ( !sfx->soundLength ) {
 		Com_Error( ERR_DROP, "%s has length 0", sfx->soundName );
 	}
+    snd.loopSounds[snd.numLoopSounds].alEntity=entityNum;
 	VectorCopy( origin, snd.loopSounds[snd.numLoopSounds].origin );
 	VectorCopy( velocity, snd.loopSounds[snd.numLoopSounds].velocity );
 	snd.loopSounds[snd.numLoopSounds].sfx = sfx;
+    snd.loopSounds[snd.numLoopSounds].cod1SlaveCap=-1;
 	if ( range ) {
 		snd.loopSounds[snd.numLoopSounds].range = range;
 	} else {
@@ -1044,7 +1124,8 @@ void S_AddLoopSounds( void ) {
 		left_total = (int)( (float)loop->vol * (float)left_total / 256.0 );
 		right_total = (int)( (float)loop->vol * (float)right_total / 256.0 );
 
-		loop->sfx->lastTimeUsed = time;
+		{float gain=snd.volCurrent>0?(float)loop->vol/(255*snd.volCurrent):0,scale=S_Cod1SlaveScale(loop->origin,loop->range,gain,loop->cod1SlaveCap);left_total=(int)(left_total*scale);right_total=(int)(right_total*scale);}
+        loop->sfx->lastTimeUsed = time;
 
 		for ( j = ( i + 1 ); j < numLoopChannels ; j++ ) {
 			loop2 = &snd.loopSounds[j];
@@ -1063,7 +1144,8 @@ void S_AddLoopSounds( void ) {
 			left = (int)( (float)loop2->vol * (float)left / 256.0 );
 			right = (int)( (float)loop2->vol * (float)right / 256.0 );
 
-			loop2->sfx->lastTimeUsed = time;
+			{float gain=snd.volCurrent>0?(float)loop2->vol/(255*snd.volCurrent):0,scale=S_Cod1SlaveScale(loop2->origin,loop2->range,gain,loop2->cod1SlaveCap);left=(int)(left*scale);right=(int)(right*scale);}
+            loop2->sfx->lastTimeUsed = time;
 			left_total += left;
 			right_total += right;
 		}
@@ -1160,6 +1242,7 @@ void S_RawSamples( int samples, int rate, int width, int s_channels, const byte 
 		return;
 	}
 
+    alLabRawChannels[streamingIndex]=s_channels;
 	// volume taken into account when mixed
 	s_rawVolume[streamingIndex].left = 256 * lvol;
 	s_rawVolume[streamingIndex].right = 256 * rvol;
@@ -1297,6 +1380,7 @@ void S_ThreadRespatialize() {
 		if ( ch->entnum == listener_number ) {
 			ch->leftvol = ch->master_vol;
 			ch->rightvol = ch->master_vol;
+            if(ch->cod1Alias&&ch->cod1SlaveCap>=0&&SCV_MasterActive()){int capped=(int)(127*ch->cod1SlaveCap);if(ch->leftvol>capped)ch->leftvol=ch->rightvol=capped;}
 		} else {
 			if ( ch->fixed_origin ) {
 				VectorCopy( ch->origin, origin );
@@ -1304,7 +1388,8 @@ void S_ThreadRespatialize() {
 				VectorCopy( snd.entityPositions[ ch->entnum ], origin );
 			}
 
-			S_SpatializeOrigin( origin, ch->master_vol, &ch->leftvol, &ch->rightvol, SOUND_RANGE_DEFAULT );
+            if(ch->cod1Alias)S_Cod1SpatializeSlave(origin,ch->master_vol,&ch->leftvol,&ch->rightvol,ch->cod1DistMin,ch->cod1DistMax,ch->cod1SlaveCap);
+            else S_SpatializeOrigin( origin, ch->master_vol, &ch->leftvol, &ch->rightvol, SOUND_RANGE_DEFAULT );
 		}
 	}
 }
@@ -1338,7 +1423,7 @@ qboolean S_ScanChannelStarts( void ) {
 		}
 
 		// if it is completely finished by now, clear it
-		if ( ch->startSample + ( ch->thesfx->soundLength ) <= s_paintedtime ) {
+		if ( ch->startSample + (int)ceilf((float)ch->thesfx->soundLength / (ch->cod1Alias?ch->cod1Pitch:1.0f)) <= s_paintedtime ) {
 //----(SA)	got from TA sound.  correct?
 //			Com_Memset(ch, 0, sizeof(*ch));
 			S_ChannelFree( ch );
@@ -1435,7 +1520,11 @@ void S_ClearSounds( qboolean clearStreaming, qboolean clearMusic ) {
 	S_ClearLoopingSounds();
 
 	// RF, moved this up so streaming sounds dont get updated with the music, below, and leave us with a snippet off streaming sounds after we reload
+    if(clearStreaming)ALab_Clear(1,clearMusic);
 	if ( clearStreaming ) {    // we don't want to stop guys with long dialogue from getting cut off by a file read
+		S_Cod1AmbientClear();
+        S_Cod1VoiceClear();
+    S_Cod1LoopClear();
 		// RF, clear talking amplitudes
 		Com_Memset( s_entityTalkAmplitude, 0, sizeof( s_entityTalkAmplitude ) );
 
@@ -1477,8 +1566,8 @@ void S_ClearSounds( qboolean clearStreaming, qboolean clearMusic ) {
 		}
 		SNDDMA_Submit();
 
-		Sys_LeaveCriticalSection( crit );
 	}
+	Sys_LeaveCriticalSection( crit );
 }
 
 /*
@@ -1550,6 +1639,15 @@ void S_GetSoundtime( void ) {
 	}
 #endif
 
+    /* A runtime adapter fault changes the PCM provider, not the clock epoch.
+     * Existing channel startSample values still use the monotonic cursor. */
+    if(ALab_MonotonicClock()){
+        if(s_paintedtime<s_soundtime){
+            if(ALab_Active())ALab_Skip(s_soundtime-s_paintedtime);
+            s_paintedtime=s_soundtime;
+        }
+        return;
+    }
 	if ( dma.submission_chunk < 256 ) {
 		s_paintedtime = s_soundtime + s_mixPreStep->value * dma.speed;
 	} else {
@@ -1591,8 +1689,11 @@ void S_Update_Mix( void ) {
 
 	thisTime = Sys_Milliseconds();
 
-	// Updates s_soundtime
+	// Sample the playback cursor before filling owned speech for this mix.
 	S_GetSoundtime();
+	for ( int i = 1; i < MAX_STREAMING_SOUNDS; ++i ) {
+		if ( SCV_Reserved(i) ) SCV_Tick(i);
+	}
 
 	// clear any sound effects that end before the current time,
 	// and start any new sounds
@@ -1818,11 +1919,18 @@ int S_FindWavChunk( const fileHandle_t f, const char *chunk ) {
 S_StartBackgroundTrack
 ======================
 */
+#include "snd_cod1_music.inc"
+#include "snd_cod1_ambient.inc"
+#include "snd_cod1_voice.inc"
+#include "snd_cod1_loop_sound.inc"
+#include "snd_cod1_alias_slave.inc"
+
 void S_StartBackgroundTrack( const char *intro, const char *loop, int fadeupTime ) {
 	int len;
 	char dump[16];
 //	char	name[MAX_QPATH];
 	char loopMusic[MAX_QPATH];
+	char decodedIntro[MAX_QPATH], decodedLoop[MAX_QPATH];
 	streamingSound_t *ss;
 	fileHandle_t fh;
 
@@ -1874,6 +1982,16 @@ void S_StartBackgroundTrack( const char *intro, const char *loop, int fadeupTime
 		return;
 	}
 
+	/* Convert virtual-FS MP3 before entering the WAV streamer. */
+    if (intro && intro[0]) {
+        if (!S_Cod1MusicPath(intro, decodedIntro, sizeof(decodedIntro))) return;
+        if (loop && loop[0] && Q_stricmp(loop,"onetimeonly")) {
+            if (!Q_stricmp(intro,loop)) Q_strncpyz(decodedLoop,decodedIntro,sizeof(decodedLoop));
+            else if (!S_Cod1MusicPath(loop,decodedLoop,sizeof(decodedLoop))) return;
+            loop=decodedLoop;
+        }
+        intro=decodedIntro;
+    }
 	Sys_EnterCriticalSection( crit );
 
 	if ( !intro ) {
@@ -1887,16 +2005,23 @@ void S_StartBackgroundTrack( const char *intro, const char *loop, int fadeupTime
 
 	Cvar_Set( "s_currentMusic", "" ); //----(SA)	so the savegame will have the right music
 
-	if ( !Q_stricmp( loop, "onetimeonly" ) ) { // don't change the loop if you're playing a single hit
+	if ( loop && !Q_stricmp( loop, "onetimeonly" ) ) { // don't change the loop if you're playing a single hit
 		Q_strncpyz( loopMusic, ss->loop, sizeof( loopMusic ) );
 	}
 
+    if (s_cod1Music.starting) {
+        if (!s_cod1Music.looping) loopMusic[0]=0;
+    } else {
+        s_cod1Music.active=0;
+    }
 	Q_strncpyz( ss->loop, loopMusic, sizeof( ss->loop ) - 4 );
 
 	Q_strncpyz( ss->name, intro, sizeof( ss->name ) - 4 );
 	COM_DefaultExtension( ss->name, sizeof( ss->name ), ".wav" );
 
 	// close the current sound if present, but DON'T reset s_rawend
+    if(s_cod1Music.starting && ss->file && s_cod1Music.active &&
+       ss->file==s_cod1Music.file && numStreamingSounds>0) --numStreamingSounds;
 	if ( ss->file ) {
 		Sys_EndStreamedFile( ss->file );
 		FS_FCloseFile( ss->file );
@@ -2139,7 +2264,7 @@ void S_StartStreamingSound( const char *intro, const char *loop, int entnum, int
 	ss = NULL;
 	if ( entnum >= 0 ) {
 		for ( i = 1; i < MAX_STREAMING_SOUNDS; i++ ) {    // track 0 is music/cinematics
-			if ( !streamingSounds[i].file ) {
+			if ( SCV_Reserved(i) || SCL_Reserved(i) || !streamingSounds[i].file ) {
 				continue;
 			}
 			// check to see if this character currently has another sound streaming on the same channel
@@ -2154,6 +2279,7 @@ void S_StartStreamingSound( const char *intro, const char *loop, int entnum, int
 	if ( !ss ) {
 		// no need to override a current stream, so look for a free track
 		for ( i = 1; i < MAX_STREAMING_SOUNDS; i++ ) {    // track 0 is music/cinematics
+			if(SCA_Reserved(i)||SCV_Reserved(i)||SCL_Reserved(i))continue;
 			if ( !streamingSounds[i].file ) {
 				ss = &streamingSounds[i];
 				break;
@@ -2266,12 +2392,13 @@ S_StopStreamingSound
 ======================
 */
 void S_StopStreamingSound( int index ) {
-	if ( !streamingSounds[index].file ) {
-		return;
-	}
-	Sys_EnterCriticalSection( crit );
-	streamingSounds[index].kill = 1;
-	Sys_LeaveCriticalSection( crit );
+    if(index<0||index>=MAX_STREAMING_SOUNDS||!crit)return;
+    Sys_EnterCriticalSection(crit);
+    if(streamingSounds[index].file){
+        ALab_ResetStream(index);
+        streamingSounds[index].kill=1;
+    }
+    Sys_LeaveCriticalSection(crit);
 }
 
 //----(SA)	added
@@ -2308,6 +2435,8 @@ S_StopBackgroundTrack
 ======================
 */
 void S_StopBackgroundTrack( void ) {
+    memset(&s_cod1Music,0,sizeof(s_cod1Music));
+    Cvar_Set("s_currentMusic", "");
 	S_StopStreamingSound( 0 );
 }
 
@@ -2328,10 +2457,18 @@ void S_UpdateStreamingSounds( void ) {
 	float lvol, rvol;
 	int soundMixAheadTime;
 	float streamingVol = 1.0f;
+    cod1AmbientSoundLease_t ambientLease;
+    int ambientOwned,ambientPreviousBusy;
 
 	if ( !snd.s_soundStarted  || !crit ) {
 		return;
 	}
+    ambientPreviousBusy=s_cod1AmbientBusy;s_cod1AmbientBusy=1;
+    if(!ambientPreviousBusy) {
+        if((int64_t)s_soundtime<s_cod1Ambient.last_clock || dma.speed!=s_cod1Ambient.clock_rate)
+            S_Cod1AmbientClear();
+        s_cod1Ambient.last_clock=(int64_t)s_soundtime;s_cod1Ambient.clock_rate=dma.speed;
+    }
 
 	// seems like the mute would be better down lower so no timing gets messed up
 
@@ -2344,6 +2481,16 @@ void S_UpdateStreamingSounds( void ) {
 	snd.s_soundPainted = qtrue;
 
 	for ( i = 0, ss = streamingSounds, re = s_rawend, rp = s_rawpainted; i < MAX_STREAMING_SOUNDS; i++, ss++, re++, rp++ ) {
+        if(SCA_Reserved(i) && ambientPreviousBusy)continue;
+        if(SCL_Tick(i))continue;
+        if(SCV_Reserved(i))continue; /* Filled against the current device cursor in S_Update_Mix. */
+        if(SCA_Tick(i))continue;
+        ambientOwned=SCA_Owns(i);ambientLease=SCA_Lease();
+        if (i==0 && s_cod1Music.active && ss->file==s_cod1Music.file) {
+            if((int64_t)s_soundtime<s_cod1Music.lastClock ||
+               (s_cod1Music.fadeEnd && (int64_t)s_soundtime>=s_cod1Music.fadeEnd)) ss->kill=1;
+            s_cod1Music.lastClock=(int64_t)s_soundtime;
+        }
 		if ( ss->kill && ss->file ) {
 			fileHandle_t file;
 			file = ss->file;
@@ -2412,6 +2559,7 @@ void S_UpdateStreamingSounds( void ) {
 			}
 
 			r = Sys_StreamedRead( raw, 1, fileBytes, ss->file );
+            if(ambientOwned && !SCA_Current(&ambientLease))break;
 			if ( r != fileBytes ) {
 				Com_DPrintf( "StreamedRead failure on stream sound\n" );
 				ss->kill = 1;
@@ -2423,6 +2571,8 @@ void S_UpdateStreamingSounds( void ) {
 
 			// calculate the volume
 			streamingVol = S_GetStreamingFade( ss );
+            if(i==0)streamingVol *= S_Cod1MusicGain();
+            if(ambientOwned)streamingVol *= SCA_Gain(SCA_Relative(i));
 
 			streamingVol *= snd.volCurrent; // get current global volume level
 
@@ -2452,6 +2602,7 @@ void S_UpdateStreamingSounds( void ) {
 			// add to raw buffer
 			S_RawSamples( fileSamples, ss->info.rate,
 						  ss->info.width, ss->info.channels, raw, lvol, rvol, i );
+            if(ambientOwned && !SCA_Current(&ambientLease))break;
 
 			*rp = qtrue;
 
@@ -2485,6 +2636,7 @@ void S_UpdateStreamingSounds( void ) {
 				} else {
 					// loop
 					if ( ss->loop && ss->loop[0] ) {
+                        if(ambientOwned) {SCA_Rewind(i,&ambientLease);break;}
 						if ( ss->looped ) {
 							char dump[16];
 							Sys_StreamSeek( ss->file, 0, FS_SEEK_SET );       // just go back to the beginning
@@ -2511,7 +2663,12 @@ void S_UpdateStreamingSounds( void ) {
 							}
 							break;
 						} else {                                            // start up the sound
-							S_StartBackgroundTrack( ss->loop, ss->loop, 0 );
+                            if(i==0 && s_cod1Music.active && ss->file==s_cod1Music.file) {
+                                s_cod1Music.starting=1;s_cod1Music.looping=1;
+                                S_StartBackgroundTrack(ss->loop,ss->loop,0);
+                                s_cod1Music.starting=0;s_cod1Music.file=ss->file;
+                                if(!ss->file)s_cod1Music.active=0;
+                            } else S_StartBackgroundTrack( ss->loop, ss->loop, 0 );
 							ss->looped = qtrue; // this is now the music ss->file, no need to re-start next time through
 							break;
 						}
@@ -2534,6 +2691,7 @@ void S_UpdateStreamingSounds( void ) {
 			}
 		}
 	}
+    s_cod1AmbientBusy=ambientPreviousBusy;
 }
 
 
@@ -2572,3 +2730,5 @@ void S_FreeOldestSound( void ) {
 	sfx->soundData = NULL;
 }
 
+
+#include "snd_al_lab.inc"

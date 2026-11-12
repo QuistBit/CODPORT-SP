@@ -34,6 +34,18 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "g_local.h"
+#include "bg_cod1_rocket.h"
+#include "g_cod1_gsc_combat.h"
+
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+/* Native pain/die callbacks can call player_die or recursively apply damage.
+ * Preserve each call's copied actor identity until its callback returns. */
+typedef struct GscCombatContext_s {
+	const GscCombatEventTicket *ticket;
+	struct GscCombatContext_s *previous;
+} GscCombatContext;
+static GscCombatContext *gscCombatContext;
+#endif
 
 /*
 ============
@@ -346,6 +358,19 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 	gitem_t     *item = NULL; // JPW NERVE for flag drop
 	vec3_t launchvel;      // JPW NERVE
 	gentity_t   *flag; // JPW NERVE
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	GscCombatEventTicket directTicket;
+	const GscCombatEventTicket *ticket;
+	if ( gscCombatContext &&
+		 gscCombatContext->ticket->ownerAddress == self &&
+		 gscCombatContext->ticket->attackerAddress == attacker ) {
+		ticket = gscCombatContext->ticket;
+	} else {
+		G_Cod1GscTestCombatCapture( self, attacker, &directTicket );
+		ticket = &directTicket;
+	}
+	if ( !G_Cod1GscTestCombatCurrent( ticket ) ) return;
+#endif
 
 	if ( self->client->ps.pm_type == PM_DEAD ) {
 		return;
@@ -354,6 +379,10 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 	if ( level.intermissiontime ) {
 		return;
 	}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	/* The original client death producer follows its admission guards. */
+	if ( !G_Cod1GscTestCombatDeathEvent( ticket ) ) return;
+#endif
 
 //----(SA) commented out as we have no hook
 //	if (self->client && self->client->hook)
@@ -898,6 +927,13 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,
 	int save;
 	int asave;
 	int knockback;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	GscCombatEventTicket ticket;
+	GscCombatContext context;
+	qboolean cod1HeadShot;
+	G_Cod1GscTestCombatCapture( targ,
+		attacker ? attacker : &g_entities[ENTITYNUM_WORLD], &ticket );
+#endif
 
 	if ( !targ->takedamage ) {
 		return;
@@ -921,12 +957,21 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,
 		return;
 	}
 
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+    /* R226: native logical damage receiver for selected grenade targets.
+     * Called after ordinary reload/intermission refusal, before actor damage. */
+    if(G_Cod1DamageTriggerReceive(targ,attacker,damage,dflags,mod))return;
+#endif
+
 	// RF, track pain for player
 	// This is used by AI to determine how long it has been since their enemy was injured
 
 	if ( attacker ) { // (SA) whoops, for falling damage there's no attacker
 		if ( targ->client && attacker->client && !( targ->r.svFlags & SVF_CASTAI ) && ( attacker->r.svFlags & SVF_CASTAI ) ) {
 			AICast_RegisterPain( targ->s.number );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+			if ( !G_Cod1GscTestCombatCurrent( &ticket ) ) return;
+#endif
 		}
 	}
 
@@ -1027,6 +1072,9 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,
 		if ( !AICast_AIDamageOK( AICast_GetCastState( targ->s.number ), AICast_GetCastState( attacker->s.number ) ) ) {
 			return;
 		}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+		if ( !G_Cod1GscTestCombatCurrent( &ticket ) ) return;
+#endif
 		damage = (int)( ceil( (float)damage * 0.5 ) );
 	}
 	// done.
@@ -1132,6 +1180,9 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,
 	// and protects 50% against all damage
 	if ( client && client->ps.powerups[PW_BATTLESUIT] ) {
 		G_AddEvent( targ, EV_POWERUP_BATTLESUIT, 0 );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+		if ( !G_Cod1GscTestCombatCurrent( &ticket ) ) return;
+#endif
 		if ( dflags & DAMAGE_RADIUS ) {
 			return;
 		}
@@ -1181,7 +1232,13 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,
 	take -= asave;
 
 
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	cod1HeadShot = IsHeadShot( targ, attacker, dir, point, mod );
+	if ( !G_Cod1GscTestCombatCurrent( &ticket ) ) return;
+	if ( cod1HeadShot ) {
+#else
 	if ( IsHeadShot( targ, attacker, dir, point, mod ) ) {
+#endif
 		// JPW NERVE -- different headshot behavior in multiplayer
 		if ( g_gametype.integer != GT_SINGLE_PLAYER ) {
 			if ( take * 2 < 50 ) { // head shots, all weapons, do minimum 50 points damage
@@ -1264,6 +1321,9 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,
 	if ( g_debugDamage.integer ) {
 		G_Printf( "client:%i health:%i damage:%i armor:%i\n", targ->s.number,
 				  targ->health, take, asave );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+		if ( !G_Cod1GscTestCombatCurrent( &ticket ) ) return;
+#endif
 	}
 
 	// add to the damage inflicted on a player this frame
@@ -1290,6 +1350,9 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,
 
 	// See if it's the player hurting the emeny flag carrier
 	Team_CheckHurtCarrier( targ, attacker );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if ( !G_Cod1GscTestCombatCurrent( &ticket ) ) return;
+#endif
 
 	if ( targ->client ) {
 		// set the last client who damaged the target
@@ -1300,6 +1363,11 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,
 	// do the damage
 	if ( take ) {
 		targ->health = targ->health - take;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+		/* take is the same adjusted integer committed to health, not the
+		 * incoming weapon damage. Matching tasks still resume on advance. */
+		if ( !G_Cod1GscTestCombatDamageEvent( &ticket, take ) ) return;
+#endif
 
 		// Ridah, can't gib with bullet weapons (except VENOM)
 		if ( targ->client ) {
@@ -1321,8 +1389,22 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,
 			}
 
 			targ->enemy = attacker;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+			/* Ordinary nonclient damage notifies on every lethal commit.
+			 * Client death is produced by player_die after its own guards. */
+			if ( !targ->client && !G_Cod1GscTestCombatDeathEvent( &ticket ) ) return;
+#endif
 			if ( targ->die ) { // Ridah, mg42 doesn't have die func (FIXME)
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+				context.ticket = &ticket;
+				context.previous = gscCombatContext;
+				gscCombatContext = &context;
+#endif
 				targ->die( targ, inflictor, attacker, take, mod );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+				gscCombatContext = context.previous;
+				if ( !G_Cod1GscTestCombatCurrent( &ticket ) ) return;
+#endif
 			}
 
 			// if we freed ourselves in death function
@@ -1333,6 +1415,9 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,
 			// RF, entity scripting
 			if ( targ->s.number >= MAX_CLIENTS && targ->health <= 0 ) { // might have revived itself in death function
 				G_Script_ScriptEvent( targ, "death", "" );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+				if ( !G_Cod1GscTestCombatCurrent( &ticket ) ) return;
+#endif
 			}
 
 		} else if ( targ->pain ) {
@@ -1344,10 +1429,22 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,
 				VectorClear( targ->pos3 );
 			}
 
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+			context.ticket = &ticket;
+			context.previous = gscCombatContext;
+			gscCombatContext = &context;
+#endif
 			targ->pain( targ, attacker, take, point );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+			gscCombatContext = context.previous;
+			if ( !G_Cod1GscTestCombatCurrent( &ticket ) ) return;
+#endif
 		}
 
 		G_ArmorDamage( targ );    //----(SA)	moved out to separate routine
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+		if ( !G_Cod1GscTestCombatCurrent( &ticket ) ) return;
+#endif
 
 		// Ridah, this needs to be done last, incase the health is altered in one of the event calls
 		if ( targ->client ) {
@@ -1432,7 +1529,7 @@ qboolean CanDamage( gentity_t *targ, vec3_t origin ) {
 G_RadiusDamage
 ============
 */
-qboolean G_RadiusDamage( vec3_t origin, gentity_t *attacker, float damage, float radius,
+static qboolean G_RadiusDamageEx( vec3_t origin, gentity_t *attacker, float damage, float outerDamage, float radius,
 						 gentity_t *ignore, int mod ) {
 	float points, dist;
 	gentity_t   *ent;
@@ -1507,7 +1604,7 @@ qboolean G_RadiusDamage( vec3_t origin, gentity_t *attacker, float damage, float
 			continue;
 		}
 
-		points = damage * ( 1.0 - dist / radius );
+		points = CR_DamageAtDistance( damage, outerDamage, radius, dist );
 
 // JPW NERVE -- different radiusdmg behavior for MP -- big explosions should do less damage (over less distance) through failed traces
 		if ( CanDamage( ent, origin ) ) {
@@ -1547,3 +1644,15 @@ qboolean G_RadiusDamage( vec3_t origin, gentity_t *attacker, float damage, float
 	}
 	return hitClient;
 }
+
+qboolean G_RadiusDamage( vec3_t origin, gentity_t *attacker, float damage, float radius,
+                         gentity_t *ignore, int mod ) {
+    return G_RadiusDamageEx( origin, attacker, damage, 0.0f, radius, ignore, mod );
+}
+
+qboolean G_Cod1RadiusDamage( vec3_t origin, gentity_t *attacker, float innerDamage, float outerDamage, float radius,
+                             gentity_t *ignore, int mod ) {
+    return G_RadiusDamageEx( origin, attacker, innerDamage, outerDamage, radius, ignore, mod );
+}
+
+#include "g_cod1_script_blast.inc"

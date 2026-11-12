@@ -70,6 +70,15 @@ void GL_Bind( image_t *image ) {
 ** GL_SelectTexture
 */
 void GL_SelectTexture( int unit ) {
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	/* A third authored bundle requires both server and client selectors.
+	 * Validate before the cache shortcut so unavailable state is never used. */
+	if ( unit == 2 && ( glConfig.maxActiveTextures < 3 ||
+		 !qglActiveTextureARB || !qglClientActiveTextureARB ) ) {
+		ri.Error( ERR_DROP, "GL_SelectTexture: third texture unit unavailable" );
+		return;
+	}
+#endif
 	if ( glState.currenttmu == unit ) {
 		return;
 	}
@@ -84,39 +93,19 @@ void GL_SelectTexture( int unit ) {
 		GLimp_LogComment( "glActiveTextureARB( GL_TEXTURE1_ARB )\n" );
 		qglClientActiveTextureARB( GL_TEXTURE1_ARB );
 		GLimp_LogComment( "glClientActiveTextureARB( GL_TEXTURE1_ARB )\n" );
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	} else if ( unit == 2 ) {
+		qglActiveTextureARB( GL_TEXTURE2_ARB );
+		GLimp_LogComment( "glActiveTextureARB( GL_TEXTURE2_ARB )\n" );
+		qglClientActiveTextureARB( GL_TEXTURE2_ARB );
+		GLimp_LogComment( "glClientActiveTextureARB( GL_TEXTURE2_ARB )\n" );
+#endif
 	} else {
 		ri.Error( ERR_DROP, "GL_SelectTexture: unit = %i", unit );
+		return;
 	}
 
 	glState.currenttmu = unit;
-}
-
-
-/*
-** GL_BindMultitexture
-*/
-void GL_BindMultitexture( image_t *image0, GLuint env0, image_t *image1, GLuint env1 ) {
-	int texnum0, texnum1;
-
-	texnum0 = image0->texnum;
-	texnum1 = image1->texnum;
-
-	if ( r_nobind->integer && tr.dlightImage ) {        // performance evaluation option
-		texnum0 = texnum1 = tr.dlightImage->texnum;
-	}
-
-	if ( glState.currenttextures[1] != texnum1 ) {
-		GL_SelectTexture( 1 );
-		image1->frameUsed = tr.frameCount;
-		glState.currenttextures[1] = texnum1;
-		qglBindTexture( GL_TEXTURE_2D, texnum1 );
-	}
-	if ( glState.currenttextures[0] != texnum0 ) {
-		GL_SelectTexture( 0 );
-		image0->frameUsed = tr.frameCount;
-		glState.currenttextures[0] = texnum0;
-		qglBindTexture( GL_TEXTURE_2D, texnum0 );
-	}
 }
 
 
@@ -520,6 +509,38 @@ void RB_BeginDrawingView( void ) {
 	}
 
 
+	/* Clear uncovered CoD view pixels every frame to avoid old-frame trails.
+	 * Native fog uses raw scene RGBA (CoDSP 0x4CC186..0x4CC2C2),
+	 * independently of the identity scaling applied to GL_FOG_COLOR.
+	 * Keep the early compatibility background only on the legacy path. */
+	if ( tr.world && tr.world->isCod1 && !r_uiFullScreen->integer &&
+		 !( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
+		clearBits |= GL_COLOR_BUFFER_BIT;
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+		if ( cod1Bsp59MapActive ) {
+			const glfog_t *clearFog = &glfogsettings[FOG_CURRENT];
+			if ( skyboxportal && ( backEnd.refdef.rdflags & RDF_SKYBOXPORTAL ) ) {
+				if ( glfogsettings[FOG_PORTALVIEW].registered ) {
+					clearFog = &glfogsettings[FOG_PORTALVIEW];
+				} else if ( glfogNum <= FOG_NONE ) {
+					clearFog = NULL;
+				}
+			}
+			if ( clearFog && clearFog->registered ) {
+				qglClearColor( clearFog->color[0], clearFog->color[1],
+					clearFog->color[2], clearFog->color[3] );
+			} else {
+				/* Qualified native 0x55B590 contains 0.5f. */
+				float shade = 0.5f * tr.identityLight;
+				qglClearColor( shade, shade, shade, 1.0f );
+			}
+		} else
+#endif
+		{
+		qglClearColor( 0.68f, 0.76f, 0.80f, 1.0f );
+		}
+	}
+
 	if ( clearBits ) {
 		qglClear( clearBits );
 	}
@@ -874,6 +895,15 @@ void RB_ZombieFX( int part, drawSurf_t *drawSurf, int oldNumVerts, int oldNumInd
 }
 
 
+/* PATCH45: keep projection and depth range together, restore before world FX. */
+static void RB_Cod1DepthRange( qboolean weapon ) {
+	qglMatrixMode( GL_PROJECTION );
+	qglLoadMatrixf( weapon ? backEnd.viewParms.depthHackProjectionMatrix
+	                      : backEnd.viewParms.projectionMatrix );
+	qglMatrixMode( GL_MODELVIEW );
+	qglDepthRange( 0, weapon ? (double)0.2f : 1.0 );
+}
+
 #define MAC_EVENT_PUMP_MSEC     5
 
 /*
@@ -945,6 +975,8 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 		oldSort = drawSurf->sort;
 // GR - also extract tesselation flag
 		R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted, &atiTess );
+		depthRange = entityNum != ENTITYNUM_WORLD &&
+		    ( backEnd.refdef.entities[entityNum].e.renderfx & RF_DEPTHHACK ) != 0;
 
 		//
 		// change the tess parameters if needed
@@ -953,6 +985,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 		if ( shader != oldShader || fogNum != oldFogNum || dlighted != oldDlighted
 // GR - force draw on tessellation flag change
 			 || ( atiTess != oldAtiTess )
+			 || depthRange != oldDepthRange
 			 || ( entityNum != oldEntityNum && !shader->entityMergable ) ) {
 			if ( oldShader != NULL ) {
 #ifdef __MACOS__    // crutch up the mac's limited buffer queue size
@@ -982,7 +1015,6 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 		// change the modelview matrix if needed
 		//
 		if ( entityNum != oldEntityNum ) {
-			depthRange = qfalse;
 
 			if ( entityNum != ENTITYNUM_WORLD ) {
 				backEnd.currentEntity = &backEnd.refdef.entities[entityNum];
@@ -1000,10 +1032,6 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 					R_TransformDlights( backEnd.refdef.num_dlights, backEnd.refdef.dlights, &backEnd.or );
 				}
 
-				if ( backEnd.currentEntity->e.renderfx & RF_DEPTHHACK ) {
-					// hack the depth range to prevent view model from poking into walls
-					depthRange = qtrue;
-				}
 			} else {
 				backEnd.currentEntity = &tr.worldEntity;
 				backEnd.refdef.floatTime = originalTime;
@@ -1022,11 +1050,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 			// change depthrange if needed
 			//
 			if ( oldDepthRange != depthRange ) {
-				if ( depthRange ) {
-					qglDepthRange( 0, 0.3 );
-				} else {
-					qglDepthRange( 0, 1 );
-				}
+				RB_Cod1DepthRange( depthRange );
 				oldDepthRange = depthRange;
 			}
 
@@ -1066,17 +1090,25 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 
 	qglLoadMatrixf( backEnd.viewParms.world.modelMatrix );
 	if ( depthRange ) {
-		qglDepthRange( 0, 1 );
+		RB_Cod1DepthRange( qfalse );
 	}
 
 	// (SA) draw sun
-	RB_DrawSun();
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    if(!cod1Bsp59MapActive)
+#endif
+    RB_DrawSun();
 
 
 	// darken down any stencil shadows
 	RB_ShadowFinish();
-
-	// add light flares on lights that aren't obscured
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    /* Native 4ccbc7 finishes stencil shadows before 4cf730 sun compose. */
+    /* A CoD view owns its native flare queue, including unsupported/missing
+     * sun inputs. RTCW corona flags are not native sun depth visibility. */
+    if(!RB_Cod1SunEffects())
+#endif
+	// Non-CoD views retain the existing RTCW corona/dlight flare path.
 	RB_RenderFlares();
 
 #ifdef __MACOS__
@@ -1115,7 +1147,8 @@ void    RB_SetGL2D( void ) {
 			  GLS_SRCBLEND_SRC_ALPHA |
 			  GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA );
 
-	qglDisable( GL_FOG ); //----(SA)	added
+	/* Keep the GL enable and fogIsOn cache in sync across world/HUD/world. */
+	R_FogOff();
 
 	qglDisable( GL_CULL_FACE );
 	qglDisable( GL_CLIP_PLANE0 );
@@ -1527,6 +1560,9 @@ const void  *RB_SwapBuffers( const void *data ) {
 	}
 
 	// texture swapping test
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	RB_Cod1FogSnapshotFlush();
+#endif
 	if ( r_showImages->integer ) {
 		RB_ShowImages();
 	}
@@ -1641,4 +1677,3 @@ void RB_RenderThread( void ) {
 		renderThreadActive = qfalse;
 	}
 }
-

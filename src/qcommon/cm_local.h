@@ -30,6 +30,9 @@ If you have questions concerning this license or the applicable additional terms
 #include "../game/q_shared.h"
 #include "qcommon.h"
 #include "cm_polylib.h"
+#include "cod1_collision.h"
+#define V59_EMBEDDED
+#include "v59/v59_collision.h"
 
 
 //	(SA) DM needs more than 256 since this includes func_static and func_explosives
@@ -40,6 +43,12 @@ If you have questions concerning this license or the applicable additional terms
 #define BOX_MODEL_HANDLE        511
 #define CAPSULE_MODEL_HANDLE    510
 
+
+/* Shared reservation used by CM_InitBoxHull and the CoD inline adapter. */
+#define BOX_BRUSHES     1
+#define BOX_SIDES       6
+#define BOX_LEAFS       2
+#define BOX_PLANES      12
 
 typedef struct {
 	cplane_t    *plane;
@@ -66,6 +75,9 @@ typedef struct {
 	cplane_t    *plane;
 	int surfaceFlags;
 	int shaderNum;
+    /* R9 internal-only metadata; never overload RTCW surface bits. */
+    unsigned cod1SurfaceFlags;
+    qboolean cod1SurfaceKnown;
 } cbrushside_t;
 
 typedef struct {
@@ -83,6 +95,8 @@ typedef struct {
 	int surfaceFlags;
 	int contents;
 	struct patchCollide_s   *pc;
+    unsigned cod1SurfaceFlags;
+    qboolean cod1SurfaceKnown;
 } cPatch_t;
 
 
@@ -136,6 +150,11 @@ typedef struct {
 	int numSurfaces;
 	cPatch_t    **surfaces;         // non-patches will be NULL
 
+	/* Legacy CoD1 world fallback for point/box queries. The native capsule
+       world is independently owned by cm_v59.c. */
+	int cod1NumTriangles;
+	cod1CollisionTri_t *cod1Triangles;
+
 	int floodvalid;
 	int checkcount;                         // incremented on each trace
 } clipMap_t;
@@ -173,7 +192,10 @@ typedef struct {
 	vec3_t bounds[2];       // enclosing box of start and end surrounding by size
 	vec3_t modelOrigin;     // origin of the model tracing through
 	int contents;           // ored contents of the model tracing through
+	int tempModelContents;  // R103 raw lane of the temporary target hull
+	qboolean nativeTempModel; // preserve old primitive output for legacy hulls
 	qboolean isPoint;       // optimized case
+	qboolean geometryOnly;  // R89 private inline USE query; old traces leave false
 	trace_t trace;          // returned from trace call
 	sphere_t sphere;        // sphere for oriendted capsule collision
 } traceWork_t;
@@ -204,3 +226,19 @@ struct patchCollide_s   *CM_GeneratePatchCollide( int width, int height, vec3_t 
 void CM_TraceThroughPatchCollide( traceWork_t *tw, const struct patchCollide_s *pc );
 qboolean CM_PositionTestInPatchCollide( traceWork_t *tw, const struct patchCollide_s *pc );
 void CM_ClearLevelPatches( void );
+
+/* PATCH39 engine-owned IBSP59 world; shared by server and cgame syscalls. */
+void CM_LoadV59InlineBrushes(void);
+void CM_ClearV59(void);
+qboolean CM_HasV59(void);
+
+/* R89 private port API: a point ray against one positive BSP59 inline model.
+ * Includes zero-content brush/curve geometry without changing normal masks.
+ * Invalid input/model returns a clear trace. This is not a retail syscall. */
+void CM_TraceUseInlineModel(trace_t *results, const vec3_t start, const vec3_t end,
+    clipHandle_t model, const vec3_t origin, const vec3_t angles);
+qboolean CM_LoadV59(const void *, int, char *, int);
+int CM_V59SurfaceFlags(unsigned);
+qboolean CM_TraceV59(trace_t *,const vec3_t,const vec3_t,const vec3_t,const vec3_t,int,int,int,const sphere_t *);
+qboolean CM_TraceV59Raw(trace_t *,const vec3_t,const vec3_t,const vec3_t,const vec3_t,int,int,int,const sphere_t *);
+qboolean CM_PointContentsV59(const vec3_t,int,int *);

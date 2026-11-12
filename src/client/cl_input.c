@@ -306,6 +306,9 @@ cvar_t  *cl_anglespeedkey;
 
 cvar_t  *cl_recoilPitch;
 
+#include "cl_cod1_stance.h"
+#include "cl_cod1_combat.h"
+
 /*
 ================
 CL_AdjustAngles
@@ -597,6 +600,9 @@ void CL_FinishMove( usercmd_t *cmd ) {
 	cmd->weapon = cl.cgameUserCmdValue;
 
 	cmd->holdable = cl.cgameUserHoldableValue;  //----(SA)	modified
+    cmd->cod1AimValid = cl.cgameCod1AimValid;
+    cmd->cod1WeaponAngles[0] = cl.cgameCod1WeaponAngles[0];
+    cmd->cod1WeaponAngles[1] = cl.cgameCod1WeaponAngles[1];
 
 	// send the current server time so the amount of movement
 	// can be determined without allowing cheating
@@ -618,6 +624,7 @@ usercmd_t CL_CreateCmd( void ) {
 	vec3_t oldAngles;
 	float recoilAdd;
 
+	CL_Cod1StanceReset();
 	VectorCopy( cl.viewangles, oldAngles );
 
 	// keyboard angle adjustment
@@ -635,6 +642,7 @@ usercmd_t CL_CreateCmd( void ) {
 
 	// get basic movement from joystick
 	CL_JoystickMove( &cmd );
+	CL_Cod1StanceMove( &cmd ); CL_Cod1CombatMove(&cmd);
 
 	// check to make sure the angles haven't wrapped
 	if ( cl.viewangles[PITCH] - oldAngles[PITCH] > 90 ) {
@@ -932,6 +940,7 @@ CL_InitInput
 ============
 */
 void CL_InitInput( void ) {
+	CL_Cod1StanceCommands(); CL_Cod1CombatCommands();
 	Cmd_AddCommand( "centerview",IN_CenterView );
 
 	Cmd_AddCommand( "+moveup",IN_UpDown );
@@ -995,6 +1004,10 @@ void CL_InitInput( void ) {
 
 	Cmd_AddCommand( "+sprint", IN_SprintDown );
 	Cmd_AddCommand( "-sprint", IN_SprintUp );
+	/* CoD1 uses command bit 0x20 for +melee. CoD movement disables RTCW
+	 * sprint, so the existing transported bit is protocol-compatible here. */
+	Cmd_AddCommand( "+melee", IN_SprintDown );
+	Cmd_AddCommand( "-melee", IN_SprintUp );
 
 
 	// wolf buttons

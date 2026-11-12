@@ -31,6 +31,12 @@ If you have questions concerning this license or the applicable additional terms
 // cg_event.c -- handle entity events at snapshot or playerstate transitions
 
 #include "cg_local.h"
+#include "cg_cod1_turret_shot.inc"
+#include "cg_cod1_pickup_sound.inc"
+#include "cg_cod1_step.h"
+#include "../game/bg_cod1_script_quake.h"
+#include "cg_cod1_footsteps.inc"
+#include "../game/bg_cod1_inventory.h"
 #include "../ui/ui_shared.h" // for Menus_CloseAll()
 
 extern int hWeaponSnd;
@@ -445,7 +451,7 @@ static void CG_ItemPickup( int itemNum ) {
 
 		weapon = itemid;
 
-		if ( weapon == WP_COLT ) {
+		if ( weapon == WP_COLT && !CW_WeaponDef(weapon) ) {
 			if ( COM_BitCheck( cg.snap->ps.weapons, weapon ) ) {
 				weapon = WP_AKIMBO; // you have colt, now get akimbo (second)
 			}
@@ -516,7 +522,7 @@ static void CG_ItemPickup( int itemNum ) {
 
 		// only select one-handed weaps if you've got a chair
 		if ( cg.snap->ps.eFlags & EF_MELEE_ACTIVE ) {
-			if ( !( ( 1 << weapon ) & WEAPS_ONE_HANDED ) ) {
+			if ( !BG_IsOneHandedWeapon(weapon) ) {
 				selectIt = qfalse;
 			}
 		}
@@ -1487,6 +1493,11 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 
 	es = &cent->currentState;
 	event = es->event & ~EV_EVENT_BITS;
+	/* Native turret packets own their presentation, including invalid packets.
+	 * They do not require a donor player model or enter its weapon effects. */
+	if (event==EV_COD1_TURRET_SHOT || event==EV_COD1_TURRET_IMPACT) {
+		CG_Cod1TurretShotEvent(es);return;
+	}
 
 	if ( cg_debugEvents.integer ) {
 		CG_Printf( "ent:%3i  event:%3i ", es->number, event );
@@ -1503,6 +1514,8 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 	}
 	ci = &cgs.clientinfo[ clientNum ];
 
+    /* Native player movement sounds do not depend on RTCW modelInfo. */
+    if(event==EV_COD1_FOOTSTEP){CG_Cod1FootstepEvent(es);return;}
 	if ( !ci->modelInfo ) {   // not ready yet?
 		return;
 	}
@@ -1676,6 +1689,22 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		break;
 
 
+	case EV_COD1_LAND:
+		DEBUGNAME("EV_COD1_LAND");
+		trap_S_StartSound(NULL, es->number, CHAN_AUTO, cgs.media.landSound);
+		if (clientNum == cg.predictedPlayerState.clientNum) {
+			cg.landChange = -Com_Clamp(4, 24, es->eventParm);
+			cg.landTime = cg.time;
+		}
+		break;
+	case EV_COD1_FALL_DAMAGE:
+		DEBUGNAME("EV_COD1_FALL_DAMAGE");
+		trap_S_StartSound(NULL, es->number, CHAN_AUTO, cgs.media.landSound);
+		if (clientNum == cg.predictedPlayerState.clientNum) {
+			cg.landChange = -24;
+			cg.landTime = cg.time;
+		}
+		break;
 	case EV_FALL_SHORT:
 		DEBUGNAME( "EV_FALL_SHORT" );
 		trap_S_StartSound( NULL, es->number, CHAN_AUTO, cgs.media.landSound );
@@ -1752,6 +1781,23 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		trap_S_StartSound( NULL, es->number, CHAN_VOICE, CG_CustomSound( es->number, "*exert3.wav" ) );
 		break;
 
+	case EV_COD1_STEP:
+		DEBUGNAME("EV_COD1_STEP");
+		if (clientNum != cg.predictedPlayerState.clientNum ||
+			cg.demoPlayback || (cg.snap->ps.pm_flags & PMF_FOLLOW) ||
+			cg_nopredict.integer || cg_synchronousClients.integer) {
+			break;
+		}
+		/* The native producer emits a nonzero signed amount in [-16,24]. */
+		if (es->eventParm < 112 || es->eventParm > 152 || es->eventParm == 128) {
+			break;
+		}
+		cg.stepChange = 0;
+		cg.cod1StepChange = CG_Cod1StepAccumulate(cg.cod1StepChange,
+			cg.cod1StepTime, cg.time, es->eventParm);
+		cg.cod1StepTime = cg.time;
+		break;
+
 	case EV_STEP_4:
 	case EV_STEP_8:
 	case EV_STEP_12:
@@ -1771,6 +1817,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 				break;
 			}
 			// check for stepping up before a previous step is completed
+			cg.cod1StepChange = 0;
 			delta = cg.time - cg.stepTime;
 			if ( delta < STEP_TIME ) {
 				oldStep = cg.stepChange * ( STEP_TIME - delta ) / STEP_TIME;
@@ -1841,6 +1888,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		}
 		break;
 
+	case EV_COD1_WEAPON_AMMO_PICKUP:
 	case EV_ITEM_PICKUP:
 	case EV_ITEM_PICKUP_QUIET:
 		DEBUGNAME( "EV_ITEM_PICKUP" );
@@ -1855,10 +1903,13 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 			}
 			item = &bg_itemlist[ index ];
 
-			if ( event == EV_ITEM_PICKUP ) { // not quiet
+			if ( event == EV_ITEM_PICKUP || event == EV_COD1_WEAPON_AMMO_PICKUP ) { // not quiet
 				// powerups and team items will have a separate global sound, this one
 				// will be played at prediction time
-				if ( item->giType == IT_POWERUP || item->giType == IT_TEAM ) {
+				if ( CG_Cod1AliasPickupItem(index) ) {
+                    if(event==EV_COD1_WEAPON_AMMO_PICKUP)CG_Cod1PlayWeaponAmmoPickup(index,es->number);
+                    else CG_PlayItemPickup(index,es->number);
+                } else if ( item->giType == IT_POWERUP || item->giType == IT_TEAM ) {
 					trap_S_StartSound( NULL, es->number, CHAN_AUTO, trap_S_RegisterSound( "sound/items/n_health.wav" ) );
 				} else {
 					trap_S_StartSound( NULL, es->number, CHAN_AUTO, trap_S_RegisterSound( item->pickup_sound ) );
@@ -1891,7 +1942,9 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 			}
 			item = &bg_itemlist[ index ];
 			// powerup pickups are global
-			trap_S_StartSound( NULL, cg.snap->ps.clientNum, CHAN_AUTO, trap_S_RegisterSound( item->pickup_sound ) );
+			if ( CG_Cod1AliasPickupItem(index) )
+                CG_PlayItemPickup(index,cg.snap->ps.clientNum);
+            else trap_S_StartSound( NULL, cg.snap->ps.clientNum, CHAN_AUTO, trap_S_RegisterSound( item->pickup_sound ) );
 
 			// show icon and name on status bar
 			if ( es->number == cg.snap->ps.clientNum ) {
@@ -1950,6 +2003,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 
 	case EV_FILL_CLIP:
 		DEBUGNAME( "EV_FILL_CLIP" );
+        if(CG_Cod1ReloadEvent(cent,es->eventParm))break;
 		if ( cg_weapons[es->weapon].reloadSound ) {
 
 			// hope this does not cause trouble.  changed it to chan_weapon so i could kill the sound if the guy dies while reloading
@@ -2030,6 +2084,18 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		break;
 
 //----(SA)	added
+    case EV_COD1_EJECT_BRASS:
+        break;
+    case EV_COD1_MELEE_START:
+        DEBUGNAME("EV_COD1_MELEE_START");
+        CG_Cod1MeleeStartEvent( cent );
+        break;
+    case EV_COD1_MELEE_HIT:
+        DEBUGNAME("EV_COD1_MELEE_HIT");
+        /* Hit sound is intentionally deferred until a real CoD actor/impact
+         * path exists; do not substitute RTCW knife/fist feedback here. */
+        break;
+
 	case EV_GRENADE_SUICIDE:
 		DEBUGNAME( "EV_GRENADE_SUICIDE" );
 		CG_MissileHitWall( WP_GRENADE_LAUNCHER, 0, position, dir, 0 );  // (SA) modified to send missilehitwall surface parameters
@@ -2142,6 +2208,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 
 	case EV_GRENADE_BOUNCE:
 		DEBUGNAME( "EV_GRENADE_BOUNCE" );
+		if (CG_Cod1GrenadeBounce(es->weapon, position, es->eventParm)) break;
 
 //		CG_Printf("bounce on: %d\n", es->eventParm);
 
@@ -2192,6 +2259,12 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		//
 		// missile impacts
 		//
+	case EV_COD1_ROCKET_EXPLODE:
+	case EV_COD1_ROCKET_EXPLODE_NOMARKS:
+		DEBUGNAME( "EV_COD1_ROCKET_EXPLODE" );
+		if(CG_Cod1RocketImpact(es,position))break;
+		break;
+
 	case EV_MISSILE_HIT:
 		DEBUGNAME( "EV_MISSILE_HIT" );
 		ByteToDir( es->eventParm, dir );
@@ -2225,6 +2298,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 
 	case EV_BULLET_HIT_WALL:
 		DEBUGNAME( "EV_BULLET_HIT_WALL" );
+        if(CG_Cod1BulletImpact(es))break;
 		ByteToDir( es->eventParm, dir );
 		CG_Bullet( es->pos.trBase, es->otherEntityNum, dir, qfalse, ENTITYNUM_WORLD, qfalse, es->otherEntityNum2 );
 		break;
@@ -2707,9 +2781,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		break;
 
 	case EV_SNIPER_SOUND:
-		// trap_S_StartSound( es->pos.trBase, -1, CHAN_AUTO, cgs.media.snipersound );
-		// trap_S_StartSound (NULL, es->number, CHAN_AUTO,	cgs.media.snipersound );
-		trap_S_StartSound( NULL, cent->currentState.number, CHAN_WEAPON, cgs.media.snipersound );
+		/* Legacy RTCW protocol value retained; current CoD1 port has no producer. */
 		break;
 
 	case EV_SPAWN_SPIRIT:

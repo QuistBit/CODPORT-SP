@@ -216,6 +216,10 @@
 				</FileConfiguration>
 			</File>
 			<File
+				RelativePath="tr_cod1_lightmap_packer.c"
+				>
+			</File>
+			<File
 				RelativePath="tr_bsp.c"
 				>
 				<FileConfiguration

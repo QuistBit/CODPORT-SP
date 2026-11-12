@@ -29,6 +29,7 @@ If you have questions concerning this license or the applicable additional terms
 // tr_shade_calc.c
 
 #include "tr_local.h"
+#include "cod1_autosprite2.h"
 
 
 #define WAVEVALUE( table, base, amplitude, phase, freq )  ( ( base ) + table[ myftol( ( ( ( phase ) + tess.shaderTime * ( freq ) ) * FUNCTABLE_SIZE ) ) & FUNCTABLE_MASK ] * ( amplitude ) )
@@ -580,6 +581,21 @@ static void Autosprite2Deform( void ) {
 }
 
 
+/* CoD1 source provenance selects the indexed native contract. Ordinary RTCW
+ * materials retain their historical deformation. No material/map name test. */
+static void Cod1Autosprite2Deform(void) {
+    float forward[3];
+    if(tess.numVertexes&3)
+        ri.Printf(PRINT_WARNING,"Autosprite2 shader %s had odd vertex count",tess.shader->name);
+    if(tess.numIndexes!=(tess.numVertexes>>2)*6)
+        ri.Printf(PRINT_WARNING,"Autosprite2 shader %s had odd index count",tess.shader->name);
+    if(backEnd.currentEntity!=&tr.worldEntity)
+        C1AS_LocalForward(backEnd.viewParms.or.axis[0],backEnd.or.axis,forward);
+    else VectorCopy(backEnd.viewParms.or.axis[0],forward);
+    if(!C1AS_Deform(&tess.xyz[0][0],tess.numVertexes,4,tess.indexes,tess.numIndexes,forward))
+        ri.Printf(PRINT_WARNING,"CoD1 autosprite2: invalid indexed geometry in shader %s\n",tess.shader->name);
+}
+
 /*
 =====================
 RB_DeformTessGeometry
@@ -615,7 +631,12 @@ void RB_DeformTessGeometry( void ) {
 			AutospriteDeform();
 			break;
 		case DEFORM_AUTOSPRITE2:
-			Autosprite2Deform();
+			if(tess.shader->cod1ShaderType
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+                || tess.shader->cod1Bsp59WorldMaterialSource
+#endif
+                )Cod1Autosprite2Deform();
+            else Autosprite2Deform();
 			break;
 		case DEFORM_TEXT0:
 		case DEFORM_TEXT1:
@@ -643,6 +664,57 @@ COLORS
 /*
 ** RB_CalcColorFromEntity
 */
+/* R60: model rgbGen lightingPrecalc has two native consumers. RGB enum 11
+ * is a constant colour at 0x4f0391; alpha identity/skip/const do not require
+ * a colour array (0x4f03d2..0x4f040e). The constant model paths call
+ * glColor4ubv(currentEntity+0x6c), the same caller field as rgbGen entity.
+ * Other source-supported alpha modes select the generic colour array:
+ * its enum-11 RGB dispatch goes to identityLightByte at 0x4f522c.
+ * Return true only when the constant consumer has already supplied alpha.
+ * Static baked instances retain their separate R52 tessellation stream. */
+qboolean RB_CalcCod1PrecalcModelColor( const shaderStage_t *stage,
+                                     unsigned char *colors ) {
+    int i;
+    qboolean constant;
+    if (!stage || !colors || !tess.shader ||
+        stage->rgbGen != CGEN_COD1_PRECALC ||
+        !tess.shader->cod1ShaderType || tess.shader->cod1StaticModelSource ||
+        tess.shader->cod1ShaderTypeLightmapKey != LIGHTMAP_NONE ||
+        !backEnd.currentEntity || tess.numVertexes < 0 ||
+        tess.numVertexes > SHADER_MAX_VERTEXES) {
+        ri.Error(ERR_DROP,"R60 lightingPrecalc requires a submitted model type input");
+        return qfalse;
+    }
+    switch (stage->alphaGen) {
+    case AGEN_IDENTITY:
+    case AGEN_SKIP:
+    case AGEN_CONST:
+        constant=qtrue;
+        break;
+    case AGEN_ENTITY:
+    case AGEN_ONE_MINUS_ENTITY:
+    case AGEN_VERTEX:
+    case AGEN_ONE_MINUS_VERTEX:
+    case AGEN_WAVEFORM:
+        constant=qfalse;
+        break;
+    default:
+        ri.Error(ERR_DROP,"R60 lightingPrecalc alpha producer is unverified");
+        return qfalse;
+    }
+    for (i=0;i<tess.numVertexes;++i) {
+        if (constant) {
+            memcpy(colors+i*4,backEnd.currentEntity->e.shaderRGBA,4);
+        } else {
+            colors[i*4+0]=tr.identityLightByte;
+            colors[i*4+1]=tr.identityLightByte;
+            colors[i*4+2]=tr.identityLightByte;
+            colors[i*4+3]=255;
+        }
+    }
+    return constant;
+}
+
 void RB_CalcColorFromEntity( unsigned char *dstColors ) {
 	int i;
 	int *pColors = ( int * ) dstColors;
@@ -1193,6 +1265,20 @@ void RB_CalcDiffuseColor( unsigned char *colors ) {
 	int numVertexes;
 
 	ent = backEnd.currentEntity;
+	if ( ent->cod1ModelLighting.valid && tess.shader->cod1ShaderType &&
+	     !tess.shader->cod1StaticModelSource &&
+	     tess.shader->cod1ShaderTypeLightmapKey == LIGHTMAP_NONE ) {
+		for ( i = 0; i < tess.numVertexes; i++ ) {
+			if ( !R_Cod1ShadeEntityVertex( ent, tess.xyz[i], tess.normal[i],
+			                              colors + i * 4 ) ) break;
+		}
+		if ( i == tess.numVertexes ) {
+			tess.cod1PreparedModelDiffuse = qtrue;
+			return;
+		}
+		/* Unsupported geometry falls through atomically to legacy colors. */
+		tess.cod1PreparedModelDiffuse = qfalse;
+	}
 	ambientLightInt = ent->ambientLightInt;
 	VectorCopy( ent->ambientLight, ambientLight );
 	VectorCopy( ent->directedLight, directedLight );
@@ -1212,21 +1298,23 @@ void RB_CalcDiffuseColor( unsigned char *colors ) {
 		if ( j > 255 ) {
 			j = 255;
 		}
+		if ( ent->cod1ModelLighting.valid && j < 0 ) j = 0;
 		colors[i * 4 + 0] = j;
 
 		j = myftol( ambientLight[1] + incoming * directedLight[1] );
 		if ( j > 255 ) {
 			j = 255;
 		}
+		if ( ent->cod1ModelLighting.valid && j < 0 ) j = 0;
 		colors[i * 4 + 1] = j;
 
 		j = myftol( ambientLight[2] + incoming * directedLight[2] );
 		if ( j > 255 ) {
 			j = 255;
 		}
+		if ( ent->cod1ModelLighting.valid && j < 0 ) j = 0;
 		colors[i * 4 + 2] = j;
 
 		colors[i * 4 + 3] = 255;
 	}
 }
-

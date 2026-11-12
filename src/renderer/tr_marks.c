@@ -29,6 +29,7 @@ If you have questions concerning this license or the applicable additional terms
 // tr_marks.c -- polygon projection on the world polygons
 
 #include "tr_local.h"
+#include "../game/bg_cod1_impact.h"
 //#include "assert.h"
 
 #define MAX_VERTS_ON_POLY       64
@@ -271,6 +272,8 @@ void R_AddMarkFragments( int numClipPoints, vec3_t clipPoints[2][MAX_VERTS_ON_PO
 	( *returnedFragments )++;
 }
 
+#include "tr_cod1_impact_marks.h"
+
 /*
 =================
 R_OldMarkFragments
@@ -502,6 +505,12 @@ int R_MarkFragments( int orientation, const vec3_t *points, const vec3_t project
 	int numPoints = 4;              // Ridah, we were only ever passing in 4, so I made this local and used the parameter for the orientation
 	qboolean oldMapping = qfalse;
 
+    if(orientation>=0 && (orientation&COD1_MARK_TRIANGLES)) {
+        orientation&=~COD1_MARK_TRIANGLES;
+        if(tr.world && tr.world->isCod1)
+            return R_Cod1ImpactMarkFragments(points,projection,maxPoints,pointBuffer,
+                maxFragments<0?-maxFragments:maxFragments,fragmentBuffer);
+    }
 	//increment view count for double check prevention
 	tr.viewCount++;
 

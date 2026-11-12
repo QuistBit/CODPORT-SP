@@ -272,6 +272,13 @@ static void RB_SurfaceSplash( void ) {
 RB_SurfaceSprite
 ==============
 */
+/* MUZZLE_R1: RT_POLY uses world-space origin, axis[1]/axis[2] half
+ * extents and shaderRGBA. Unlike AddPoly, it carries FIRST_PERSON/DEPTHHACK.
+ * No refEntity_t layout change and no changes to existing sprite/rail paths. */
+static void RB_SurfaceCod1Quad( void ) {
+    refEntity_t *e=&backEnd.currentEntity->e;
+    RB_AddQuadStamp(e->origin,e->axis[1],e->axis[2],e->shaderRGBA);
+}
 static void RB_SurfaceSprite( void ) {
 	vec3_t left, up;
 	float radius;
@@ -342,18 +349,158 @@ void RB_SurfacePolychain( srfPoly_t *p ) {
 RB_SurfaceTriangles
 =============
 */
+/* Retail CoD maps contain a few triangle soups larger than one tess buffer.
+ * Preserve their original surface/model ranges and stream only those soups
+ * a triangle at a time. Duplicating the three corners avoids a per-frame
+ * allocation or a remap table; ordinary surfaces retain the indexed path.
+ */
+/* Native autosprite2 consumes two indexed triangles together. Reserve the
+ * complete pair and retain its shared corner indices when streaming a large
+ * soup into the smaller port tess buffer. No half-pair reaches deformation. */
+/* Static RGB is already baked at load time. The shared model-light cache only
+ * publishes a complete replacement stream when scene lighting changes it.
+ * Keep prepared status separate from the pointer: NULL means prepared baked
+ * RGB, and must still suppress the legacy scene-light pass for this batch. */
+static qboolean RB_Cod1PrepareTriangleLighting( const srfTriangles_t *srf,
+                                               const byte **colors ) {
+    *colors=NULL;
+    if(!tess.shader->cod1StaticModelSource ||
+       !tess.shader->cod1StaticLightingDiffuseBridge || !srf->cod1ModelLightSource)
+        return qfalse;
+    if(!R_Cod1StaticModelColors(srf,&backEnd.refdef,colors)){
+        *colors=NULL;return qfalse;
+    }
+    return qtrue;
+}
+static void RB_Cod1TrackModelDiffuse( qboolean prepared ) {
+    shader_t *shader;
+    int fogNum;
+    /* A legacy scene-light pass covers the whole batch. Keep prepared and
+     * fallback sources in separate batches before any new vertex is added. */
+    if(tess.numVertexes && tess.cod1PreparedModelDiffuse!=prepared){
+        shader=tess.shader;fogNum=tess.fogNum;
+        RB_EndSurface();
+        RB_BeginSurface(shader,fogNum);
+    }
+    tess.cod1PreparedModelDiffuse=prepared;
+}
+static void RB_Cod1TriangleColor( const byte *colors, int sourceIndex,
+                                 byte *color ) {
+    if(colors)memcpy(color,colors+4*sourceIndex,3); /* native diffuse changes RGB only */
+}
+
+static void RB_SurfaceCod1Autosprite2Chunked(srfTriangles_t *srf,
+                                             qboolean prepared, const byte *colors) {
+    int i,j,k,v,used,dlightBits=srf->dlightBits[backEnd.smpFrame];
+    qboolean needsNormal=tess.shader->needsNormal;
+    if(srf->numIndexes%6){
+        ri.Printf(PRINT_WARNING,"CoD1 autosprite2: unpaired triangles in shader %s\n",tess.shader->name);
+        return;
+    }
+    for(i=0;i<srf->numIndexes;i+=6){
+        int source[6],mapped[6];
+        used=0;
+        for(j=0;j<6;j++){
+            int index=srf->indexes[i+j];
+            for(k=0;k<used;k++)if(source[k]==index)break;
+            if(k==used)source[used++]=index;
+        }
+        RB_CHECKOVERFLOW(used,6);
+        RB_Cod1TrackModelDiffuse(prepared);
+        tess.dlightBits|=dlightBits;
+        for(j=0;j<used;j++){
+            drawVert_t *dv=srf->verts+source[j];
+            v=tess.numVertexes++;mapped[j]=v;
+            VectorCopy(dv->xyz,tess.xyz[v]);
+            if(needsNormal)VectorCopy(dv->normal,tess.normal[v]);
+            tess.texCoords[v][0][0]=dv->st[0];tess.texCoords[v][0][1]=dv->st[1];
+            tess.texCoords[v][1][0]=dv->lightmap[0];tess.texCoords[v][1][1]=dv->lightmap[1];
+            memcpy(tess.vertexColors[v],dv->color,sizeof(dv->color));
+            RB_Cod1TriangleColor(colors,source[j],tess.vertexColors[v]);
+            if(tess.shader->cod1StaticModelSource){
+                if(!srf->cod1PrecalcValid){ri.Error(ERR_DROP,"R52: static triangle has no precalc input");return;}
+                memcpy(tess.cod1PrecalcColors[v],srf->cod1PrecalcRGBA,4);
+            }
+            tess.vertexDlightBits[v]=dlightBits;
+        }
+        for(j=0;j<6;j++){
+            for(k=0;k<used;k++)if(source[k]==srf->indexes[i+j])break;
+            tess.indexes[tess.numIndexes++]=mapped[k];
+        }
+    }
+}
+
+static void RB_SurfaceTrianglesChunked( srfTriangles_t *srf,
+                                        qboolean prepared, const byte *colors ) {
+	int i, j, v;
+	int dlightBits;
+	qboolean needsNormal;
+	drawVert_t *dv;
+
+    if(tess.shader->cod1ShaderType
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+        || tess.shader->cod1Bsp59WorldMaterialSource
+#endif
+        ){
+        for(i=0;i<tess.shader->numDeforms;i++)if(tess.shader->deforms[i].deformation==DEFORM_AUTOSPRITE2){
+            RB_SurfaceCod1Autosprite2Chunked(srf,prepared,colors);return;
+        }
+    }
+
+	dlightBits = srf->dlightBits[backEnd.smpFrame];
+	needsNormal = tess.shader->needsNormal;
+	for ( i = 0; i < srf->numIndexes; i += 3 ) {
+		RB_CHECKOVERFLOW( 3, 3 );
+		RB_Cod1TrackModelDiffuse(prepared);
+		/* RB_CheckOverflow may begin a new batch and clear dlightBits. */
+		tess.dlightBits |= dlightBits;
+		for ( j = 0; j < 3; j++ ) {
+			dv = srf->verts + srf->indexes[i + j];
+			v = tess.numVertexes++;
+			tess.indexes[tess.numIndexes++] = v;
+			VectorCopy( dv->xyz, tess.xyz[v] );
+			if ( needsNormal ) {
+				VectorCopy( dv->normal, tess.normal[v] );
+			}
+			tess.texCoords[v][0][0] = dv->st[0];
+			tess.texCoords[v][0][1] = dv->st[1];
+			tess.texCoords[v][1][0] = dv->lightmap[0];
+			tess.texCoords[v][1][1] = dv->lightmap[1];
+			memcpy( tess.vertexColors[v], dv->color, sizeof( dv->color ) );
+            RB_Cod1TriangleColor(colors,srf->indexes[i+j],tess.vertexColors[v]);
+            if (tess.shader->cod1StaticModelSource) {
+                if (!srf->cod1PrecalcValid) {
+                    ri.Error(ERR_DROP,"R52: static triangle has no precalc input");
+                    return;
+                }
+                memcpy(tess.cod1PrecalcColors[v],srf->cod1PrecalcRGBA,4);
+            }
+			tess.vertexDlightBits[v] = dlightBits;
+		}
+	}
+}
+
 void RB_SurfaceTriangles( srfTriangles_t *srf ) {
 	int i;
+    qboolean prepared;
+    const byte *modelColors;
 	drawVert_t  *dv;
 	float       *xyz, *normal, *texCoords;
 	byte        *color;
 	int dlightBits;
 	qboolean needsNormal;
 
+    prepared=RB_Cod1PrepareTriangleLighting(srf,&modelColors);
+	if ( srf->numVerts >= SHADER_MAX_VERTEXES || srf->numIndexes >= SHADER_MAX_INDEXES ) {
+		RB_SurfaceTrianglesChunked( srf, prepared, modelColors );
+		return;
+	}
+
 	dlightBits = srf->dlightBits[backEnd.smpFrame];
-	tess.dlightBits |= dlightBits;
 
 	RB_CHECKOVERFLOW( srf->numVerts, srf->numIndexes );
+    RB_Cod1TrackModelDiffuse(prepared);
+    tess.dlightBits |= dlightBits;
 
 	for ( i = 0 ; i < srf->numIndexes ; i += 3 ) {
 		tess.indexes[ tess.numIndexes + i + 0 ] = tess.numVertexes + srf->indexes[ i + 0 ];
@@ -387,6 +534,14 @@ void RB_SurfaceTriangles( srfTriangles_t *srf ) {
 		texCoords[3] = dv->lightmap[1];
 
 		*(int *)color = *(int *)dv->color;
+        RB_Cod1TriangleColor(modelColors,i,color);
+        if (tess.shader->cod1StaticModelSource) {
+            if (!srf->cod1PrecalcValid) {
+                ri.Error(ERR_DROP,"R52: static triangle has no precalc input");
+                return;
+            }
+            memcpy(tess.cod1PrecalcColors[tess.numVertexes+i],srf->cod1PrecalcRGBA,4);
+        }
 	}
 
 	for ( i = 0 ; i < srf->numVerts ; i++ ) {
@@ -1382,6 +1537,9 @@ Entities that have a single procedurally generated surface
 */
 void RB_SurfaceEntity( surfaceType_t *surfType ) {
 	switch ( backEnd.currentEntity->e.reType ) {
+    case RT_POLY:
+        RB_SurfaceCod1Quad();
+        break;
 	case RT_SPLASH:
 		RB_SurfaceSplash();
 		break;

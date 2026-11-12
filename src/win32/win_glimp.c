@@ -44,6 +44,7 @@ If you have questions concerning this license or the applicable additional terms
 #include <assert.h>
 #include "../renderer/tr_local.h"
 #include "../qcommon/qcommon.h"
+#include "../qcommon/cod1_client_trace_r241.h"
 #include "resource.h"
 #include "glw_win.h"
 #include "win_local.h"
@@ -73,6 +74,7 @@ static rserr_t  GLW_SetMode( const char *drivername,
 							 qboolean cdsFullscreen );
 
 static qboolean s_classRegistered = qfalse;
+static qboolean s_borderlessWindow = qfalse;
 
 //
 // function declaration
@@ -567,7 +569,7 @@ static qboolean GLW_CreateWindow( const char *drivername, int width, int height,
 		r.bottom = height;
 
 		if ( cdsFullscreen || !Q_stricmp( _3DFX_DRIVER_NAME, drivername ) ) {
-			exstyle = WS_EX_TOPMOST;
+			exstyle = s_borderlessWindow ? 0 : WS_EX_TOPMOST;
 			stylebits = WS_POPUP | WS_VISIBLE | WS_SYSMENU;
 		} else
 		{
@@ -612,7 +614,7 @@ static qboolean GLW_CreateWindow( const char *drivername, int width, int height,
 		g_wv.hWnd = CreateWindowEx(
 			exstyle,
 			WINDOW_CLASS_NAME,
-			"Wolfenstein",
+			COD1_WINDOW_TITLE,
 			stylebits,
 			x, y, w, h,
 			NULL,
@@ -725,6 +727,29 @@ static rserr_t GLW_SetMode( const char *drivername,
 			}
 		}
 	}
+
+    /* PATCH24: native primary-desktop fullscreen without a mode switch. */
+    s_borderlessWindow = cdsFullscreen &&
+        ri.Cvar_Get("r_borderless", "1", CVAR_ARCHIVE | CVAR_LATCH)->integer;
+    if (s_borderlessWindow) {
+        if (glw_state.cdsFullscreen) ChangeDisplaySettings(NULL, 0);
+        glw_state.cdsFullscreen = qfalse;
+        glConfig.vidWidth = GetSystemMetrics(SM_CXSCREEN);
+        glConfig.vidHeight = GetSystemMetrics(SM_CYSCREEN);
+        if (glConfig.vidWidth <= 0 || glConfig.vidHeight <= 0)
+            return RSERR_INVALID_MODE;
+        glConfig.windowAspect = (float)glConfig.vidWidth / glConfig.vidHeight;
+        if (!GLW_CreateWindow(drivername, glConfig.vidWidth,
+                glConfig.vidHeight, colorbits, qtrue)) return RSERR_INVALID_MODE;
+        memset(&dm, 0, sizeof(dm));
+        dm.dmSize = sizeof(dm);
+        if (EnumDisplaySettings(NULL, ENUM_CURRENT_SETTINGS, &dm))
+            glConfig.displayFrequency = dm.dmDisplayFrequency;
+        glConfig.isFullscreen = qtrue;
+        ri.Printf(PRINT_ALL, "CoD1 borderless: %dx%d, desktop mode unchanged\n",
+            glConfig.vidWidth, glConfig.vidHeight);
+        return RSERR_OK;
+    }
 
 	// do a CDS if needed
 	if ( cdsFullscreen ) {
@@ -1209,6 +1234,7 @@ fail:
 /*
 ** GLimp_EndFrame
 */
+int R241TraceRendererSmpActive(void){return glConfig.smpActive;}
 void GLimp_EndFrame( void ) {
 	//
 	// swapinterval stuff
@@ -1218,14 +1244,16 @@ void GLimp_EndFrame( void ) {
 
 		if ( !glConfig.stereoEnabled ) {    // why?
 			if ( qwglSwapIntervalEXT ) {
-				qwglSwapIntervalEXT( r_swapInterval->integer );
+				CL_R241TraceSwapIntervalResult(qwglSwapIntervalEXT( r_swapInterval->integer ));
 			}
 		}
 	}
 
 
+    CL_R241TracePresent(r_swapInterval->integer,qwglSwapIntervalEXT!=NULL,glConfig.stereoEnabled,1);
 	// don't flip if drawing to front buffer
 	if ( Q_stricmp( r_drawBuffer->string, "GL_FRONT" ) != 0 ) {
+        CL_R241TraceMark(CT241_SWAP_ENTER);
 		if ( glConfig.driverType > GLDRV_ICD ) {
 			if ( !qwglSwapBuffers( glw_state.hDC ) ) {
 				ri.Error( ERR_FATAL, "GLimp_EndFrame() - SwapBuffers() failed!\n" );
@@ -1234,6 +1262,7 @@ void GLimp_EndFrame( void ) {
 		{
 			SwapBuffers( glw_state.hDC );
 		}
+        CL_R241TraceMark(CT241_SWAP_EXIT);
 	}
 
 	// check logging

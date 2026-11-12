@@ -32,7 +32,7 @@ If you have questions concerning this license or the applicable additional terms
 // q_shared.h -- included first by ALL program modules.
 // A user mod should never modify this file
 
-#define Q3_VERSION      "Wolf 1.41"
+#define Q3_VERSION      "Call of Duty Porting Project R243 Playtest"
 // ver 1.0.0	- release
 // ver 1.0.1	- post-release work
 // ver 1.1.0	- patch 1 (12/12/01)
@@ -798,7 +798,9 @@ SAVE
 ==============================================================
 */
 
-#define SAVE_VERSION    18
+#define SAVE_VERSION    25 /* R243: view-hands field changes raw saved client layout. */
+#define COD1_STATE_ABI 73 /* Paired pregame fade ownership and raw-save admission; coherent rebuild. */
+#define COD1_STATE_PROTOCOL 58 /* R243: selected view-hands playerstate delta field. */
 #define SAVE_INFOSTRING_LENGTH  256
 
 
@@ -910,7 +912,7 @@ typedef struct cplane_s {
 	float dist;
 	byte type;              // for fast side tests: 0,1,2 = axial, 3 = nonaxial
 	byte signbits;          // signx + (signy<<1) + (signz<<2), used as lookup during collision
-	byte pad[2];
+	byte pad[2]; /* IMPACT_R1: tagged CoD trace metadata only; see bg_cod1_impact.h */
 } cplane_t;
 
 
@@ -1004,6 +1006,9 @@ typedef enum {
 
 
 #define MAX_MODELS          256     // these are sent over the net as 8 bits
+/* Inline BSP handles use the existing 9-bit entity modelindex, independently
+ * of CS_MODELS. Collision handles 510 and 511 are reserved for temporary shapes. */
+#define MAX_INLINE_MODELS   510
 #define MAX_SOUNDS          256     // so they cannot be blindly increased
 
 
@@ -1012,7 +1017,7 @@ typedef enum {
 #define MAX_MULTI_SPAWNTARGETS  16 // JPW NERVE
 
 //#define	MAX_CONFIGSTRINGS	1024
-#define MAX_CONFIGSTRINGS   2048
+#define MAX_CONFIGSTRINGS   2560 /* R129: original 2048 slots plus public 512-slot string namespace. */
 
 #define MAX_DLIGHT_CONFIGSTRINGS    128
 #define MAX_CLIPBOARD_CONFIGSTRINGS 64
@@ -1063,7 +1068,7 @@ typedef enum
 
 // weapon grouping
 #define MAX_WEAP_BANKS      12
-#define MAX_WEAPS_IN_BANK   3
+#define MAX_WEAPS_IN_BANK   8
 // JPW NERVE
 #define MAX_WEAPS_IN_BANK_MP    8
 #define MAX_WEAP_BANKS_MP   7
@@ -1257,6 +1262,20 @@ typedef struct playerState_s {
 
 	float footstepCount;
 
+	/* PATCH40: absolute apex in CoD feet coordinates; transmitted and saved. */
+	float cod1JumpApex;
+    int cod1Rechamber; /* pending bolt for slots 37..42; survives weapon changes */
+	float cod1EyeHeight;
+	int cod1EyeStart, cod1EyeTarget, cod1EyeDown;
+    /* PATCH51: normal retained while attached, shared by server/prediction. */
+    vec3_t cod1LadderNormal;
+    int cod1Slots[6]; /* named inventory places; zero is reserved */
+	/* R100: retained prone view-limit centre, shared by server/prediction.
+	 * Preserve the native angle representation, including a rounded 360. */
+	float cod1PronePitchCentre;
+	int cod1PronePitchValid;
+    int cod1ViewHands; /* bg_cod1_viewhands.h port IDs, serialized in player state. */
+
 } playerState_t;
 
 
@@ -1317,6 +1336,10 @@ typedef struct usercmd_s {
 	signed char wolfkick;       // RF, we should move this over to a wbutton, this is a huge waste of bandwidth
 
 	unsigned short cld;         // NERVE - SMF - send client damage in usercmd instead of as a server command
+
+    /* PATCH56: CoD sends shot pitch/yaw separately from movement angles. */
+    int cod1AimValid;
+    float cod1WeaponAngles[2];
 } usercmd_t;
 
 //===================================================================
@@ -1337,7 +1360,10 @@ typedef enum {
 	TR_GRAVITY_FLOAT,           // super low grav with no gravity acceleration (floating feathers/fabric/leaves/...)
 	TR_GRAVITY_PAUSED,          //----(SA)	has stopped, but will still do a short trace to see if it should be switched back to TR_GRAVITY
 	TR_ACCELERATE,
-	TR_DECCELERATE
+	TR_DECCELERATE,
+	/* R216 private angular trapezoid: delta=(accelMs,yawDeg,decelMs).
+	 * Appended only; all retained trajectory numeric values stay unchanged. */
+	TR_COD1_YAW_R216
 } trType_t;
 
 typedef struct {
@@ -1425,6 +1451,17 @@ typedef struct entityState_s {
 	aistateEnum_t aiState;
 
 	int animMovetype;       // clients can't derive movetype of other clients for anim scripting system
+
+    /* R232 typed CoD turret sample. Zero version is an ordinary entity.
+     * Explicit allocation/map identity; no overloaded actor/scale fields. */
+    int cod1TurretVersion, cod1TurretEpochLo, cod1TurretEpochHi;
+    int cod1TurretGeneration, cod1TurretTick;
+    vec3_t cod1TurretAngles;
+ int cod1TurretAnimated;float cod1TurretPhases[2],cod1TurretWeights[2];
+ int cod1TurretActorVersion,cod1TurretActorGeneration,cod1TurretActorGun,cod1TurretActorGunGeneration;
+ int cod1TurretActorTick,cod1TurretActorConfig,cod1TurretActorFlags;
+ float cod1TurretActorCurrent[2][25],cod1TurretActorPhases[2][21];
+ float cod1TurretActorGenericCurrent[98];
 
 
 } entityState_t;

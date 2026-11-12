@@ -30,10 +30,9 @@ If you have questions concerning this license or the applicable additional terms
 // Microsoft Developer Studio generated include file.
 // Used by winquake.rc
 //
+#define COD1_WINDOW_TITLE               "Call of Duty"
 #define IDS_STRING1                     1
 #define IDI_ICON1                       1
-#define IDB_BITMAP1                     1
-#define IDB_BITMAP2                     128
 #define IDC_CURSOR1                     129
 
 // Next default values for new objects

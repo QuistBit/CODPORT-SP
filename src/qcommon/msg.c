@@ -28,6 +28,7 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "../game/q_shared.h"
 #include "qcommon.h"
+#include <stddef.h>
 
 static huffman_t msgHuff;
 static qboolean msgInit = qfalse;
@@ -113,18 +114,19 @@ void MSG_WriteBits( msg_t *msg, int value, int bits ) {
 
 	if ( bits == 0 || bits < -31 || bits > 32 ) {
 		Com_Error( ERR_DROP, "MSG_WriteBits: bad bits %i", bits );
+		return;
 	}
 
 	// check for overflows
 	if ( bits != 32 ) {
 		if ( bits > 0 ) {
-			if ( value > ( ( 1 << bits ) - 1 ) || value < 0 ) {
+			if ( value < 0 || (unsigned int)value > ( ( 1U << bits ) - 1U ) ) {
 				overflows++;
 			}
 		} else {
 			int r;
 
-			r = 1 << ( bits - 1 );
+			r = (int)( 1U << ( -bits - 1 ) );
 
 			if ( value >  r - 1 || value < -r ) {
 				overflows++;
@@ -140,15 +142,15 @@ void MSG_WriteBits( msg_t *msg, int value, int bits ) {
 			msg->cursize += 1;
 			msg->bit += 8;
 		} else if ( bits == 16 ) {
-			unsigned short *sp = (unsigned short *)&msg->data[msg->cursize];
-			*sp = LittleShort( value );
+			short encoded = LittleShort( value );
+			memcpy( &msg->data[msg->cursize], &encoded, sizeof( encoded ) );
 			msg->cursize += 2;
 			msg->bit += 16;
 		} else if ( bits == 32 ) {
-			unsigned int *ip = (unsigned int *)&msg->data[msg->cursize];
-			*ip = LittleLong( value );
+			int encoded = LittleLong( value );
+			memcpy( &msg->data[msg->cursize], &encoded, sizeof( encoded ) );
 			msg->cursize += 4;
-			msg->bit += 8;
+			msg->bit += 32;
 		} else {
 			Com_Error( ERR_DROP, "can't read %d bits\n", bits );
 		}
@@ -177,13 +179,20 @@ void MSG_WriteBits( msg_t *msg, int value, int bits ) {
 }
 
 int MSG_ReadBits( msg_t *msg, int bits ) {
-	int value;
-	int get;
+	unsigned int value;
+	int get, width;
 	qboolean sgn;
 	int i, nbits;
 //	FILE*	fp;
 
 	value = 0;
+	/* Validate before negation, including INT_MIN.  The historical writer
+	 * excludes -32, but a signed full-width read remains supported. */
+	if ( bits < -32 || bits > 32 ) {
+		Com_Error( ERR_DROP, "MSG_ReadBits: bad bits %i", bits );
+		return 0;
+	}
+	width = bits < 0 ? -bits : bits;
 
 	if ( bits < 0 ) {
 		bits = -bits;
@@ -198,13 +207,15 @@ int MSG_ReadBits( msg_t *msg, int bits ) {
 			msg->readcount += 1;
 			msg->bit += 8;
 		} else if ( bits == 16 ) {
-			unsigned short *sp = (unsigned short *)&msg->data[msg->readcount];
-			value = LittleShort( *sp );
+			short encoded;
+			memcpy( &encoded, &msg->data[msg->readcount], sizeof( encoded ) );
+			value = LittleShort( encoded );
 			msg->readcount += 2;
 			msg->bit += 16;
 		} else if ( bits == 32 ) {
-			unsigned int *ip = (unsigned int *)&msg->data[msg->readcount];
-			value = LittleLong( *ip );
+			int encoded;
+			memcpy( &encoded, &msg->data[msg->readcount], sizeof( encoded ) );
+			value = LittleLong( encoded );
 			msg->readcount += 4;
 			msg->bit += 32;
 		} else {
@@ -215,7 +226,7 @@ int MSG_ReadBits( msg_t *msg, int bits ) {
 		if ( bits & 7 ) {
 			nbits = bits & 7;
 			for ( i = 0; i < nbits; i++ ) {
-				value |= ( Huff_getBit( msg->data, &msg->bit ) << i );
+				value |= ( (unsigned int)Huff_getBit( msg->data, &msg->bit ) << i );
 			}
 			bits = bits - nbits;
 		}
@@ -224,19 +235,21 @@ int MSG_ReadBits( msg_t *msg, int bits ) {
 			for ( i = 0; i < bits; i += 8 ) {
 				Huff_offsetReceive( msgHuff.decompressor.tree, &get, msg->data, &msg->bit );
 //				fwrite(&get, 1, 1, fp);
-				value |= ( get << ( i + nbits ) );
+				value |= ( (unsigned int)get << ( i + nbits ) );
 			}
 //			fclose(fp);
 		}
 		msg->readcount = ( msg->bit >> 3 ) + 1;
 	}
-	if ( sgn ) {
-		if ( value & ( 1 << ( bits - 1 ) ) ) {
-			value |= -1 ^ ( ( 1 << bits ) - 1 );
-		}
+	/* bits was reduced by the residual-bit decoder.  Sign extension must
+	 * use the original width; a full 32-bit value needs no extra bits. */
+	if ( sgn && width < 32 && ( value & ( 1U << ( width - 1 ) ) ) ) {
+		value |= UINT_MAX << width;
 	}
-
-	return value;
+	/* Preserve the int32 bit-pattern value without an out-of-range unsigned
+	 * to signed conversion or a signed shift into bit31. */
+	return value <= (unsigned int)INT_MAX ? (int)value :
+		INT_MIN + (int)( value - ( 1U << 31 ) );
 }
 
 
@@ -443,9 +456,14 @@ char *MSG_ReadString( msg_t *msg ) {
 			c = '.';
 		}
 
-		string[l] = c;
-		l++;
-	} while ( l < sizeof( string ) - 1 );
+		/* R128: consume the complete wire string, including its NUL, even
+		 * when the bounded output is full.  Otherwise a legal1023-character
+		 * command leaves its NUL to be parsed as the next service opcode. */
+		if ( l < sizeof( string ) - 1 ) {
+			string[l] = c;
+			l++;
+		}
+	} while ( 1 );
 
 	string[l] = 0;
 
@@ -657,6 +675,9 @@ void MSG_WriteDeltaUsercmd( msg_t *msg, usercmd_t *from, usercmd_t *to ) {
 	MSG_WriteDelta( msg, from->holdable, to->holdable, 8 );         //----(SA)	modified
 	MSG_WriteDelta( msg, from->wolfkick, to->wolfkick, 8 );
 	MSG_WriteDelta( msg, from->cld, to->cld, 16 );          // NERVE - SMF
+    MSG_WriteDelta(msg,from->cod1AimValid,to->cod1AimValid,1);
+    MSG_WriteDeltaKeyFloat(msg,0,from->cod1WeaponAngles[0],to->cod1WeaponAngles[0]);
+    MSG_WriteDeltaKeyFloat(msg,0,from->cod1WeaponAngles[1],to->cod1WeaponAngles[1]);
 }
 
 
@@ -683,6 +704,9 @@ void MSG_ReadDeltaUsercmd( msg_t *msg, usercmd_t *from, usercmd_t *to ) {
 	to->holdable = MSG_ReadDelta( msg, from->holdable, 8 );  //----(SA)	modified
 	to->wolfkick = MSG_ReadDelta( msg, from->wolfkick, 8 );
 	to->cld = MSG_ReadDelta( msg, from->cld, 16 );       // NERVE - SMF
+    to->cod1AimValid=MSG_ReadDelta(msg,from->cod1AimValid,1);
+    to->cod1WeaponAngles[0]=MSG_ReadDeltaKeyFloat(msg,0,from->cod1WeaponAngles[0]);
+    to->cod1WeaponAngles[1]=MSG_ReadDeltaKeyFloat(msg,0,from->cod1WeaponAngles[1]);
 }
 
 /*
@@ -709,6 +733,9 @@ void MSG_WriteDeltaUsercmdKey( msg_t *msg, int key, usercmd_t *from, usercmd_t *
 		 from->weapon == to->weapon &&
 		 from->holdable == to->holdable &&
 		 from->wolfkick == to->wolfkick &&
+         from->cod1AimValid == to->cod1AimValid &&
+         from->cod1WeaponAngles[0] == to->cod1WeaponAngles[0] &&
+         from->cod1WeaponAngles[1] == to->cod1WeaponAngles[1] &&
 		 from->cld == to->cld ) {                   // NERVE - SMF
 		MSG_WriteBits( msg, 0, 1 );                 // no change
 		oldsize += 7;
@@ -729,6 +756,9 @@ void MSG_WriteDeltaUsercmdKey( msg_t *msg, int key, usercmd_t *from, usercmd_t *
 	MSG_WriteDeltaKey( msg, key, from->wolfkick, to->wolfkick, 8 );
 
 	MSG_WriteDeltaKey( msg, key, from->cld, to->cld, 16 );      // NERVE - SMF - for multiplayer clientDamage
+    MSG_WriteDeltaKey(msg,key,from->cod1AimValid,to->cod1AimValid,1);
+    MSG_WriteDeltaKeyFloat(msg,key,from->cod1WeaponAngles[0],to->cod1WeaponAngles[0]);
+    MSG_WriteDeltaKeyFloat(msg,key,from->cod1WeaponAngles[1],to->cod1WeaponAngles[1]);
 }
 
 
@@ -758,6 +788,9 @@ void MSG_ReadDeltaUsercmdKey( msg_t *msg, int key, usercmd_t *from, usercmd_t *t
 		to->wolfkick = MSG_ReadDeltaKey( msg, key, from->wolfkick, 8 );
 
 		to->cld = MSG_ReadDeltaKey( msg, key, from->cld, 16 );           // NERVE - SMF - for multiplayer clientDamage
+        to->cod1AimValid=MSG_ReadDeltaKey(msg,key,from->cod1AimValid,1);
+        to->cod1WeaponAngles[0]=MSG_ReadDeltaKeyFloat(msg,key,from->cod1WeaponAngles[0]);
+        to->cod1WeaponAngles[1]=MSG_ReadDeltaKeyFloat(msg,key,from->cod1WeaponAngles[1]);
 	} else {
 		to->angles[0] = from->angles[0];
 		to->angles[1] = from->angles[1];
@@ -772,6 +805,9 @@ void MSG_ReadDeltaUsercmdKey( msg_t *msg, int key, usercmd_t *from, usercmd_t *t
 		to->wolfkick = from->wolfkick;
 
 		to->cld = from->cld;                    // NERVE - SMF
+        to->cod1AimValid=from->cod1AimValid;
+        to->cod1WeaponAngles[0]=from->cod1WeaponAngles[0];
+        to->cod1WeaponAngles[1]=from->cod1WeaponAngles[1];
 	}
 }
 
@@ -784,7 +820,7 @@ entityState_t communication
 =============================================================================
 */
 
-#define CHANGE_VECTOR_BYTES     10
+#define CHANGE_VECTOR_BYTES     40 /* R232: 281 coherent entity fields. */
 
 #define MAX_CHANGE_VECTOR_LOGS  1024
 
@@ -854,9 +890,7 @@ int LookupChangeVector( byte *vector ) {
 	int i;
 
 	for ( i = 0 ; i < numChangeVectorLogs ; i++ ) {
-		if ( ( (int *)vector )[0] == ( (int *)changeVectorLog[i].vector )[0]
-			 && ( (int *)vector )[1] == ( (int *)changeVectorLog[i].vector )[1]
-			 && ( (short *)vector )[4] == ( (short *)changeVectorLog[i].vector )[4] ) {
+		if ( !memcmp( vector, changeVectorLog[i].vector, sizeof(changeVectorLog[i].vector) ) ) {
 			changeVectorLog[i].count++;
 #ifdef FIND_NEW_CHANGE_VECTORS
 			return -1;
@@ -871,9 +905,7 @@ int LookupChangeVector( byte *vector ) {
 	if ( numChangeVectorLogs == MAX_CHANGE_VECTOR_LOGS ) {
 		return -1;
 	}
-	( (int *)changeVectorLog[i].vector )[0] = ( (int *)vector )[0];
-	( (int *)changeVectorLog[i].vector )[1] = ( (int *)vector )[1];
-	( (short *)changeVectorLog[i].vector )[4] = ( (short *)vector )[4];
+	memcpy( changeVectorLog[i].vector, vector, sizeof(changeVectorLog[i].vector) );
 	changeVectorLog[i].count = 1;
 	numChangeVectorLogs++;
 
@@ -941,7 +973,7 @@ typedef struct {
 } netField_t;
 
 // using the stringizing operator to save typing...
-#define NETF( x ) # x,(int)&( (entityState_t*)0 )->x
+#define NETF( x ) # x,(int)offsetof(entityState_t, x)
 
 netField_t entityStateFields[] =
 {
@@ -1016,6 +1048,216 @@ netField_t entityStateFields[] =
 	{ NETF( effect3Time ), 32},
 	{ NETF( aiState ), 2},
 	{ NETF( animMovetype ), 6},
+    { NETF( cod1TurretVersion ), 8},
+    { NETF( cod1TurretEpochLo ), 32},
+    { NETF( cod1TurretEpochHi ), 32},
+    { NETF( cod1TurretGeneration ), 32},
+    { NETF( cod1TurretTick ), 32},
+    { NETF( cod1TurretAngles[0] ), 0},
+    { NETF( cod1TurretAngles[1] ), 0},
+    { NETF( cod1TurretAngles[2] ), 0},
+    { NETF( cod1TurretAnimated ), 2},
+    { NETF( cod1TurretPhases[0] ), 0},
+    { NETF( cod1TurretPhases[1] ), 0},
+    { NETF( cod1TurretWeights[0] ), 0},
+    { NETF( cod1TurretWeights[1] ), 0},
+    { NETF( cod1TurretActorVersion ), 32},
+    { NETF( cod1TurretActorGeneration ), 32},
+    { NETF( cod1TurretActorGun ), 32},
+    { NETF( cod1TurretActorGunGeneration ), 32},
+    { NETF( cod1TurretActorTick ), 32},
+    { NETF( cod1TurretActorConfig ), 32},
+    { NETF( cod1TurretActorFlags ), 32},
+    { NETF( cod1TurretActorCurrent[0][0] ), 0},
+    { NETF( cod1TurretActorCurrent[0][1] ), 0},
+    { NETF( cod1TurretActorCurrent[0][2] ), 0},
+    { NETF( cod1TurretActorCurrent[0][3] ), 0},
+    { NETF( cod1TurretActorCurrent[0][4] ), 0},
+    { NETF( cod1TurretActorCurrent[0][5] ), 0},
+    { NETF( cod1TurretActorCurrent[0][6] ), 0},
+    { NETF( cod1TurretActorCurrent[0][7] ), 0},
+    { NETF( cod1TurretActorCurrent[0][8] ), 0},
+    { NETF( cod1TurretActorCurrent[0][9] ), 0},
+    { NETF( cod1TurretActorCurrent[0][10] ), 0},
+    { NETF( cod1TurretActorCurrent[0][11] ), 0},
+    { NETF( cod1TurretActorCurrent[0][12] ), 0},
+    { NETF( cod1TurretActorCurrent[0][13] ), 0},
+    { NETF( cod1TurretActorCurrent[0][14] ), 0},
+    { NETF( cod1TurretActorCurrent[0][15] ), 0},
+    { NETF( cod1TurretActorCurrent[0][16] ), 0},
+    { NETF( cod1TurretActorCurrent[0][17] ), 0},
+    { NETF( cod1TurretActorCurrent[0][18] ), 0},
+    { NETF( cod1TurretActorCurrent[0][19] ), 0},
+    { NETF( cod1TurretActorCurrent[0][20] ), 0},
+    { NETF( cod1TurretActorCurrent[0][21] ), 0},
+    { NETF( cod1TurretActorCurrent[0][22] ), 0},
+    { NETF( cod1TurretActorCurrent[0][23] ), 0},
+    { NETF( cod1TurretActorCurrent[0][24] ), 0},
+    { NETF( cod1TurretActorCurrent[1][0] ), 0},
+    { NETF( cod1TurretActorCurrent[1][1] ), 0},
+    { NETF( cod1TurretActorCurrent[1][2] ), 0},
+    { NETF( cod1TurretActorCurrent[1][3] ), 0},
+    { NETF( cod1TurretActorCurrent[1][4] ), 0},
+    { NETF( cod1TurretActorCurrent[1][5] ), 0},
+    { NETF( cod1TurretActorCurrent[1][6] ), 0},
+    { NETF( cod1TurretActorCurrent[1][7] ), 0},
+    { NETF( cod1TurretActorCurrent[1][8] ), 0},
+    { NETF( cod1TurretActorCurrent[1][9] ), 0},
+    { NETF( cod1TurretActorCurrent[1][10] ), 0},
+    { NETF( cod1TurretActorCurrent[1][11] ), 0},
+    { NETF( cod1TurretActorCurrent[1][12] ), 0},
+    { NETF( cod1TurretActorCurrent[1][13] ), 0},
+    { NETF( cod1TurretActorCurrent[1][14] ), 0},
+    { NETF( cod1TurretActorCurrent[1][15] ), 0},
+    { NETF( cod1TurretActorCurrent[1][16] ), 0},
+    { NETF( cod1TurretActorCurrent[1][17] ), 0},
+    { NETF( cod1TurretActorCurrent[1][18] ), 0},
+    { NETF( cod1TurretActorCurrent[1][19] ), 0},
+    { NETF( cod1TurretActorCurrent[1][20] ), 0},
+    { NETF( cod1TurretActorCurrent[1][21] ), 0},
+    { NETF( cod1TurretActorCurrent[1][22] ), 0},
+    { NETF( cod1TurretActorCurrent[1][23] ), 0},
+    { NETF( cod1TurretActorCurrent[1][24] ), 0},
+    { NETF( cod1TurretActorPhases[0][0] ), 0},
+    { NETF( cod1TurretActorPhases[0][1] ), 0},
+    { NETF( cod1TurretActorPhases[0][2] ), 0},
+    { NETF( cod1TurretActorPhases[0][3] ), 0},
+    { NETF( cod1TurretActorPhases[0][4] ), 0},
+    { NETF( cod1TurretActorPhases[0][5] ), 0},
+    { NETF( cod1TurretActorPhases[0][6] ), 0},
+    { NETF( cod1TurretActorPhases[0][7] ), 0},
+    { NETF( cod1TurretActorPhases[0][8] ), 0},
+    { NETF( cod1TurretActorPhases[0][9] ), 0},
+    { NETF( cod1TurretActorPhases[0][10] ), 0},
+    { NETF( cod1TurretActorPhases[0][11] ), 0},
+    { NETF( cod1TurretActorPhases[0][12] ), 0},
+    { NETF( cod1TurretActorPhases[0][13] ), 0},
+    { NETF( cod1TurretActorPhases[0][14] ), 0},
+    { NETF( cod1TurretActorPhases[0][15] ), 0},
+    { NETF( cod1TurretActorPhases[0][16] ), 0},
+    { NETF( cod1TurretActorPhases[0][17] ), 0},
+    { NETF( cod1TurretActorPhases[0][18] ), 0},
+    { NETF( cod1TurretActorPhases[0][19] ), 0},
+    { NETF( cod1TurretActorPhases[0][20] ), 0},
+    { NETF( cod1TurretActorPhases[1][0] ), 0},
+    { NETF( cod1TurretActorPhases[1][1] ), 0},
+    { NETF( cod1TurretActorPhases[1][2] ), 0},
+    { NETF( cod1TurretActorPhases[1][3] ), 0},
+    { NETF( cod1TurretActorPhases[1][4] ), 0},
+    { NETF( cod1TurretActorPhases[1][5] ), 0},
+    { NETF( cod1TurretActorPhases[1][6] ), 0},
+    { NETF( cod1TurretActorPhases[1][7] ), 0},
+    { NETF( cod1TurretActorPhases[1][8] ), 0},
+    { NETF( cod1TurretActorPhases[1][9] ), 0},
+    { NETF( cod1TurretActorPhases[1][10] ), 0},
+    { NETF( cod1TurretActorPhases[1][11] ), 0},
+    { NETF( cod1TurretActorPhases[1][12] ), 0},
+    { NETF( cod1TurretActorPhases[1][13] ), 0},
+    { NETF( cod1TurretActorPhases[1][14] ), 0},
+    { NETF( cod1TurretActorPhases[1][15] ), 0},
+    { NETF( cod1TurretActorPhases[1][16] ), 0},
+    { NETF( cod1TurretActorPhases[1][17] ), 0},
+    { NETF( cod1TurretActorPhases[1][18] ), 0},
+    { NETF( cod1TurretActorPhases[1][19] ), 0},
+    { NETF( cod1TurretActorPhases[1][20] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[0] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[1] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[2] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[3] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[4] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[5] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[6] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[7] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[8] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[9] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[10] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[11] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[12] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[13] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[14] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[15] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[16] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[17] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[18] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[19] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[20] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[21] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[22] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[23] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[24] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[25] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[26] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[27] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[28] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[29] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[30] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[31] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[32] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[33] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[34] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[35] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[36] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[37] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[38] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[39] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[40] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[41] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[42] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[43] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[44] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[45] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[46] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[47] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[48] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[49] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[50] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[51] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[52] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[53] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[54] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[55] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[56] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[57] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[58] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[59] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[60] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[61] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[62] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[63] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[64] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[65] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[66] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[67] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[68] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[69] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[70] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[71] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[72] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[73] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[74] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[75] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[76] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[77] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[78] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[79] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[80] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[81] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[82] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[83] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[84] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[85] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[86] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[87] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[88] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[89] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[90] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[91] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[92] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[93] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[94] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[95] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[96] ), 0},
+    { NETF( cod1TurretActorGenericCurrent[97] ), 0},
 };
 
 
@@ -1372,7 +1614,7 @@ plyer_state_t communication
 */
 
 // using the stringizing operator to save typing...
-#define PSF( x ) # x,(int)&( (playerState_t*)0 )->x
+#define PSF( x ) # x,(int)offsetof(playerState_t, x)
 
 netField_t playerStateFields[] =
 {
@@ -1403,7 +1645,11 @@ netField_t playerStateFields[] =
 	{ PSF( torsoAnim ), ANIM_BITS },
 	{ PSF( movementDir ), 8 },
 	{ PSF( eFlags ), 16 },
-	{ PSF( eventSequence ), 8 },
+	/* STABILIZATION_R9: preserve the producer's identity across snapshots.
+	 * The previous low byte aliases new predictable events after 256 steps.
+	 * No client-side guessing of epochs; protocol 55 requires a matched build.
+	 * NETF(eventSequence) stays 8: its separate entity reader is wrap-aware. */
+	{ PSF( eventSequence ), 32 },
 	{ PSF( events[0] ), 8 },
 	{ PSF( events[1] ), 8 },
 	{ PSF( events[2] ), 8 },
@@ -1454,6 +1700,26 @@ netField_t playerStateFields[] =
 // RF not needed anymore
 //{ PSF(classWeaponTime), 32}, // JPW NERVE
 	{ PSF( footstepCount ), 0},
+	{ PSF( jumpTime ), 32 },
+	{ PSF( cod1JumpApex ), 0 },
+    { PSF( cod1Rechamber ), 6 },
+    { PSF( cod1LadderNormal[0] ), 0 },
+    { PSF( cod1LadderNormal[1] ), 0 },
+    { PSF( cod1LadderNormal[2] ), 0 },
+    { PSF( cod1Slots[1] ), 6 },
+    { PSF( cod1Slots[2] ), 6 },
+    { PSF( cod1Slots[3] ), 6 },
+    { PSF( cod1Slots[4] ), 6 },
+    { PSF( cod1Slots[5] ), 6 },
+
+	{ PSF( cod1EyeHeight ), 0 },
+	{ PSF( cod1EyeStart ), 32 },
+	{ PSF( cod1EyeTarget ), 8 },
+	{ PSF( cod1EyeDown ), 1 },
+	{ PSF( aimSpreadScaleFloat ), 0 },
+	{ PSF( cod1PronePitchCentre ), 0 },
+	{ PSF( cod1PronePitchValid ), 1 },
+    { PSF( cod1ViewHands ), 2 },
 };
 
 /*

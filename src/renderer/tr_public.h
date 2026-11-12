@@ -31,7 +31,7 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "../cgame/tr_types.h"
 
-#define REF_API_VERSION     8
+#define REF_API_VERSION     9
 
 //
 // these are the functions exported by the refresh module
@@ -116,6 +116,10 @@ typedef struct {
 	void ( *ZombieFXAddNewHit )( int entityNum, const vec3_t hitPos, const vec3_t hitDir );
 
 	qboolean ( *GetEntityToken )( char *buffer, int size );
+	int (*AddCod1TurretToScene)(const cod1TurretRenderState_t *state);
+    qhandle_t (*RegisterCod1TurretActor)(const cod1TurretActorResourceState_t *resource);
+    int (*AddCod1TurretActorToScene)(const cod1TurretActorRenderState_t *state);
+    int (*Cod1TurretTagFlash)(const cod1TurretRenderState_t *state,float world[16]);
 } refexport_t;
 
 //
@@ -171,6 +175,10 @@ typedef struct {
 	void ( *CIN_UploadCinematic )( int handle );
 	int ( *CIN_PlayCinematic )( const char *arg0, int xpos, int ypos, int width, int height, int bits );
 	e_status ( *CIN_RunCinematic )( int handle );
+
+	/* R56: optional native BSP59 visibility services, used at world bake only. */
+	qboolean (*CM_Cod1LightTrace)(trace_t *,const vec3_t,const vec3_t);
+	qboolean (*CM_PointContentsV59)(const vec3_t,int,int *);
 
 } refimport_t;
 

@@ -30,6 +30,7 @@ If you have questions concerning this license or the applicable additional terms
 // active (after loading) gameplay
 
 #include "cg_local.h"
+#include "cg_r241_frame_trace.h"
 #include "../ui/ui_shared.h"
 
 //----(SA) added to make it easier to raise/lower our statsubar by only changing one thing
@@ -244,63 +245,6 @@ void CG_Text_Paint( float x, float y, int font, float scale, vec4_t color, const
 
 
 
-#ifdef OLDWOLFUI
-static void CG_DrawField( int x, int y, int width, int value ) {
-	char num[16], *ptr;
-	int l;
-	int frame;
-
-	if ( width < 1 ) {
-		return;
-	}
-
-	// draw number string
-	if ( width > 5 ) {
-		width = 5;
-	}
-
-	switch ( width ) {
-	case 1:
-		value = value > 9 ? 9 : value;
-		value = value < 0 ? 0 : value;
-		break;
-	case 2:
-		value = value > 99 ? 99 : value;
-		value = value < -9 ? -9 : value;
-		break;
-	case 3:
-		value = value > 999 ? 999 : value;
-		value = value < -99 ? -99 : value;
-		break;
-	case 4:
-		value = value > 9999 ? 9999 : value;
-		value = value < -999 ? -999 : value;
-		break;
-	}
-
-	Com_sprintf( num, sizeof( num ), "%i", value );
-	l = strlen( num );
-	if ( l > width ) {
-		l = width;
-	}
-	x += 2 + CHAR_WIDTH * ( width - l );
-
-	ptr = num;
-	while ( *ptr && l )
-	{
-		if ( *ptr == '-' ) {
-			frame = STAT_MINUS;
-		} else {
-			frame = *ptr - '0';
-		}
-
-		CG_DrawPic( x,y, CHAR_WIDTH, CHAR_HEIGHT, cgs.media.numberShaders[frame] );
-		x += CHAR_WIDTH;
-		ptr++;
-		l--;
-	}
-}
-#endif  // #ifdef OLDWOLFUI
 
 /*
 ================
@@ -464,123 +408,8 @@ void CG_DrawKeyModel( int keynum, float x, float y, float w, float h, int fadeti
 	CG_Draw3DModel( x, y, w, h, cg_items[keynum].models[0], 0, origin, angles );
 }
 
-/*
-================
-CG_DrawStatusBarHead
-
-================
-*/
-#ifdef OLDWOLFUI
-static void CG_DrawStatusBarHead( float x ) {
-	vec3_t angles;
-	float size, stretch;
-	float frac;
-
-	VectorClear( angles );
-
-	if ( cg.damageTime && cg.time - cg.damageTime < DAMAGE_TIME ) {
-		frac = (float)( cg.time - cg.damageTime ) / DAMAGE_TIME;
-		size = ICON_SIZE * 1.25 * ( 1.5 - frac * 0.5 );
-
-		stretch = size - ICON_SIZE * 1.25;
-		// kick in the direction of damage
-		x -= stretch * 0.5 + cg.viewDamage[cg.damageIndex].damageX * stretch * 0.5;
-
-		cg.headStartYaw = 180 + cg.viewDamage[cg.damageIndex].damageX * 45;
-
-		cg.headEndYaw = 180 + 20 * cos( crandom() * M_PI );
-		cg.headEndPitch = 5 * cos( crandom() * M_PI );
-
-		cg.headStartTime = cg.time;
-		cg.headEndTime = cg.time + 100 + random() * 2000;
-	} else {
-		if ( cg.time >= cg.headEndTime ) {
-			// select a new head angle
-			cg.headStartYaw = cg.headEndYaw;
-			cg.headStartPitch = cg.headEndPitch;
-			cg.headStartTime = cg.headEndTime;
-			cg.headEndTime = cg.time + 100 + random() * 2000;
-
-			cg.headEndYaw = 180 + 20 * cos( crandom() * M_PI );
-			cg.headEndPitch = 5 * cos( crandom() * M_PI );
-		}
-
-		size = ICON_SIZE * 1.25;
-	}
-
-	// if the server was frozen for a while we may have a bad head start time
-	if ( cg.headStartTime > cg.time ) {
-		cg.headStartTime = cg.time;
-	}
-
-	frac = ( cg.time - cg.headStartTime ) / (float)( cg.headEndTime - cg.headStartTime );
-	frac = frac * frac * ( 3 - 2 * frac );
-	angles[YAW] = cg.headStartYaw + ( cg.headEndYaw - cg.headStartYaw ) * frac;
-	angles[PITCH] = cg.headStartPitch + ( cg.headEndPitch - cg.headStartPitch ) * frac;
-
-	CG_DrawHead( x, 480 - size, size, size,
-				 cg.snap->ps.clientNum, angles );
-}
-#endif  // #ifdef OLDWOLFUI
-
-/*
-==============
-CG_DrawStatusBarKeys
-IT_KEY (this makes this routine easier to find in files...) (SA)
-==============
-*/
-#ifdef OLDWOLFUI
-static void CG_DrawStatusBarKeys() {
-	int i;
-	float y = 0;    // start height is
-	gitem_t *gi;
-	int itemnum;
-//	int		fadetime = 0;
-	float   *fadeColor;
 
 
-//----(SA)	added
-	if ( cg.showItems ) {
-		fadeColor = colorWhite;
-	} else {
-		fadeColor = CG_FadeColor( cg.itemFadeTime, 1000 );
-	}
-
-	if ( !fadeColor ) {
-		return;
-	}
-
-
-	// (SA) just don't draw this stuff for now.  It's got fog issues I need to clean up
-
-	return;
-
-
-
-	for ( i = 1; i < KEY_NUM_KEYS; i++ )
-	{
-		gi = BG_FindItemForKey( i, &itemnum );
-		// if i've got the key...
-
-		if ( cg.snap->ps.stats[STAT_KEYS] & ( 1 << gi->giTag ) ) {
-			y += ICON_SIZE + 5;
-			CG_DrawKeyModel( itemnum, 640 - ( 1.5 * ICON_SIZE ), y, ICON_SIZE, ICON_SIZE, cg.time + fadeColor[0] * 1000 );
-		}
-	}
-}
-#endif  // #ifdef OLDWOLFUI
-
-/*
-================
-CG_DrawStatusBarFlag
-
-================
-*/
-#ifdef OLDWOLFUI
-static void CG_DrawStatusBarFlag( float x, int team ) {
-	CG_DrawFlagModel( x, 480 - ICON_SIZE, ICON_SIZE, ICON_SIZE, team );
-}
-#endif  // #ifdef OLDWOFLUI
 
 /*
 ================
@@ -616,252 +445,6 @@ void CG_DrawTeamBackground( int x, int y, int w, int h, float alpha, int team ) 
 
 
 
-// JOSEPH 4-25-00
-/*
-================
-CG_DrawStatusBar
-
-================
-*/
-#ifdef OLDWOLFUI
-static void CG_DrawStatusBar( void ) {
-	int color;
-	centity_t   *cent;
-	playerState_t   *ps;
-	int value, inclip;
-	vec4_t hcolor;
-	vec3_t angles;
-//	vec3_t		origin;
-	static float colors[4][4] = {
-//		{ 0.2, 1.0, 0.2, 1.0 } , { 1.0, 0.2, 0.2, 1.0 }, {0.5, 0.5, 0.5, 1} };
-		{ 1, 0.69, 0, 1.0 },        // normal
-		{ 1.0, 0.2, 0.2, 1.0 },     // low health
-		{0.5, 0.5, 0.5, 1},         // weapon firing
-		{ 1, 1, 1, 1 }
-	};                              // health > 100
-
-	if ( cg_drawStatus.integer == 0 ) {
-		return;
-	}
-
-	// draw the team background
-	if ( cg.snap->ps.persistant[PERS_TEAM] == TEAM_RED ) {
-		hcolor[0] = 1;
-		hcolor[1] = 0;
-		hcolor[2] = 0;
-		hcolor[3] = 0.33;
-		trap_R_SetColor( hcolor );
-		CG_DrawPic( 0, 420, 640, 60, cgs.media.teamStatusBar );
-		trap_R_SetColor( NULL );
-	} else if ( cg.snap->ps.persistant[PERS_TEAM] == TEAM_BLUE ) {
-		hcolor[0] = 0;
-		hcolor[1] = 0;
-		hcolor[2] = 1;
-		hcolor[3] = 0.33;
-		trap_R_SetColor( hcolor );
-		CG_DrawPic( 0, 420, 640, 60, cgs.media.teamStatusBar );
-		trap_R_SetColor( NULL );
-	}
-
-	cent = &cg_entities[cg.snap->ps.clientNum];
-	ps = &cg.snap->ps;
-
-	VectorClear( angles );
-
-	// draw any 3D icons first, so the changes back to 2D are minimized
-
-	//----(SA) further change... we don't need to draw the ammo 3d model do we?
-/*
-	if ( cent->currentState.weapon && cg_weapons[ cent->currentState.weapon ].ammoModel ) {
-		origin[0] = 70;
-		origin[1] = 0;
-		origin[2] = 0;
-		angles[YAW] = 90 + 20 * sin( cg.time / 1000.0 );;
-//----(SA) Wolf statusbar change
-		CG_Draw3DModel( CHAR_WIDTH*3 + TEXT_ICON_SPACE, STATUSBARHEIGHT -20, ICON_SIZE, ICON_SIZE,
-					   cg_weapons[ cent->currentState.weapon ].ammoModel, 0, origin, angles );
-//----(SA) end
-	}
-*/
-	//CG_DrawStatusBarHead( 185 + CHAR_WIDTH*3 + TEXT_ICON_SPACE );
-
-	CG_DrawStatusBarKeys();
-
-	if ( cg.predictedPlayerState.powerups[PW_REDFLAG] ) {
-		CG_DrawStatusBarFlag( 185 + CHAR_WIDTH * 3 + TEXT_ICON_SPACE + ICON_SIZE, TEAM_RED );
-	} else if ( cg.predictedPlayerState.powerups[PW_BLUEFLAG] ) {
-		CG_DrawStatusBarFlag( 185 + CHAR_WIDTH * 3 + TEXT_ICON_SPACE + ICON_SIZE, TEAM_BLUE );
-	}
-
-	//----(SA) further change... we don't need to draw the armor do we?
-/*
-	if ( ps->stats[ STAT_ARMOR ] ) {
-		origin[0] = 90;
-		origin[1] = 0;
-		origin[2] = -10;
-		angles[YAW] = ( cg.time & 2047 ) * 360 / 2048.0;
-//----(SA) Wolf statusbar change
-//		CG_Draw3DModel( 370 + CHAR_WIDTH*3 + TEXT_ICON_SPACE, STATUSBARHEIGHT -20, ICON_SIZE, ICON_SIZE,
-//					   cgs.media.armorModel, 0, origin, angles );
-//----(SA) end
-	}
-*/
-	//
-	// ammo
-	//
-	if ( cent->currentState.weapon ) {
-		qhandle_t icon;
-		float scale,halfScale;
-		float wideOffset;
-
-		value = ps->ammo[BG_FindAmmoForWeapon( cent->currentState.weapon )];
-		inclip = ps->ammoclip[BG_FindClipForWeapon( cent->currentState.weapon )];
-
-		if ( value > -1 ) {
-			if ( ( cg.predictedPlayerState.weaponstate == WEAPON_FIRING || cg.predictedPlayerState.weaponstate == WEAPON_FIRINGALT )
-				 && cg.predictedPlayerState.weaponTime > 100 ) {
-				// draw as dark grey when reloading
-				color = 2;  // dark grey
-			} else {
-				if ( value >= 0 ) {
-					color = 0;  // green
-				} else {
-					color = 1;  // red
-				}
-			}
-			trap_R_SetColor( colors[color] );
-
-			// pulsing grenade icon to help the player 'count' in their head
-			if ( ps->grenadeTimeLeft ) {
-				if ( ps->weapon == WP_DYNAMITE ) {
-
-				} else {
-					if ( ( ( cg.grenLastTime ) % 1000 ) < ( ( ps->grenadeTimeLeft ) % 1000 ) ) {
-						switch ( ps->grenadeTimeLeft / 1000 ) {
-						case 3:
-							trap_S_StartLocalSound( cgs.media.grenadePulseSound4, CHAN_LOCAL_SOUND );
-							break;
-						case 2:
-							trap_S_StartLocalSound( cgs.media.grenadePulseSound3, CHAN_LOCAL_SOUND );
-							break;
-						case 1:
-							trap_S_StartLocalSound( cgs.media.grenadePulseSound2, CHAN_LOCAL_SOUND );
-							break;
-						case 0:
-							trap_S_StartLocalSound( cgs.media.grenadePulseSound1, CHAN_LOCAL_SOUND );
-							break;
-						}
-					}
-				}
-
-				scale = (float)( ( ps->grenadeTimeLeft ) % 1000 ) / 100.0f;
-				halfScale = scale * 0.5f;
-
-				cg.grenLastTime = ps->grenadeTimeLeft;
-			} else {
-				scale = halfScale = 0;
-			}
-
-
-			switch ( cg.predictedPlayerState.weapon ) {
-			case WP_THOMPSON:
-			case WP_MP40:
-			case WP_STEN:
-			case WP_MAUSER:
-			case WP_GARAND:
-			case WP_VENOM:
-			case WP_TESLA:
-			case WP_PANZERFAUST:
-			case WP_FLAMETHROWER:
-				wideOffset = -38;
-				break;
-			default:
-				wideOffset = 0;
-				break;
-			}
-
-			// don't draw ammo value for knife
-			if ( cg.predictedPlayerState.weapon != WP_KNIFE ) {
-				if ( cgs.dmflags & DF_NO_WEAPRELOAD ) {
-					CG_DrawBigString2( ( 580 - 23 + 35 ) + wideOffset, STATUSBARHEIGHT, va( "%d.", value ), cg_hudAlpha.value );
-				} else if ( value ) {
-					CG_DrawBigString2( ( 580 - 23 + 35 ) + wideOffset, STATUSBARHEIGHT, va( "%d/%d", inclip, value ), cg_hudAlpha.value );
-				} else {
-					CG_DrawBigString2( ( 580 - 23 + 35 ) + wideOffset, STATUSBARHEIGHT, va( "%d", inclip ), cg_hudAlpha.value );
-				}
-			}
-
-			icon = cg_weapons[ cg.predictedPlayerState.weapon ].weaponIcon[0];
-			if ( icon ) {
-				CG_DrawPic( ( ( 530 + 68 ) - halfScale ) + wideOffset,  ( 446 - 10 ) - halfScale, ( 38 + scale ) - wideOffset, 38 + scale, icon );
-			}
-
-			trap_R_SetColor( NULL );
-
-			// if we didn't draw a 3D icon, draw a 2D icon for ammo
-			if ( !cg_draw3dIcons.integer ) {
-				qhandle_t icon;
-
-				icon = cg_weapons[ cg.predictedPlayerState.weapon ].ammoIcon;
-				if ( icon ) {
-					CG_DrawPic( CHAR_WIDTH * 3 + TEXT_ICON_SPACE, STATUSBARHEIGHT, ICON_SIZE, ICON_SIZE, icon );
-				}
-			}
-		}
-	}
-
-	//
-	// health
-	//
-	value = ps->stats[STAT_HEALTH];
-	if ( value > 100 ) {
-		trap_R_SetColor( colors[3] );       // white
-	} else if ( value > 25 ) {
-		trap_R_SetColor( colors[0] );   // green
-	} else if ( value > 0 ) {
-		color = ( cg.time >> 8 ) & 1; // flash
-		trap_R_SetColor( colors[color] );
-	} else {
-		trap_R_SetColor( colors[1] );   // red
-	}
-
-	// stretch the health up when taking damage
-//----(SA) Wolf statusbar change
-//	CG_DrawField ( 185, STATUSBARHEIGHT, 3, value);
-	{
-		char printme[16];
-		sprintf( printme, "%d", value );
-		//CG_DrawBigString( 185, STATUSBARHEIGHT, printme, cg_hudAlpha.value );
-		CG_DrawBigString2( 16 + 23 + 43, STATUSBARHEIGHT, printme, cg_hudAlpha.value );
-	}
-//----(SA) end
-	CG_ColorForHealth( hcolor );
-	trap_R_SetColor( hcolor );
-
-
-	//
-	// armor
-	//
-	value = ps->stats[STAT_ARMOR];
-	if ( value > 0 ) {
-		trap_R_SetColor( colors[0] );
-//----(SA) Wolf statusbar change
-//		CG_DrawField (370, STATUSBARHEIGHT, 3, value);
-		{
-			char printme[16];
-			sprintf( printme, "%d", value );
-			//CG_DrawBigString( 370, STATUSBARHEIGHT, printme, cg_hudAlpha.value );
-			CG_DrawBigString2( 200, STATUSBARHEIGHT, printme, cg_hudAlpha.value );
-		}
-//----(SA) end
-		trap_R_SetColor( NULL );
-//----(SA) Wolf statusbar change
-//		CG_DrawPic( 370 + CHAR_WIDTH*3 + TEXT_ICON_SPACE, STATUSBARHEIGHT, ICON_SIZE, ICON_SIZE, cgs.media.armorIcon );
-//----(SA) end
-	}
-}
-// END JOSEPH
-#endif  // #ifdef OLDWOLFUI
 /*
 ===========================================================================================
 
@@ -870,55 +453,6 @@ static void CG_DrawStatusBar( void ) {
 ===========================================================================================
 */
 
-/*
-================
-CG_DrawAttacker
-
-================
-*/
-#ifdef OLDWOLFUI
-static float CG_DrawAttacker( float y ) {
-	int t;
-	float size;
-	vec3_t angles;
-	const char  *info;
-	const char  *name;
-	int clientNum;
-
-	if ( cg.predictedPlayerState.stats[STAT_HEALTH] <= 0 ) {
-		return y;
-	}
-
-	if ( !cg.attackerTime ) {
-		return y;
-	}
-
-	clientNum = cg.predictedPlayerState.persistant[PERS_ATTACKER];
-	if ( clientNum < 0 || clientNum >= MAX_CLIENTS || clientNum == cg.snap->ps.clientNum ) {
-		return y;
-	}
-
-	t = cg.time - cg.attackerTime;
-	if ( t > ATTACKER_HEAD_TIME ) {
-		cg.attackerTime = 0;
-		return y;
-	}
-
-	size = ICON_SIZE * 1.25;
-
-	angles[PITCH] = 0;
-	angles[YAW] = 180;
-	angles[ROLL] = 0;
-	CG_DrawHead( 640 - size, y, size, size, clientNum, angles );
-
-	info = CG_ConfigString( CS_PLAYERS + clientNum );
-	name = Info_ValueForKey(  info, "n" );
-	y += size;
-	CG_DrawBigString( 640 - ( Q_PrintStrlen( name ) * BIGCHAR_WIDTH ), y, name, 0.5 );
-
-	return y + BIGCHAR_HEIGHT + 2;
-}
-#endif  // #ifdef OLDWOLFUI
 
 #define UPPERRIGHT_X 500
 /*
@@ -1232,257 +766,9 @@ static void CG_DrawUpperRight( void ) {
 ===========================================================================================
 */
 
-/*
-=================
-CG_DrawScores
-
-Draw the small two score display
-=================
-*/
-#ifdef OLDWOLFUI
-static float CG_DrawScores( float y ) {
-	const char  *s;
-	int s1, s2, score;
-	int x, w;
-	int v;
-	vec4_t color;
-
-	s = CG_ConfigString( CS_SCORES1 );
-	s1 = cgs.scores1;
-	s = CG_ConfigString( CS_SCORES2 );
-	s2 = cgs.scores2;
-
-	y -=  BIGCHAR_HEIGHT + 8;
-
-	// draw from the right side to left
-	if ( cgs.gametype >= GT_TEAM ) {
-		x = 640;
-
-		color[0] = 0;
-		color[1] = 0;
-		color[2] = 1;
-		color[3] = 0.33;
-		s = va( "%2i", s2 );
-		w = CG_DrawStrlen( s ) * BIGCHAR_WIDTH + 8;
-		x -= w;
-		CG_FillRect( x, y - 4,  w, BIGCHAR_HEIGHT + 8, color );
-		if ( cg.snap->ps.persistant[PERS_TEAM] == TEAM_BLUE ) {
-			CG_DrawPic( x, y - 4, w, BIGCHAR_HEIGHT + 8, cgs.media.selectShader );
-		}
-		CG_DrawBigString( x + 4, y, s, 1.0F );
 
 
-		color[0] = 1;
-		color[1] = 0;
-		color[2] = 0;
-		color[3] = 0.33;
-		s = va( "%2i", s1 );
-		w = CG_DrawStrlen( s ) * BIGCHAR_WIDTH + 8;
-		x -= w;
-		CG_FillRect( x, y - 4,  w, BIGCHAR_HEIGHT + 8, color );
-		if ( cg.snap->ps.persistant[PERS_TEAM] == TEAM_RED ) {
-			CG_DrawPic( x, y - 4, w, BIGCHAR_HEIGHT + 8, cgs.media.selectShader );
-		}
-		CG_DrawBigString( x + 4, y, s, 1.0F );
 
-		if ( cgs.gametype == GT_CTF ) {
-			v = cgs.capturelimit;
-		} else {
-			v = cgs.fraglimit;
-		}
-		if ( v ) {
-			s = va( "%2i", v );
-			w = CG_DrawStrlen( s ) * BIGCHAR_WIDTH + 8;
-			x -= w;
-			CG_DrawBigString( x + 4, y, s, 1.0F );
-		}
-
-//----(SA) don't show frag count/limit in sp
-	} else if ( cgs.gametype != GT_SINGLE_PLAYER && cg_drawFrags.integer ) {
-//----(SA) end
-		qboolean spectator;
-
-		x = 640;
-		score = cg.snap->ps.persistant[PERS_SCORE];
-		spectator = ( cg.snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR );
-
-		// always show your score in the second box if not in first place
-		if ( s1 != score ) {
-			s2 = score;
-		}
-		if ( s2 != SCORE_NOT_PRESENT ) {
-			s = va( "%2i", s2 );
-			w = CG_DrawStrlen( s ) * BIGCHAR_WIDTH + 8;
-			x -= w;
-			if ( !spectator && score == s2 && score != s1 ) {
-				color[0] = 1;
-				color[1] = 0;
-				color[2] = 0;
-				color[3] = 0.33;
-				CG_FillRect( x, y - 4,  w, BIGCHAR_HEIGHT + 8, color );
-				CG_DrawPic( x, y - 4, w, BIGCHAR_HEIGHT + 8, cgs.media.selectShader );
-			} else {
-				color[0] = 0.5;
-				color[1] = 0.5;
-				color[2] = 0.5;
-				color[3] = 0.33;
-				CG_FillRect( x, y - 4,  w, BIGCHAR_HEIGHT + 8, color );
-			}
-			CG_DrawBigString( x + 4, y, s, 1.0F );
-		}
-
-		// first place
-		if ( s1 != SCORE_NOT_PRESENT ) {
-			s = va( "%2i", s1 );
-			w = CG_DrawStrlen( s ) * BIGCHAR_WIDTH + 8;
-			x -= w;
-			if ( !spectator && score == s1 ) {
-				color[0] = 0;
-				color[1] = 0;
-				color[2] = 1;
-				color[3] = 0.33;
-				CG_FillRect( x, y - 4,  w, BIGCHAR_HEIGHT + 8, color );
-				CG_DrawPic( x, y - 4, w, BIGCHAR_HEIGHT + 8, cgs.media.selectShader );
-			} else {
-				color[0] = 0.5;
-				color[1] = 0.5;
-				color[2] = 0.5;
-				color[3] = 0.33;
-				CG_FillRect( x, y - 4,  w, BIGCHAR_HEIGHT + 8, color );
-			}
-			CG_DrawBigString( x + 4, y, s, 1.0F );
-		}
-
-		if ( cgs.fraglimit ) {
-			s = va( "%2i", cgs.fraglimit );
-			w = CG_DrawStrlen( s ) * BIGCHAR_WIDTH + 8;
-			x -= w;
-			CG_DrawBigString( x + 4, y, s, 1.0F );
-		}
-
-	}
-
-	return y - 8;
-}
-#endif  // #ifdef OLDWOLFUI
-
-/*
-================
-CG_DrawPowerups
-================
-*/
-#ifdef OLDWOLFUI
-static float CG_DrawPowerups( float y ) {
-	int sorted[MAX_POWERUPS];
-	int sortedTime[MAX_POWERUPS];
-	int i, j, k;
-	int active;
-	playerState_t   *ps;
-	int t;
-	gitem_t *item;
-	int x;
-	int color;
-	float size;
-	float f;
-	static float colors[2][4] = {
-		{ 0.2, 1.0, 0.2, 1.0 }, { 1.0, 0.2, 0.2, 1.0 }
-	};
-
-	ps = &cg.snap->ps;
-
-	if ( ps->stats[STAT_HEALTH] <= 0 ) {
-		return y;
-	}
-
-	// sort the list by time remaining
-	active = 0;
-	for ( i = 0 ; i < MAX_POWERUPS ; i++ ) {
-		if ( !ps->powerups[ i ] ) {
-			continue;
-		}
-		t = ps->powerups[ i ] - cg.time;
-		// ZOID--don't draw if the power up has unlimited time (999 seconds)
-		// This is true of the CTF flags
-		if ( t < 0 || t > 999000 ) {
-			continue;
-		}
-
-		// insert into the list
-		for ( j = 0 ; j < active ; j++ ) {
-			if ( sortedTime[j] >= t ) {
-				for ( k = active - 1 ; k >= j ; k-- ) {
-					sorted[k + 1] = sorted[k];
-					sortedTime[k + 1] = sortedTime[k];
-				}
-				break;
-			}
-		}
-		sorted[j] = i;
-		sortedTime[j] = t;
-		active++;
-	}
-
-	// draw the icons and timers
-	x = 640 - ICON_SIZE - CHAR_WIDTH * 2;
-	for ( i = 0 ; i < active ; i++ ) {
-
-		continue;   // (SA) FIXME: TEMP: as I'm getting powerup business going
-
-		item = BG_FindItemForPowerup( sorted[i] );
-
-		color = 1;
-
-		y -= ICON_SIZE;
-
-		trap_R_SetColor( colors[color] );
-		CG_DrawField( x, y, 2, sortedTime[ i ] / 1000 );
-
-		t = ps->powerups[ sorted[i] ];
-		if ( t - cg.time >= POWERUP_BLINKS * POWERUP_BLINK_TIME ) {
-			trap_R_SetColor( NULL );
-		} else {
-			vec4_t modulate;
-
-			f = (float)( t - cg.time ) / POWERUP_BLINK_TIME;
-			f -= (int)f;
-			modulate[0] = modulate[1] = modulate[2] = modulate[3] = f;
-			trap_R_SetColor( modulate );
-		}
-
-		if ( cg.powerupActive == sorted[i] &&
-			 cg.time - cg.powerupTime < PULSE_TIME ) {
-			f = 1.0 - ( ( (float)cg.time - cg.powerupTime ) / PULSE_TIME );
-			size = ICON_SIZE * ( 1.0 + ( PULSE_SCALE - 1.0 ) * f );
-		} else {
-			size = ICON_SIZE;
-		}
-
-		CG_DrawPic( 640 - size, y + ICON_SIZE / 2 - size / 2,
-					size, size, trap_R_RegisterShader( item->icon ) );
-	}
-	trap_R_SetColor( NULL );
-
-	return y;
-}
-#endif  // #ifdef OLDWOLFUI
-
-
-/*
-=====================
-CG_DrawLowerRight
-
-=====================
-*/
-#ifdef OLDWOLFUI
-static void CG_DrawLowerRight( void ) {
-	float y;
-
-	y = 480 - ICON_SIZE;
-
-	y = CG_DrawScores( y );
-	y = CG_DrawPowerups( y );
-}
-#endif  // #ifdef OLDWOLFUI
 
 //===========================================================================================
 
@@ -1966,17 +1252,30 @@ void CG_CenterPrint( const char *str, int y, int charWidth ) {
 CG_DrawCenterString
 ===================
 */
-static void CG_DrawCenterString( void ) {
+static void CG_DrawCenterString( qboolean cod1Hud ) {
 	char    *start;
 	int l;
 	int x, y, w;
 	float   *color;
+	vec4_t  nativeColor;
 
 	if ( !cg.centerPrintTime ) {
 		return;
 	}
 
-	color = CG_FadeColor( cg.centerPrintTime, 1000 * cg_centertime.value );
+	if ( cod1Hud ) {
+		/* Retail cgame 0x3000f2b0 uses a 100 ms fade tail and
+		 * cg_hudAlpha; the RTCW CG_FadeColor tail is 200 ms. */
+		int remaining = (int)( 1000 * cg_centertime.value ) - ( cg.time - cg.centerPrintTime );
+		if ( remaining <= 0 || cg.time < cg.centerPrintTime ) {
+			return;
+		}
+		Vector4Set( nativeColor, 1, 1, 1,
+			cg_hudAlpha.value * ( remaining < 100 ? remaining * .01f : 1 ) );
+		color = nativeColor;
+	} else {
+		color = CG_FadeColor( cg.centerPrintTime, 1000 * cg_centertime.value );
+	}
 	if ( !color ) {
 		return;
 	}
@@ -2603,7 +1902,7 @@ CG_DrawIntermission
 */
 static void CG_DrawIntermission( void ) {
 	if ( cgs.gametype == GT_SINGLE_PLAYER ) {
-		CG_DrawCenterString();
+		CG_DrawCenterString( qfalse );
 		return;
 	}
 
@@ -3342,6 +2641,53 @@ static void CG_ScreenFade( void ) {
 CG_Draw2D
 =================
 */
+#include "cg_cod1_objective_state.h"
+#include "../game/bg_cod1_turret_actor_wire.h"
+#include "cg_cod1_hud.h"
+#include "cg_cod1_prompts.h"
+#include "cg_cod1_objectives.h"
+/* Crosshair trace includes scenery and other bodies. Stationary training
+ * actors can be visible before gaining movement contents, so test their
+ * published standing volume within the unobstructed part of the ray. */
+static void CG_Cod1AllyCaption(void){
+    const entityState_t *hit=NULL;const cwDef_t *def;
+    vec3_t end;trace_t tr;int i,idx;float nearest;
+    char info[256],*weapon;const char *role;const float green[]={.26f,.86f,.26f},white[]={1,1,1};
+    if(!cg.snap||cg.renderingThirdPerson||!cg_drawCrosshair.integer)return;
+    VectorMA(cg.refdef.vieworg,8192.f,cg.refdef.viewaxis[0],end);
+    CG_Trace(&tr,cg.refdef.vieworg,NULL,NULL,end,cg.predictedPlayerState.clientNum,MASK_SHOT);
+    nearest=8192.f*tr.fraction;
+    for(i=0;i<cg.snap->numEntities;i++){
+        const entityState_t *e=&cg.snap->entities[i];int axis;float near=0,far=nearest;
+        if(!CodHud_ActorAlly(e)||!(e->otherEntityNum2 & COD1_ALLY_INFO_MASK))continue;
+        if(e->number==tr.entityNum){if(!hit)hit=e;continue;}
+        for(axis=0;axis<3;axis++){
+            float base=e->pos.trBase[axis]-cg.refdef.vieworg[axis];
+            int packed=e->solid;float radius=15,down=0,up=72;
+            if(packed && packed!=SOLID_BMODEL){radius=packed&255;down=(packed>>8)&255;up=((packed>>16)&255)-32;}
+            float low=base-(axis==2?down:radius),high=base+(axis==2?up:radius);
+            float dir=cg.refdef.viewaxis[0][axis];
+            if(fabsf(dir)<.000001f){if(low>0||high<0)break;continue;}
+            low/=dir;high/=dir;if(low>high){float temp=low;low=high;high=temp;}
+            if(low>near)near=low;if(high<far)far=high;if(near>far)break;
+        }
+        if(axis==3&&near<nearest){nearest=near;hit=e;}
+    }
+    if(!hit)return;
+    idx=(hit->otherEntityNum2 & COD1_ALLY_INFO_MASK)-1;
+    if(idx<0||idx>=COD1_ALLY_INFO_COUNT)return;
+    Q_strncpyz(info,CG_ConfigString(CS_COD1_ALLY_INFO+idx),sizeof(info));
+    weapon=strchr(info,'|');if(!weapon)return;*weapon++=0;
+    CG_Cod1PromptText(345,216,info,.24f,1,green);
+    def=CW_Get(CW_Find(weapon));
+    if(def&&(role=CW_String(def,"AIOverlayDescription"))&&*role){
+        role=CG_Cod1MessageLocalize(role);
+        if(role)CG_Cod1PromptText(345,234,role,.24f,1,white);
+    }
+    if(cg_debugAnim.integer>2)CG_Printf("[Training ally caption] owner=%d/%d name=%s weapon=%s\n",hit->number,hit->cod1TurretActorGeneration,info,weapon);
+}
+
+
 static void CG_Draw2D( void ) {
 
 	// if we are taking a levelshot for the menu, don't draw anything
@@ -3367,6 +2713,24 @@ static void CG_Draw2D( void ) {
 	}
 
 	CG_DrawFlashBlendBehindHUD();
+
+
+    if (CodHud_Init()) {
+        CodHud_DamageIndicators();
+        if (cg.snap->ps.stats[STAT_HEALTH]>0 &&
+            cg.snap->ps.persistant[PERS_TEAM]!=TEAM_SPECTATOR) CodHud_Draw();
+        CG_Cod1HudElementsDraw();
+        CG_Cod1AllyCaption();
+        CG_Cod1DrawPickupNotice();
+        CG_Cod1VoiceSubtitleDraw();
+        CG_Cod1DrawMissionNotice();
+        if (!CG_Cod1ObjectivesDraw()) CG_DrawCenterString( qtrue );
+        if (cg.snap->ps.persistant[PERS_TEAM]!=TEAM_SPECTATOR)
+            CG_Cod1DrawUsePrompt();
+        if (!cg_paused.integer) CG_DrawUpperRight();
+        CG_DrawFlashBlend();
+        return;
+    }
 
 	if ( cg.snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR ) {
 		CG_DrawSpectator();
@@ -3412,7 +2776,7 @@ static void CG_Draw2D( void ) {
 
 	// don't draw center string if scoreboard is up
 	if ( !CG_DrawScoreboard() ) {
-		CG_DrawCenterString();
+		CG_DrawCenterString( qfalse );
 
 		CG_DrawObjectiveInfo();     // NERVE - SMF
 	}
@@ -3603,6 +2967,7 @@ void CG_DrawActive( stereoFrame_t stereoView ) {
 		cg.refdef.rdflags &= ~RDF_DRAWSKYBOX;
 	}
 
+    CG_R241TraceWorld();
 	trap_R_RenderScene( &cg.refdef );
 
 	// restore original viewpoint if running stereo
@@ -3614,7 +2979,7 @@ void CG_DrawActive( stereoFrame_t stereoView ) {
 	CG_TileClear();     //----(SA)	moved to 2d section to avoid 2d/3d fog-state problems
 
 	// draw status bar and other floating elements
+    CG_R241TraceHudBegin();
 	CG_Draw2D();
+    CG_R241TraceHudEnd();
 }
-
-

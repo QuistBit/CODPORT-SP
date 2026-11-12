@@ -57,20 +57,12 @@ IDI_ICON1               ICON    DISCARDABLE     "qe3.ico"
 
 /////////////////////////////////////////////////////////////////////////////
 //
-// Bitmap
-//
-
-IDB_BITMAP1             BITMAP  DISCARDABLE     "background.bmp"
-IDB_BITMAP2             BITMAP  DISCARDABLE     "clear.bmp"
-
-/////////////////////////////////////////////////////////////////////////////
-//
 // String Table
 //
 
 STRINGTABLE DISCARDABLE 
 BEGIN
-    IDS_STRING1             "Wolfenstein"
+    IDS_STRING1             COD1_WINDOW_TITLE
 END
 
 #endif    // English (U.S.) resources

@@ -356,7 +356,7 @@ LONG WINAPI MainWndProc(
 		r_fullscreen = Cvar_Get( "r_fullscreen", "1", CVAR_ARCHIVE | CVAR_LATCH );
 
 		MSH_MOUSEWHEEL = RegisterWindowMessage( "MSWHEEL_ROLLMSG" );
-		if ( r_fullscreen->integer ) {
+		if ( r_fullscreen->integer && !Cvar_VariableIntegerValue("r_borderless") ) {
 			WIN_DisableAltTab();
 		} else
 		{

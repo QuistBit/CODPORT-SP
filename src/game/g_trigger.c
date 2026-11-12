@@ -27,17 +27,388 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "g_local.h"
+#include "g_cod1_gsc_test.h"
+#include "g_cod1_entity_host.h"
+#include "g_cod1_path_entity_host.h"
+#include "g_cod1_gsc_event_payload.h"
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+#include "../qcommon/cod1_bsp.h"
+#include <limits.h>
+#endif
 
+void G_Cod1TriggerMultipleTouch( gentity_t *self, gentity_t *other, trace_t *trace );
+void G_Cod1TriggerUse( gentity_t *self, gentity_t *other, gentity_t *activator );
+void InitTrigger( gentity_t *self );
+
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+/* R86 TOUCH and R87 USE are opt-in bridges, not the original mission runtime.
+ * Only explicit inline models and flags zero are admitted. The model count
+ * comes from the same IBSP59 header contract as COD1_BSP_Parse: lump 27 has
+ * 48-byte records. No inline-count syscall is available to the game DLL. */
+static uint64_t cod1TriggerModelEpoch;
+static int cod1TriggerModelCount;
+static const char *cod1TriggerModelFailure;
+static int cod1TriggerDiagnostics;
+static int cod1TriggerAdmissions;
+static int cod1TriggerUseDiagnostics;
+static int cod1TriggerUseAdmissions;
+
+static void G_Cod1TriggerCacheEpoch( uint64_t epoch ) {
+	if ( cod1TriggerModelEpoch != epoch ) {
+		cod1TriggerModelEpoch = epoch;
+		cod1TriggerModelCount = 0;
+		cod1TriggerModelFailure = "BSP header unavailable";
+		cod1TriggerDiagnostics = 0;
+		cod1TriggerAdmissions = 0;
+		cod1TriggerUseDiagnostics = 0;
+		cod1TriggerUseAdmissions = 0;
+	}
+}
+
+static uint32_t G_Cod1TriggerReadLE32( const byte *p ) {
+	return (uint32_t)p[0] | ( (uint32_t)p[1] << 8 ) |
+		( (uint32_t)p[2] << 16 ) | ( (uint32_t)p[3] << 24 );
+}
+
+static int G_Cod1TriggerInlineIndex( const char *name ) {
+	int index = 0;
+	const char *p;
+	if ( !name || name[0] != '*' || !name[1] ) {
+		return 0;
+	}
+	for ( p = name + 1; *p; ++p ) {
+		int digit = *p - '0';
+		if ( digit < 0 || digit > 9 || index > ( INT_MAX - digit ) / 10 ) {
+			return 0;
+		}
+		index = index * 10 + digit;
+	}
+	return index;
+}
+
+static int G_Cod1TriggerModelCount( const GscEntityRef *ref ) {
+	byte header[COD1_BSP_HEADER_SIZE];
+	char mapname[MAX_QPATH], filename[MAX_QPATH + 16];
+	fileHandle_t file = 0;
+	int length, i, count = -1;
+	const char *failure = "BSP header unavailable";
+
+	if ( !G_Cod1EntitySameAllocation( ref ) ) {
+		return 0;
+	}
+	G_Cod1TriggerCacheEpoch( ref->epoch );
+	if ( cod1TriggerModelCount ) {
+		return cod1TriggerModelCount;
+	}
+	memset( mapname, 0, sizeof(mapname) );
+	trap_Cvar_VariableStringBuffer( "mapname", mapname, sizeof(mapname) );
+	if ( !G_Cod1EntitySameAllocation( ref ) ) {
+		return 0;
+	}
+	mapname[sizeof(mapname) - 1] = '\0';
+	if ( !mapname[0] ) {
+		goto cache;
+	}
+	Com_sprintf( filename, sizeof(filename), "maps/%s.bsp", mapname );
+	length = trap_FS_FOpenFile( filename, &file, FS_READ );
+	if ( !G_Cod1EntitySameAllocation( ref ) ) {
+		if ( file ) {
+			trap_FS_FCloseFile( file );
+		}
+		return 0;
+	}
+	if ( !file || length < COD1_BSP_HEADER_SIZE ) {
+		if ( file ) {
+			trap_FS_FCloseFile( file );
+			if ( !G_Cod1EntitySameAllocation( ref ) ) {
+				return 0;
+			}
+		}
+		goto cache;
+	}
+	memset( header, 0, sizeof(header) );
+	trap_FS_Read( header, sizeof(header), file );
+	if ( !G_Cod1EntitySameAllocation( ref ) ) {
+		trap_FS_FCloseFile( file );
+		return 0;
+	}
+	trap_FS_FCloseFile( file );
+	if ( !G_Cod1EntitySameAllocation( ref ) ) {
+		return 0;
+	}
+	failure = "unsupported or malformed BSP header";
+	if ( memcmp( header, "IBSP", 4 ) ||
+		 G_Cod1TriggerReadLE32( header + 4 ) != COD1_BSP_VERSION ) {
+		goto cache;
+	}
+	for ( i = 0; i < COD1_BSP_LUMP_COUNT; ++i ) {
+		uint32_t filelen = G_Cod1TriggerReadLE32( header + 8 + i * 8 );
+		uint32_t fileofs = G_Cod1TriggerReadLE32( header + 12 + i * 8 );
+		if ( !filelen && !fileofs ) {
+			continue;
+		}
+		if ( filelen > INT_MAX || fileofs < COD1_BSP_HEADER_SIZE ||
+			 fileofs > (uint32_t)length || filelen > (uint32_t)length - fileofs ) {
+			goto cache;
+		}
+	}
+	{
+		uint32_t modelBytes = G_Cod1TriggerReadLE32( header + 8 + COD1_BSP_LUMP_MODELS * 8 );
+		failure = "invalid BSP model count";
+		if ( !modelBytes || modelBytes % COD1_BSP_MODEL_STRIDE ) {
+			goto cache;
+		}
+		count = (int)( modelBytes / COD1_BSP_MODEL_STRIDE );
+		/* CM_LoadMap's BSP59 adapter exposes this count without truncation
+		 * and rejects a map above the shared engine handle limit. */
+		if ( count > MAX_INLINE_MODELS ) {
+			count = -1;
+			goto cache;
+		}
+	}
+cache:
+	/* A trap may end the map or reuse the slot. Never populate a new map's
+	 * cache, or continue initialization, on behalf of the old allocation. */
+	if ( !G_Cod1EntitySameAllocation( ref ) || G_Cod1EntityMapEpoch() != ref->epoch ) {
+		return 0;
+	}
+	cod1TriggerModelCount = count;
+	cod1TriggerModelFailure = failure;
+	return count;
+}
+
+static void G_Cod1TriggerInert( gentity_t *ent ) {
+	ent->touch = NULL;
+	ent->use = NULL;
+	ent->r.contents = 0;
+	ent->r.svFlags |= SVF_NOCLIENT;
+	ent->s.eType = ET_INVISIBLE;
+}
+
+static void G_Cod1TriggerRejected( gentity_t *ent, const GscEntityRef *ref, const char *reason, qboolean useBridge ) {
+	int *diagnostics;
+	if ( !G_Cod1EntitySameAllocation( ref ) ) {
+		return;
+	}
+	G_Cod1TriggerCacheEpoch( ref->epoch );
+	diagnostics = useBridge ? &cod1TriggerUseDiagnostics : &cod1TriggerDiagnostics;
+	/* Bounded map diagnostics; rejection itself never touches CM or targets. */
+	if ( *diagnostics < 8 ) {
+		++*diagnostics;
+		G_Printf( "CoD1 %s %s inert: entity=%d class=%.64s targetname=%.96s model=%.96s flags=%d reason=%s\n",
+			useBridge ? "R87" : "R86", useBridge ? "USE" : "TOUCH",
+			ent->s.number, ent->classname ? ent->classname : "<NULL>",
+			ent->targetname ? ent->targetname : "<NULL>",
+			ent->model ? ent->model : "<NULL>", ent->spawnflags, reason );
+	} else if ( *diagnostics == 8 ) {
+		++*diagnostics;
+		G_Printf( "CoD1 %s %s: further inert-trigger diagnostics suppressed for this map\n",
+			useBridge ? "R87" : "R86", useBridge ? "USE" : "TOUCH" );
+	}
+}
+
+static void G_Cod1SpawnEventTrigger( gentity_t *ent, const GscEntityRef *ref, qboolean useBridge ) {
+	int index, count;
+	int *admissions;
+	G_Cod1TriggerInert( ent );
+	if ( ent->spawnflags ) {
+		G_Cod1TriggerRejected( ent, ref, "unsupported spawnflags", useBridge );
+		return;
+	}
+	index = G_Cod1TriggerInlineIndex( ent->model );
+	if ( index <= 0 ) {
+		G_Cod1TriggerRejected( ent, ref, "explicit positive *N model required", useBridge );
+		return;
+	}
+	count = G_Cod1TriggerModelCount( ref );
+	if ( !G_Cod1EntitySameAllocation( ref ) ) {
+		return;
+	}
+	if ( count <= 0 || index >= count ) {
+		G_Cod1TriggerRejected( ent, ref, count <= 0 ? cod1TriggerModelFailure : "inline model out of range", useBridge );
+		return;
+	}
+	if ( useBridge ) {
+		ent->use = G_Cod1TriggerUse;
+	} else {
+		ent->touch = G_Cod1TriggerMultipleTouch;
+	}
+	InitTrigger( ent );
+	if ( !G_Cod1EntitySameAllocation( ref ) ) {
+		return;
+	}
+	trap_LinkEntity( ent );
+	if ( !G_Cod1EntitySameAllocation( ref ) ) {
+		return;
+	}
+	/* Separate bounded admission evidence; contacts themselves never log. */
+	if ( !useBridge && !ent->use && ent->touch == G_Cod1TriggerMultipleTouch ) {
+		G_Cod1PathTriggerMultipleBorn( ent, ref );
+	}
+	if ( useBridge && ent->use == G_Cod1TriggerUse && !ent->touch ) {
+		G_Cod1PathTriggerProjectedBorn( ent, ref, 3 );
+	}
+	admissions = useBridge ? &cod1TriggerUseAdmissions : &cod1TriggerAdmissions;
+	if ( *admissions < 16 ) {
+		++*admissions;
+		G_Printf( "CoD1 %s %s admitted: entity=%d class=%.64s targetname=%.96s inline=%d flags=0\n",
+			useBridge ? "R87" : "R86", useBridge ? "USE" : "TOUCH",
+			ent->s.number, ent->classname ? ent->classname : "<NULL>",
+			ent->targetname ? ent->targetname : "<NULL>", ent->s.modelindex );
+	} else if ( *admissions == 16 ) {
+		++*admissions;
+		G_Printf( "CoD1 %s %s: further admission diagnostics suppressed for this map\n",
+			useBridge ? "R87" : "R86", useBridge ? "USE" : "TOUCH" );
+	}
+}
+#endif
+
+/* A save-scannable public callback. Contact comes from the actual
+ * G_TouchTriggers capsule/brush dispatcher; no fake contact is generated. */
+void G_Cod1TriggerMultipleTouch( gentity_t *self, gentity_t *other, trace_t *trace ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	GscEntityRef selfRef, otherRef;
+	int selected;
+	if ( !G_Cod1EntityCapture( self, &selfRef ) ||
+		 !G_Cod1EntityCapture( other, &otherRef ) ) {
+		return;
+	}
+	selected = G_Cod1GscTestEntityEventsEnabled();
+	if ( !selected || !G_Cod1EntitySameAllocation( &selfRef ) ||
+		 !G_Cod1EntitySameAllocation( &otherRef ) ) {
+		return;
+	}
+	if ( self->touch != G_Cod1TriggerMultipleTouch || self->spawnflags ||
+		 !self->r.linked || !self->r.bmodel || !( self->r.contents & CONTENTS_TRIGGER ) ||
+		 !other->client || other->client->ps.stats[STAT_HEALTH] <= 0 ||
+		 other->aiCharacter || other->client->noclip || other->client->sess.sessionTeam == TEAM_SPECTATOR ) {
+		return;
+	}
+	/* This only marks matching waits ready. The normal next frame advances
+	 * the VM; no target chain, use action or RTCW wait/cooldown runs here. */
+	G_Cod1GscTestEntityTouchEvent( self, other );
+#else
+	(void)self;
+	(void)other;
+#endif
+	(void)trace;
+}
+
+/* Pure target qualification for the root's checked first-hit activation ray.
+ * A callback sentinel denotes admission by the shared bounded brush spawner;
+ * an ordinary trigger or another class cannot acquire this path by its name. */
+int G_Cod1TriggerUseEligible( const gentity_t *ent ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	return ent && ent->inuse && ent->classname && !strcmp( ent->classname, "trigger_use" ) &&
+		ent->use == G_Cod1TriggerUse && !ent->touch && !ent->spawnflags &&
+		ent->r.linked && ent->r.bmodel && ( ent->r.contents & CONTENTS_TRIGGER ) &&
+		ent->s.modelindex > 0 && ent->s.eType == ET_INVISIBLE && ( ent->r.svFlags & SVF_NOCLIENT );
+#else
+	(void)ent;
+	return 0;
+#endif
+}
+
+/* R87 bounded USE policy: only the checked command ray invokes this public
+ * engine-signature callback. No retail USE selector/hold/cooldown is claimed. */
+void G_Cod1TriggerUse( gentity_t *self, gentity_t *other, gentity_t *activator ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	GscEntityRef selfRef, playerRef;
+	int selected;
+	if ( other != activator || !G_Cod1EntityCapture( self, &selfRef ) ||
+		 !G_Cod1EntityCapture( activator, &playerRef ) ) {
+		return;
+	}
+	selected = G_Cod1GscTestEntityEventsEnabled();
+	if ( !selected || !G_Cod1EntitySameAllocation( &selfRef ) ||
+		 !G_Cod1EntitySameAllocation( &playerRef ) || !G_Cod1TriggerUseEligible( self ) ) {
+		return;
+	}
+	if ( !activator->client || activator->health <= 0 ||
+		 activator->client->ps.stats[STAT_HEALTH] <= 0 ||
+		 activator->client->sess.sessionTeam == TEAM_SPECTATOR ||
+		 ( activator->client->ps.pm_flags & PMF_LIMBO ) || activator->aiCharacter ||
+		 activator->client->ps.aiChar || ( activator->r.svFlags & SVF_CASTAI ) ||
+		 activator->client->noclip || activator->active || activator->melee ||
+		 activator->client->ps.persistant[PERS_HWEAPON_USE] ) {
+		return;
+	}
+	/* The existing owner-event bridge only wakes matching waits. Effects run
+	 * on the normal VM advance, never through targets or this collision path. */
+	G_Cod1GscTestEntityUseEvent( self, activator );
+#else
+	(void)self;
+	(void)other;
+	(void)activator;
+#endif
+}
+
+
+/* R50B: the original CoD trigger initializer (gamex86 0x20043890)
+ * calls syscall 0x31 with the entity, not a model-name string. CoDSP 0x449470
+ * uses the initialized unsigned model index at entity + 0x0c; index zero is
+ * valid. An absent map key therefore leaves the zero-initialized index in
+ * place. See docs/BSP59_SHIP_TRIGGER_BIND_R50B_20260929_RU.md for binary hashes.
+ *
+ * Translate that numeric contract at the retained RTCW string-ABI boundary.
+ * Do not write an invented model key into the entity/BSP, skip the entity, or
+ * weaken SV_SetBrushModel. Limit this bridge to authored CoD spawn data whose
+ * model key is really absent. A lost parsed value, runtime NULL or invalid
+ * spawn context must still reach the existing error and diagnostic.
+ */
+static qboolean G_Cod1TriggerHasAbsentModelKey( const gentity_t *self ) {
+	int i;
+
+	if ( self->model || !G_Cod1MapEntities() || !level.spawning ||
+		 level.numSpawnVars < 1 || level.numSpawnVars > MAX_SPAWN_VARS ) {
+		return qfalse;
+	}
+	for ( i = 0; i < level.numSpawnVars; ++i ) {
+		if ( !level.spawnVars[i][0] || !level.spawnVars[i][1] ||
+			 !Q_stricmp( level.spawnVars[i][0], "model" ) ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
 
 void InitTrigger( gentity_t *self ) {
+	char inlineName[32];
+	const char *bindName = self->model;
+	qboolean nativeIndexBind = G_Cod1TriggerHasAbsentModelKey( self );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	GscEntityRef checkedRef;
+	qboolean checkedEvent = self->touch == G_Cod1TriggerMultipleTouch || self->use == G_Cod1TriggerUse;
+	if ( checkedEvent && !G_Cod1EntityCapture( self, &checkedRef ) ) {
+		return;
+	}
+#endif
+
 	if ( !VectorCompare( self->s.angles, vec3_origin ) ) {
 		G_SetMovedir( self->s.angles, self->movedir );
 	}
 
-	trap_SetBrushModel( self, self->model );
+	if ( nativeIndexBind ) {
+		/* The index is not guessed here. Preserve the entity's initialized
+		 * index and let the existing CM_InlineModel check its range. */
+		Com_sprintf( inlineName, sizeof(inlineName), "*%d", self->s.modelindex );
+		bindName = inlineName;
+	}
+	trap_SetBrushModel( self, bindName );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if ( checkedEvent && !G_Cod1EntitySameAllocation( &checkedRef ) ) {
+		return;
+	}
+#endif
 
 	self->r.contents = CONTENTS_TRIGGER;        // replaces the -1 from trap_SetBrushModel
 	self->r.svFlags = SVF_NOCLIENT;
+	if ( nativeIndexBind ) {
+		G_Printf( "CoD1 BSP59_TRIGGER_BIND_R50B: entity=%d class=%.64s targetname=%.96s source=absent-model-key inline=%d originalModel=NULL bmodel=%d\n",
+			self->s.number, self->classname ? self->classname : "<NULL>",
+			self->targetname ? self->targetname : "<NULL>",
+			self->s.modelindex, self->r.bmodel );
+	}
 }
 
 
@@ -180,6 +551,23 @@ so, the basic time between firing is a random time between
 (wait - random) and (wait + random)
 */
 void SP_trigger_multiple( gentity_t *ent ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if ( G_Cod1MapEntities() && g_gametype.integer == GT_SINGLE_PLAYER ) {
+		GscEntityRef ref;
+		int selected;
+		if ( !G_Cod1EntityCapture( ent, &ref ) ) {
+			return;
+		}
+		selected = G_Cod1GscTestEntityEventsEnabled();
+		if ( !G_Cod1EntitySameAllocation( &ref ) ) {
+			return;
+		}
+		if ( selected ) {
+			G_Cod1SpawnEventTrigger( ent, &ref, qfalse );
+			return;
+		}
+	}
+#endif
 	G_SpawnFloat( "wait", "0.5", &ent->wait );
 	G_SpawnFloat( "random", "0", &ent->random );
 
@@ -193,6 +581,37 @@ void SP_trigger_multiple( gentity_t *ent ) {
 
 	InitTrigger( ent );
 	trap_LinkEntity( ent );
+}
+
+/* CoD-only registry entry supplied by the root under the GSC feature guard.
+ * Older modes retain the former unknown-class absence; no legacy USE fallback. */
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+#include "g_cod1_trigger_damage.inc"
+#include "g_cod1_trigger_lookat.inc"
+#endif
+void SP_trigger_use( gentity_t *ent ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	GscEntityRef ref;
+	int selected;
+	if ( !G_Cod1MapEntities() || g_gametype.integer != GT_SINGLE_PLAYER ) {
+		G_FreeEntity( ent );
+		return;
+	}
+	if ( !G_Cod1EntityCapture( ent, &ref ) ) {
+		return;
+	}
+	selected = G_Cod1GscTestEntityEventsEnabled();
+	if ( !G_Cod1EntitySameAllocation( &ref ) ) {
+		return;
+	}
+	if ( !selected ) {
+		G_FreeEntity( ent );
+		return;
+	}
+	G_Cod1SpawnEventTrigger( ent, &ref, qtrue );
+#else
+	G_FreeEntity( ent );
+#endif
 }
 
 
@@ -948,3 +1367,8 @@ void SP_trigger_objective_info( gentity_t *ent ) {
 
 
 // dhm - end
+
+int G_Cod1SignThreadCurrent(const GscEntityRef *ref,uint64_t birth) {
+    return ref && birth && birth==ref->generation && !level.spawning && !level.restarted &&
+           G_Cod1MapEntities() && G_Cod1EntityHost()->validate(NULL,ref) && Cod1LookAtSame(ref);
+}

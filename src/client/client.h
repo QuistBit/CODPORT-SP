@@ -36,6 +36,7 @@ If you have questions concerning this license or the applicable additional terms
 #include "snd_public.h"
 #include "../cgame/cg_public.h"
 #include "../game/bg_public.h"
+#include "../game/bg_cod1_keybinding.h"
 
 #define RETRANSMIT_TIMEOUT  3000    // time between connection packet retransmits
 
@@ -117,6 +118,8 @@ typedef struct {
 	int cgameUserHoldableValue;         // current holdable item to add to usercmd_t	//----(SA)	added
 	float cgameSensitivity;
 	int cgameCld;                       // NERVE - SMF
+    int cgameCod1AimValid;
+    float cgameCod1WeaponAngles[2];
 
 	// cmds[cmdNumber] is the predicted command, [cmdNumber-1] is the last
 	// properly generated command
@@ -315,9 +318,11 @@ typedef struct {
 	// rendering info
 	glconfig_t glconfig;
 	qhandle_t charSetShader;
+	fontInfo_t consoleFont;          // CoD fontImage_*.dat compatibility
+	qboolean consoleFontValid;
+	float consoleFontScale;           // fit native glyph metrics inside the 8x16 console cell
+	float consoleFontBaseline;        // baseline offset from the top of a console row
 	qhandle_t whiteShader;
-	qhandle_t consoleShader;
-	qhandle_t consoleShader2;   //----(SA)	added
 
 } clientStatic_t;
 
@@ -489,6 +494,12 @@ char *Key_KeynumToString( int keynum, qboolean bTranslate );
 extern int cl_connectedToPureServer;
 
 void CL_SystemInfoChanged( void );
+void CL_Cod1AmbientGamestateCheckpoint(int sequence);
+unsigned int CL_Cod1AmbientServerId(void);
+qboolean CL_Cod1KeyBindingQuery(cod1KeyBindingQuery_t *);
+qboolean CL_Cod1KeyBindingContext(cod1KeyBindingQuery_t *);
+qboolean CL_Cod1KeyBindingScan(int,char *,int);
+int CL_Cod1AmbientAuthorityReady(void);
 void CL_ParseServerMessage( msg_t *msg );
 
 //====================================================================

@@ -31,8 +31,18 @@ If you have questions concerning this license or the applicable additional terms
 // g_local.h -- local definitions for game module
 
 #include "q_shared.h"
+#include "bg_cod1_keybinding.h"
 #include "bg_public.h"
 #include "g_public.h"
+#include <stdint.h>
+#include "cod1_spatial.h"
+#include "cod1_navigation_resource.h"
+int trap_Cod1EntityParseRewind(void);
+int trap_Cod1NavigationResource(const cod1NavigationRequest_t *,cod1NavigationResource_t *,void *,uint32_t);
+#include "cod1_dobj.h"
+#include "cod1_precache.h"
+#include "cod1_actor_model_apply.h"
+#include "cod1_actor_registered_models.h"
 
 //==================================================================
 
@@ -280,10 +290,16 @@ struct gentity_s {
 	int damage;
 	int splashDamage;           // quad will increase this without increasing radius
 	int splashRadius;
+	int cod1ExplosionOuterDamage;
+	int cod1ExplosionType;
+	qboolean cod1ImpactExplode;
 	int methodOfDeath;
 	int splashMethodOfDeath;
 
 	int count;
+	qboolean cod1DroppedAmmo;
+	int cod1DropClip, cod1DropReserve;
+	int cod1DropOwner, cod1DropOwnerUntil;
 
 	gentity_t   *chain;
 	gentity_t   *enemy;
@@ -699,7 +715,6 @@ typedef struct {
 	int bulletRicochetSound;
 	// done.
 
-	int snipersound;
 
 //----(SA)	added
 	int numSecrets;
@@ -742,6 +757,22 @@ qboolean    G_SpawnFloat( const char *key, const char *defaultString, float *out
 qboolean    G_SpawnInt( const char *key, const char *defaultString, int *out );
 qboolean    G_SpawnVector( const char *key, const char *defaultString, float *out );
 void        G_SpawnEntitiesFromString( void );
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+typedef struct cod1DirectFogEvent_s cod1DirectFogEvent_t;
+typedef struct cod1DirectFogVisibility_s cod1DirectFogVisibility_t;
+/* Generic native-format producer and future five-float GSC builtin boundary.
+ * Neither function currently loads or interprets a GSC script. */
+qboolean G_Cod1DirectFogEvent( const cod1DirectFogEvent_t *event );
+qboolean G_Cod1DirectFogClear( int transitionMs );
+qboolean G_Cod1SetExpFog( float density, float red, float green, float blue,
+	float transitionSeconds );
+qboolean G_Cod1SetCullFog( float nearDist, float farDist, float red,
+	float green, float blue, float transitionSeconds );
+/* Consumes a tagged saved cache only on a verified CoD BSP59 map. */
+qboolean G_Cod1DirectFogRestoreCache( const char *saved );
+qboolean G_Cod1DirectFogRetainedActive( void );
+qboolean G_Cod1DirectFogVisibility( cod1DirectFogVisibility_t *out );
+#endif
 char *G_NewString( const char *string );
 // Ridah
 qboolean G_CallSpawn( gentity_t *ent );
@@ -776,6 +807,30 @@ int ArmorIndex( gentity_t *ent );
 void Fill_Clip( playerState_t *ps, int weapon );
 void    Add_Ammo( gentity_t *ent, int weapon, int count, qboolean fillClip );
 void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace );
+/* R132 GAME-owned RNG foundation only; no script native admission.
+ * Fresh SP in the native WIP profile owns one unsigned32 stream, independently
+ * of VM/session/mode. Explicit legacy outside that scope retains CRT behavior.
+ * FRESH_SP names a no-save map epoch, including confirmed fast restart.
+ * Retirement of an admitted owner never falls back to the CRT branch. */
+enum { COD1_RNG_POLICY_LEGACY=0, COD1_RNG_POLICY_FRESH_SP=1 };
+void G_Cod1RngOwnerBegin(int restart);
+void G_Cod1RngOwnerEnd(void);
+int G_Cod1RngOwnerPolicy(void);
+qboolean G_Cod1RngOwnerReady(void);
+qboolean G_Cod1RngDraw15(uint32_t *out);
+qboolean G_Cod1RngDrawPair(uint32_t *pitch,uint32_t *roll);
+
+qboolean G_Cod1MapEntities( void );
+gentity_t *G_Cod1AimedPickupCandidate( gentity_t *player, float *score );
+qboolean G_Cod1ApplyAimedPickupCandidate( gentity_t *player, gentity_t *item, qboolean hint );
+gentity_t *G_Cod1AimedWeaponItem( gentity_t *player );
+qboolean G_Cod1NativeHealthItem( const gitem_t *item );
+qboolean G_Cod1AimedWeaponLookTraceAllows( const trace_t *lookTrace );
+qboolean G_Cod1ApplyAimedWeaponHint( gentity_t *player );
+qboolean G_Cod1TryAimedWeaponUse( gentity_t *player, const trace_t *lookTrace );
+qboolean G_Cod1ApplyAimedPickupHint( gentity_t *player );
+qboolean G_Cod1TryAimedPickupUse( gentity_t *player, const trace_t *lookTrace );
+qboolean G_ItemAutoTouchAllowed( gentity_t *item, gentity_t *player );
 
 // Touch_Item_Auto is bound by the rules of autoactivation (if cg_autoactivate is 0, only touch on "activate")
 void Touch_Item_Auto( gentity_t *ent, gentity_t *other, trace_t *trace );
@@ -807,7 +862,7 @@ gentity_t *G_TempEntity( vec3_t origin, int event );
 void    G_Sound( gentity_t *ent, int soundIndex );
 void    G_AnimScriptSound( int soundIndex, vec3_t org, int client );
 void    G_FreeEntity( gentity_t *e );
-//qboolean	G_EntitiesFree( void );
+qboolean G_EntitiesFree( void );
 
 void    G_TouchTriggers( gentity_t *ent );
 void    G_TouchSolids( gentity_t *ent );
@@ -832,6 +887,14 @@ void G_ProcessTagConnect( gentity_t *ent, qboolean clearAngles );
 qboolean CanDamage( gentity_t *targ, vec3_t origin );
 void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec3_t dir, vec3_t point, int damage, int dflags, int mod );
 qboolean G_RadiusDamage( vec3_t origin, gentity_t *attacker, float damage, float radius, gentity_t *ignore, int mod );
+qboolean G_Cod1RadiusDamage( vec3_t origin, gentity_t *attacker, float innerDamage, float outerDamage, float radius, gentity_t *ignore, int mod );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+/* R113 selected script blast only; current is a copied caller/session lease.
+ * Unsupported actor/model LOS refuses before damage; generic paths unchanged. */
+int G_Cod1ScriptRadiusDamage(const float origin[3], float radius, float innerDamage,
+    float outerDamage, int (*current)(void *), void *user, char *error, size_t capacity);
+int G_Cod1ScriptBlastNonActor(const gentity_t *entity);
+#endif
 void body_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int meansOfDeath );
 void TossClientItems( gentity_t *self );
 
@@ -853,7 +916,6 @@ int G_PredictMissile( gentity_t *ent, int duration, vec3_t endPos, qboolean allo
 void G_RunSpit( gentity_t *ent );
 void G_RunDebris( gentity_t *ent );
 
-void G_RunCrowbar( gentity_t *ent );
 
 //----(SA) removed unused q3a weapon firing
 gentity_t *fire_grenade( gentity_t *self, vec3_t start, vec3_t aimdir, int grenadeWPID );
@@ -868,7 +930,6 @@ gentity_t *fire_mortar( gentity_t *self, vec3_t start, vec3_t dir );
 
 gentity_t *fire_zombiespit( gentity_t *self, vec3_t start, vec3_t dir );
 gentity_t *fire_zombiespirit( gentity_t *self, gentity_t *bolt, vec3_t start, vec3_t dir );
-gentity_t *fire_crowbar( gentity_t *self, vec3_t start, vec3_t dir );
 gentity_t *fire_flamebarrel( gentity_t *self, vec3_t start, vec3_t dir );
 // done
 
@@ -905,10 +966,8 @@ qboolean LogAccuracyHit( gentity_t *target, gentity_t *attacker );
 void CalcMuzzlePoint( gentity_t *ent, int weapon, vec3_t forward, vec3_t right, vec3_t up, vec3_t muzzlePoint );
 void SnapVectorTowards( vec3_t v, vec3_t to );
 trace_t *CheckMeleeAttack( gentity_t *ent, float dist, qboolean isTest );
+void G_Cod1MeleeAttack( gentity_t *ent, int definitionIndex );
 gentity_t *weapon_grenadelauncher_fire( gentity_t *ent, int grenadeWPID );
-// Rafael
-gentity_t *weapon_crowbar_throw( gentity_t *ent );
-
 void CalcMuzzlePoints( gentity_t *ent, int weapon );
 //----(SA) commented out as we have no hook
 //void Weapon_HookFree (gentity_t *ent);
@@ -947,6 +1006,7 @@ qboolean G_FilterPacket( char *from );
 // g_weapon.c
 //
 void FireWeapon( gentity_t *ent );
+qboolean G_Cod1FireWeaponEvent(gentity_t *ent,int event,int parameter);
 
 //
 // p_hud.c
@@ -1052,6 +1112,15 @@ void BotTestAAS( vec3_t origin );
 
 // g_cmd.c
 void Cmd_Activate_f( gentity_t *ent );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+/* R89 mode5 only: shared hint/action selector; 0 preserves a stable legacy target. */
+int G_Cod1UseSelect( gentity_t *player, qboolean hint );
+/* Pure borrowed selector snapshot guard for nested aimed-pickup traps. */
+int G_Cod1UseSelectionStable( gentity_t *player );
+/* Mode/config revalidation for nested queries; context-null is a no-op. */
+int G_Cod1UseSelectionReady( gentity_t *player );
+void G_Cod1UseSelectionReject( void );
+#endif
 int Cmd_WolfKick_f( gentity_t *ent );
 // Ridah
 
@@ -1077,6 +1146,7 @@ void Props_Chair_Skyboxtouch( gentity_t *ent );
 
 extern level_locals_t level;
 extern gentity_t g_entities[MAX_GENTITIES];
+extern gclient_t g_clients[MAX_CLIENTS];
 extern gentity_t       *g_camEnt;
 
 #define FOFS( x ) ( (int)&( ( (gentity_t *)0 )->x ) )
@@ -1176,6 +1246,7 @@ void    trap_Argv( int n, char *buffer, int bufferLength );
 void    trap_Args( char *buffer, int bufferLength );
 int     trap_FS_FOpenFile( const char *qpath, fileHandle_t *f, fsMode_t mode );
 void    trap_FS_Read( void *buffer, int len, fileHandle_t f );
+int trap_FS_ReadCount( void *buffer, int len, fileHandle_t f );
 int     trap_FS_Write( const void *buffer, int len, fileHandle_t f );
 int     trap_FS_Rename( const char *from, const char *to );
 void    trap_FS_FCloseFile( fileHandle_t f );
@@ -1190,6 +1261,15 @@ void    trap_Cvar_VariableStringBuffer( const char *var_name, char *buffer, int 
 void    trap_LocateGameData( gentity_t *gEnts, int numGEntities, int sizeofGEntity_t, playerState_t *gameClients, int sizeofGameClient );
 void    trap_DropClient( int clientNum, const char *reason );
 void    trap_SendServerCommand( int clientNum, const char *text );
+qboolean trap_Cod1TrySendServerCommand( int clientNum, const char *text );
+qboolean trap_Cod1TrySetHudMarker( const char *value, const char *expected );
+float trap_Cod1CvarValue( const char *name );
+qboolean trap_Cod1LocalizedAcquire(char*,int);
+qboolean trap_Cod1LocalizedRelease(const char*);
+#include "cod1_localized_startup.h"
+qboolean trap_Cod1LocalizedStartup(const cod1LocalizedStartup_t*);
+qboolean trap_Cod1TrySetLocalizedConfigstring( int index, const char *text, const char *expected, const char *owner );
+qboolean trap_Cod1KeyBindingQuery( cod1KeyBindingQuery_t *query );
 void    trap_SetConfigstring( int num, const char *string );
 void    trap_GetConfigstring( int num, char *buffer, int bufferSize );
 void    trap_GetUserinfo( int num, char *buffer, int bufferSize );
@@ -1198,6 +1278,34 @@ void    trap_GetServerinfo( char *buffer, int bufferSize );
 void    trap_SetBrushModel( gentity_t *ent, const char *name );
 void    trap_Trace( trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask );
 void    trap_TraceCapsule( trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask );
+/* R89 private engine query: exact admitted BSP59 inline use geometry. */
+void    trap_TraceUseEntity( trace_t *results, const vec3_t start, const vec3_t end, int entityNum );
+/* R103 checked native-only game/engine spatial bridge. */
+
+void G_Cod1BulletDamageTriggers(const vec3_t,const vec3_t,gentity_t *,int);
+qboolean G_Cod1GscTestCarbineActive(void);
+int G_Cod1GscTestCarbineSpawnAllowed(const char *);
+
+int trap_Cod1SpatialCapsuleTrace(const cod1SpatialTraceQuery_t *query, trace_t *results);
+int trap_Cod1SpatialPointTrace(const cod1SpatialTraceQuery_t *query, trace_t *results);
+int trap_Cod1SpatialArea(const cod1SpatialAreaQuery_t *query, int *slots, int capacity, int *count);
+int trap_Cod1SpatialSight(const cod1SpatialSightQuery_t *query, int *blocked);
+int trap_Cod1SpatialActorLink(const cod1SpatialActorLink_t *request);
+int trap_Cod1SpatialActorUnlink(const cod1SpatialActorUnlink_t *request);
+int trap_Cod1PathSight(const cod1PathSightQuery_t*,int*);
+int trap_Cod1SpatialActorContents(const cod1SpatialActorContents_t *request);
+int trap_Cod1SpatialSceneReset(const cod1SpatialSceneReset_t *request);
+int trap_Cod1DObjBuild(const cod1DObjBuild_t *request, cod1DObjSummary_t *out);
+int trap_Cod1DObjFree(const cod1DObjFree_t *request);
+int trap_Cod1DObjSceneReset(const cod1DObjSceneReset_t *request);
+int trap_Cod1DObjQuery(const cod1DObjQuery_t *request, cod1DObjQueryResult_t *out);
+int trap_Cod1ModelPrecache(const cod1ModelPrecache_t *request);
+int trap_Cod1ModelResourceReference(const cod1ModelResourceReference_t *request,
+                                  cod1ModelResourceReference_t *out);
+int trap_Cod1ActorModelApply(const cod1ActorModelApply_t *request,
+    cod1ActorModelApplyResult_t *out);
+int trap_Cod1ActorRegisteredModelsApply(const cod1ActorRegisteredModelsApply_t *request,
+    cod1ActorModelApplyResult_t *out);
 int     trap_PointContents( const vec3_t point, int passEntityNum );
 qboolean trap_InPVS( const vec3_t p1, const vec3_t p2 );
 qboolean trap_InPVSIgnorePortals( const vec3_t p1, const vec3_t p2 );
@@ -1390,3 +1498,10 @@ typedef enum
 	shard_ceramic,
 	shard_rubble
 } shards_t;
+
+/* R225 selected original grenade target segment producer. */
+int G_Cod1GscTestGrenadeDamageActive(void);
+int G_Cod1GrenadeDamageTriggers(const vec3_t,const vec3_t,gentity_t *);
+
+/* R226 original training grenade-target damage receiver. */
+int G_Cod1DamageTriggerReceive(gentity_t *,gentity_t *,int,int,int);

@@ -130,10 +130,26 @@ float Cvar_VariableValue( const char *var_name ) {
 Cvar_VariableIntegerValue
 ============
 */
-int Cvar_VariableIntegerValue( const char *var_name ) {
-	cvar_t  *var;
+/* Repeated game syscalls commonly use a literal name. Cache its resolved
+ * record, never its integer value. The caller's name may be mutable or
+ * reused at the same address, so confirm its current spelling on every hit. */
+typedef struct {
+    size_t queryAddress;
+    cvar_t *record;
+} cvarIntegerLookup_t;
+static cvarIntegerLookup_t cvarIntegerLookups[256];
 
+int Cvar_VariableIntegerValue( const char *var_name ) {
+	cvar_t *var;
+	size_t address = (size_t)var_name;
+	cvarIntegerLookup_t *entry = &cvarIntegerLookups[((address >> 2) ^ (address >> 10)) & 255];
+
+	if ( entry->record && entry->queryAddress == address && !strcmp(var_name, entry->record->name) ) {
+		return entry->record->integer;
+	}
 	var = Cvar_FindVar( var_name );
+	entry->queryAddress = address;
+	entry->record = var;
 	if ( !var ) {
 		return 0;
 	}
@@ -286,6 +302,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	hash = generateHashValue( var_name );
 	var->hashNext = hashTable[hash];
 	hashTable[hash] = var;
+	memset( cvarIntegerLookups, 0, sizeof(cvarIntegerLookups) );
 
 	return var;
 }
@@ -553,6 +570,23 @@ Cvar_SetU_f
 As Cvar_Set, but also flags it as userinfo
 ============
 */
+/* CoD menu compatibility: copy a value through the normal protected setter.
+ * Do not execute/reparse the value as console text (provider names contain spaces).
+ * A missing source is an error, not an instruction to erase the destination. */
+static void Cvar_SetFromCvar_f( void ) {
+	cvar_t *source;
+	if ( Cmd_Argc() != 3 ) {
+		Com_Printf( "usage: setfromcvar <destination> <source>\n" );
+		return;
+	}
+	source = Cvar_FindVar( Cmd_Argv( 2 ) );
+	if ( !source ) {
+		Com_Printf( "setfromcvar: source %s does not exist\n", Cmd_Argv( 2 ) );
+		return;
+	}
+	Cvar_Set2( Cmd_Argv( 1 ), source->string, qfalse );
+}
+
 void Cvar_SetU_f( void ) {
 	cvar_t  *v;
 
@@ -746,6 +780,7 @@ void Cvar_Restart_f( void ) {
 
 		// throw out any variables the user created
 		if ( var->flags & CVAR_USER_CREATED ) {
+			memset( cvarIntegerLookups, 0, sizeof(cvarIntegerLookups) );
 			*prev = var->next;
 			if ( var->name ) {
 				Z_Free( var->name );
@@ -899,6 +934,7 @@ void Cvar_Init( void ) {
 
 	Cmd_AddCommand( "toggle", Cvar_Toggle_f );
 	Cmd_AddCommand( "set", Cvar_Set_f );
+	Cmd_AddCommand( "setfromcvar", Cvar_SetFromCvar_f );
 	Cmd_AddCommand( "sets", Cvar_SetS_f );
 	Cmd_AddCommand( "setu", Cvar_SetU_f );
 	Cmd_AddCommand( "seta", Cvar_SetA_f );

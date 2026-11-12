@@ -78,6 +78,10 @@ int     trap_FS_FOpenFile( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
 	return syscall( G_FS_FOPEN_FILE, qpath, f, mode );
 }
 
+int trap_FS_ReadCount( void *buffer, int len, fileHandle_t f ) {
+ return syscall( G_FS_READ, buffer, len, f );
+}
+
 void    trap_FS_Read( void *buffer, int len, fileHandle_t f ) {
 	syscall( G_FS_READ, buffer, len, f );
 }
@@ -140,6 +144,35 @@ void trap_SendServerCommand( int clientNum, const char *text ) {
 	syscall( G_SEND_SERVER_COMMAND, clientNum, text );
 }
 
+qboolean trap_Cod1TrySendServerCommand( int clientNum, const char *text ) {
+	return syscall( G_COD1_TRY_SEND_SERVER_COMMAND, clientNum, text ) ? qtrue : qfalse;
+}
+
+float trap_Cod1CvarValue( const char *name ) {
+	union { int i; float f; } result;
+	result.i = syscall( G_COD1_CVAR_VALUE, name );
+	return result.f;
+}
+
+qboolean trap_Cod1LocalizedAcquire(char*out,int cap){return syscall(G_COD1_LOCALIZED_ACQUIRE,out,cap)?qtrue:qfalse;}
+qboolean trap_Cod1LocalizedRelease(const char*owner){return syscall(G_COD1_LOCALIZED_RELEASE,owner)?qtrue:qfalse;}
+qboolean trap_Cod1LocalizedStartup(const cod1LocalizedStartup_t*q){return syscall(G_COD1_LOCALIZED_STARTUP,q)?qtrue:qfalse;}
+int trap_Cod1EntityParseRewind(void){return (int)syscall(G_COD1_ENTITY_PARSE_REWIND);}
+int trap_Cod1NavigationResource(const cod1NavigationRequest_t*q,cod1NavigationResource_t*out,void*buffer,uint32_t capacity){return (int)syscall(G_COD1_NAVIGATION_RESOURCE,q,out,buffer,capacity);}
+
+qboolean trap_Cod1TrySetLocalizedConfigstring( int index, const char *text, const char *expected, const char *owner ) {
+	return syscall( G_COD1_TRY_SET_LOCALIZED_CONFIGSTRING, index, text, expected, owner ) ? qtrue : qfalse;
+}
+
+qboolean trap_Cod1TrySetHudMarker( const char *value, const char *expected ) {
+	return syscall( G_COD1_TRY_SET_HUD_MARKER, value, expected ) ? qtrue : qfalse;
+}
+
+qboolean trap_Cod1KeyBindingQuery( cod1KeyBindingQuery_t *query ) {
+	uint64_t pointer = (uint64_t)(uintptr_t)query;
+	return syscall( G_COD1_KEYBINDING_QUERY, (int)(uint32_t)pointer, (int)(uint32_t)(pointer >> 32) ) ? qtrue : qfalse;
+}
+
 void trap_SetConfigstring( int num, const char *string ) {
 	syscall( G_SET_CONFIGSTRING, num, string );
 }
@@ -160,12 +193,131 @@ void trap_GetServerinfo( char *buffer, int bufferSize ) {
 	syscall( G_GET_SERVERINFO, buffer, bufferSize );
 }
 
+/* BSP59_BRUSH_BIND_DIAG_R1: error-path evidence only. The server still
+ * receives the unchanged pointer and retains its SV_SetBrushModel guard.
+ * G_Printf has a legacy 1024-byte buffer: keep each text chunk bounded.
+ * field is always a constant literal supplied below, never a format string.
+ */
+static void G_Cod1BrushBindTraceText( const char *field, int pair, const char *text ) {
+	int offset, length;
+
+	if ( !text ) {
+		G_Printf( "CoD1 brush bind text: field=%s pair=%d value=<NULL>\n", field, pair );
+		return;
+	}
+	length = (int)strlen( text );
+	if ( !length ) {
+		G_Printf( "CoD1 brush bind text: field=%s pair=%d length=0 value=\"\"\n", field, pair );
+		return;
+	}
+	for ( offset = 0; offset < length; offset += 384 ) {
+		G_Printf( "CoD1 brush bind text: field=%s pair=%d offset=%d length=%d value=\"%.*s\"\n",
+			field, pair, offset, length, 384, text + offset );
+	}
+}
+
+static void G_Cod1BrushBindTraceNull( const gentity_t *ent ) {
+	char mapname[MAX_QPATH];
+	int i;
+
+	memset( mapname, 0, sizeof(mapname) );
+	trap_Cvar_VariableStringBuffer( "mapname", mapname, sizeof(mapname) );
+	mapname[sizeof(mapname) - 1] = '\0';
+	G_Printf( "CoD1 BSP59_BRUSH_BIND_DIAG_R1: argument=NULL map=%.63s entity=%d spawning=%d rawPairs=%d\n",
+		mapname, ent ? ent->s.number : -1, level.spawning, level.numSpawnVars );
+	if ( ent ) {
+		G_Printf( "CoD1 brush bind entity: inuse=%d type=%d flags=%d origin=(%.9g %.9g %.9g) angles=(%.9g %.9g %.9g)\n",
+			ent->inuse, ent->s.eType, ent->spawnflags,
+			ent->s.origin[0], ent->s.origin[1], ent->s.origin[2],
+			ent->s.angles[0], ent->s.angles[1], ent->s.angles[2] );
+		G_Cod1BrushBindTraceText( "classname", -1, ent->classname );
+		G_Cod1BrushBindTraceText( "entity-model", -1, ent->model );
+		G_Cod1BrushBindTraceText( "entity-model2", -1, ent->model2 );
+		G_Cod1BrushBindTraceText( "targetname", -1, ent->targetname );
+		G_Cod1BrushBindTraceText( "target", -1, ent->target );
+		G_Cod1BrushBindTraceText( "scriptName", -1, ent->scriptName );
+	}
+	/* These are the active spawn context, not necessarily the same object:
+	 * a spawn callback may itself create and bind a child entity. Do not dump
+	 * stale spawnVars during runtime/save restoration or index past bounds.
+	 */
+	if ( level.spawning && level.numSpawnVars >= 0 && level.numSpawnVars <= MAX_SPAWN_VARS ) {
+		G_Printf( "CoD1 brush bind source: active-spawnVars; caller-context-only\n" );
+		for ( i = 0; i < level.numSpawnVars; ++i ) {
+			G_Cod1BrushBindTraceText( "spawn-key", i, level.spawnVars[i][0] );
+			G_Cod1BrushBindTraceText( "spawn-value", i, level.spawnVars[i][1] );
+		}
+	} else {
+		G_Printf( "CoD1 brush bind source: inactive-or-invalid-count; no raw pairs read\n" );
+	}
+	G_Printf( "CoD1 brush bind diagnostic end: forwarding unchanged NULL to server; no entity skipped\n" );
+}
+
 void trap_SetBrushModel( gentity_t *ent, const char *name ) {
+	if ( !name && G_Cod1MapEntities() ) {
+		G_Cod1BrushBindTraceNull( ent );
+	}
 	syscall( G_SET_BRUSH_MODEL, ent, name );
 }
 
 void trap_Trace( trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask ) {
 	syscall( G_TRACE, results, start, mins, maxs, end, passEntityNum, contentmask );
+}
+
+/* Private port extension; engine and game DLL must be rebuilt together. */
+void trap_TraceUseEntity(trace_t *results, const vec3_t start, const vec3_t end, int entityNum) {
+	syscall(G_TRACE_USE_ENTITY, results, start, end, entityNum);
+}
+
+/* R103 private native-only imports. Request pointers are decoded by VMA in
+ * the paired engine; original contents/flags remain typed request data. */
+int trap_Cod1SpatialCapsuleTrace(const cod1SpatialTraceQuery_t *query, trace_t *results) {
+	return syscall(G_COD1_SPATIAL_CAPSULE_TRACE, query, results);
+}
+
+int trap_Cod1SpatialPointTrace(const cod1SpatialTraceQuery_t *query, trace_t *results) {
+	return syscall(G_COD1_SPATIAL_POINT_TRACE, query, results);
+}
+
+int trap_Cod1SpatialArea(const cod1SpatialAreaQuery_t *query, int *slots, int capacity, int *count) {
+	return syscall(G_COD1_SPATIAL_AREA, query, slots, capacity, count);
+}
+
+int trap_Cod1SpatialSight(const cod1SpatialSightQuery_t *query, int *blocked) {
+	return syscall(G_COD1_SPATIAL_SIGHT, query, blocked);
+}
+
+int trap_Cod1SpatialActorLink(const cod1SpatialActorLink_t *request) {
+	return syscall(G_COD1_SPATIAL_ACTOR_LINK, request);
+}
+
+int trap_Cod1SpatialActorUnlink(const cod1SpatialActorUnlink_t *request) {
+	return syscall(G_COD1_SPATIAL_ACTOR_UNLINK, request);
+}
+
+int trap_Cod1PathSight(const cod1PathSightQuery_t*q,int*out){return syscall(G_COD1_PATH_SIGHT,q,out);}
+int trap_Cod1SpatialActorContents(const cod1SpatialActorContents_t *request) {
+	return syscall(G_COD1_SPATIAL_ACTOR_CONTENTS, request);
+}
+
+int trap_Cod1SpatialSceneReset(const cod1SpatialSceneReset_t *request) {
+	return syscall(G_COD1_SPATIAL_SCENE_RESET, request);
+}
+
+int trap_Cod1DObjBuild(const cod1DObjBuild_t *request, cod1DObjSummary_t *out) {
+	return syscall(G_COD1_DOBJ_BUILD, request, out);
+}
+
+int trap_Cod1DObjFree(const cod1DObjFree_t *request) {
+	return syscall(G_COD1_DOBJ_FREE, request);
+}
+
+int trap_Cod1DObjSceneReset(const cod1DObjSceneReset_t *request) {
+	return syscall(G_COD1_DOBJ_SCENE_RESET, request);
+}
+
+int trap_Cod1DObjQuery(const cod1DObjQuery_t *request, cod1DObjQueryResult_t *out) {
+	return syscall(G_COD1_DOBJ_QUERY, request, out);
 }
 
 void trap_TraceCapsule( trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask ) {
@@ -808,4 +960,20 @@ void trap_BotResetWeaponState( int weaponstate ) {
 
 int trap_GeneticParentsAndChildSelection( int numranks, float *ranks, int *parent1, int *parent2, int *child ) {
 	return syscall( BOTLIB_AI_GENETIC_PARENTS_AND_CHILD_SELECTION, numranks, ranks, parent1, parent2, child );
+}
+
+int trap_Cod1ModelPrecache(const cod1ModelPrecache_t *request) {
+	return syscall(G_COD1_RESOURCE_MODEL_PRECACHE, request);
+}
+int trap_Cod1ModelResourceReference(const cod1ModelResourceReference_t *request,
+                                  cod1ModelResourceReference_t *out) {
+	return syscall(G_COD1_MODEL_RESOURCE_REFERENCE, request, out);
+}
+int trap_Cod1ActorModelApply(const cod1ActorModelApply_t *request,
+    cod1ActorModelApplyResult_t *out) {
+	return syscall(G_COD1_ACTOR_MODEL_APPLY, request, out);
+}
+int trap_Cod1ActorRegisteredModelsApply(const cod1ActorRegisteredModelsApply_t *request,
+    cod1ActorModelApplyResult_t *out) {
+	return syscall(G_COD1_ACTOR_REGISTERED_MODELS_APPLY, request, out);
 }

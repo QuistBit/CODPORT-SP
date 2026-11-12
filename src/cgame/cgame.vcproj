@@ -908,7 +908,9 @@
 			RelativePath="cgame.def"
 			>
 		</File>
-	</Files>
+	<File RelativePath="..\game\cod_step.c" />
+	<File RelativePath="..\game\cod_jump_land.c" />
+</Files>
 	<Globals>
 	</Globals>
 </VisualStudioProject>

@@ -30,6 +30,8 @@ If you have questions concerning this license or the applicable additional terms
 // of event processing
 
 #include "cg_local.h"
+#include "cg_cod1_efx.h"
+#include "cg_cod1_brass.h"
 
 
 /*

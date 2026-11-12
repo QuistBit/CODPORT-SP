@@ -442,6 +442,7 @@ void CL_ParseGamestate( msg_t *msg ) {
 
 	// parse serverId and other cvars
 	CL_SystemInfoChanged();
+    CL_Cod1AmbientGamestateCheckpoint(clc.serverCommandSequence);
 
 	// reinitialize the filesystem if the game directory has changed
 	if ( FS_ConditionalRestart( clc.checksumFeed ) ) {

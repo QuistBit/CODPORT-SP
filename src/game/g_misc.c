@@ -35,6 +35,7 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include "g_local.h"
+#include "g_cod1_entity_host.h"
 
 extern void AimAtTarget( gentity_t * self );
 
@@ -116,6 +117,28 @@ TELEPORTERS
 
 =================================================================================
 */
+/* Port-only teleport effects are linked for the PVS and have no native
+ * collision body. Remember their actual constructor and player allocation. */
+static struct {GscEntityRef event,player;int time,kind;} cod1TeleportEffects[MAX_GENTITIES];
+static void RememberTeleportEffect(gentity_t *ent,gentity_t *player){
+    GscEntityRef effect,owner;
+    if(!G_Cod1MapEntities() || !G_Cod1EntityCapture(ent,&effect) || !G_Cod1EntityCapture(player,&owner))return;
+    cod1TeleportEffects[effect.slot].event=effect;cod1TeleportEffects[effect.slot].player=owner;
+    cod1TeleportEffects[effect.slot].time=ent->eventTime;cod1TeleportEffects[effect.slot].kind=ent->s.eType;
+}
+int G_Cod1TeleportEffectCurrent(const GscEntityRef *ref){
+    const gentity_t *ent;
+    if(!G_Cod1EntitySameAllocation(ref) || memcmp(ref,&cod1TeleportEffects[ref->slot].event,sizeof(*ref)) ||
+       !G_Cod1EntitySameAllocation(&cod1TeleportEffects[ref->slot].player))return 0;
+    ent=&g_entities[ref->slot];
+    return ent->s.clientNum==(int)cod1TeleportEffects[ref->slot].player.slot &&
+        ent->eventTime==cod1TeleportEffects[ref->slot].time && ent->r.eventTime==ent->eventTime &&
+        level.time>=ent->eventTime && ent->s.eType==cod1TeleportEffects[ref->slot].kind &&
+        (ent->s.eType==ET_EVENTS+EV_PLAYER_TELEPORT_IN || ent->s.eType==ET_EVENTS+EV_PLAYER_TELEPORT_OUT) &&
+        ent->classname && !strcmp(ent->classname,"tempEntity") && ent->freeAfterEvent && !ent->unlinkAfterEvent &&
+        ent->r.linked && !ent->client && !ent->r.contents && !ent->r.bmodel && !ent->s.modelindex &&
+        !ent->touch && !ent->use && !ent->takedamage;
+}
 void TeleportPlayer( gentity_t *player, vec3_t origin, vec3_t angles ) {
 	gentity_t   *tent;
 
@@ -124,15 +147,19 @@ void TeleportPlayer( gentity_t *player, vec3_t origin, vec3_t angles ) {
 	if ( player->client->sess.sessionTeam != TEAM_SPECTATOR ) {
 		tent = G_TempEntity( player->client->ps.origin, EV_PLAYER_TELEPORT_OUT );
 		tent->s.clientNum = player->s.clientNum;
+		RememberTeleportEffect(tent,player);
 
 		tent = G_TempEntity( origin, EV_PLAYER_TELEPORT_IN );
 		tent->s.clientNum = player->s.clientNum;
+		RememberTeleportEffect(tent,player);
 	}
 
 	// unlink to make sure it can't possibly interfere with G_KillBox
 	trap_UnlinkEntity( player );
 
 	VectorCopy( origin, player->client->ps.origin );
+	player->client->ps.cod1EyeTarget = 0;
+	player->client->ps.cod1JumpApex = 0; /* No old jump limit across a teleport. */
 	player->client->ps.origin[2] += 1;
 
 	// spit the player out
@@ -1874,6 +1901,8 @@ void clamp_playerbehindgun( gentity_t *self, gentity_t *other, vec3_t dang ) {
 	point[2] = other->r.currentOrigin[2];
 	trap_UnlinkEntity( other );
 	VectorCopy( point, other->client->ps.origin );
+	other->client->ps.cod1EyeTarget = 0;
+	other->client->ps.cod1JumpApex = 0;
 
 	// save results of pmove
 	BG_PlayerStateToEntityState( &other->client->ps, &other->s, qtrue );

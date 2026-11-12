@@ -35,6 +35,8 @@ If you have questions concerning this license or the applicable additional terms
 
 #define PAINTBUFFER_SIZE        4096                    // this is in samples
 
+#include "snd_al_lab.h"
+
 #define SND_CHUNK_SIZE          1024                    // samples
 #define SND_CHUNK_SIZE_FLOAT    ( SND_CHUNK_SIZE / 2 )      // floats
 #define SND_CHUNK_SIZE_BYTE     ( SND_CHUNK_SIZE * 2 )      // floats
@@ -86,11 +88,13 @@ typedef struct {
 #define START_SAMPLE_IMMEDIATE  0x7fffffff
 
 typedef struct loopSound_s {
+    int alEntity;
 	vec3_t origin;
 	vec3_t velocity;
 	float range;            //----(SA)	added
 	sfx_t       *sfx;
 	int mergeFrame;
+    float cod1SlaveCap; /* -1 = unselected legacy sound */
 	int vol;
 	qboolean loudUnderWater;    // (SA) set if this sound should be played at full vol even when under water (under water loop sound for ex.)
 } loopSound_t;
@@ -112,6 +116,10 @@ typedef struct
 	sfx_t       *thesfx;        // sfx structure
 	qboolean doppler;
 	int flags;                  //----(SA)	added
+	/* CoD soundalias one-shot parameters. Defaults preserve RTCW behavior. */
+	qboolean cod1Alias;
+	float cod1Pitch;
+	float cod1DistMin, cod1DistMax, cod1SlaveCap;
 	qboolean threadReady;
 } channel_t;
 
@@ -313,3 +321,5 @@ extern int sfxScratchIndex;
 extern unsigned char s_entityTalkAmplitude[MAX_CLIENTS];
 
 extern float S_GetStreamingFade( streamingSound_t *ss );    //----(SA)	added
+
+void S_AL_RenderBlock(portable_samplepair_t *paint,int frames);

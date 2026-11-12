@@ -28,6 +28,9 @@ If you have questions concerning this license or the applicable additional terms
 
 // tr_sky.c
 #include "tr_local.h"
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+#include "tr_cod1_sun_runtime.h"
+#endif
 
 #define SKY_SUBDIVISIONS        8
 #define HALF_SKY_SUBDIVISIONS   ( SKY_SUBDIVISIONS / 2 )
@@ -948,6 +951,9 @@ Other things could be stuck in here, like birds in the sky, etc
 */
 void RB_StageIteratorSky( void ) {
 	if ( r_fastsky->integer ) {
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+        RB_Cod1SunSky();
+#endif
 		return;
 	}
 
@@ -969,6 +975,15 @@ void RB_StageIteratorSky( void ) {
 
 
 	backEnd.refdef.rdflags |= RDF_DRAWINGSKY;
+
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	/* CoDSP 0x4DD7B3..0x4DD7D1 disables fog for the outer sky box.
+	 * Clouds and the sun's generic iterator select their own sky record;
+	 * they must not inherit the world fog from the previous surface. */
+	if ( cod1Bsp59MapActive ) {
+		R_FogOff();
+	}
+#endif
 
 
 	// go through all the polygons and project them onto
@@ -998,6 +1013,11 @@ void RB_StageIteratorSky( void ) {
 		qglPopMatrix();
 	}
 
+    /* CoDSP 4dd812 draws its disk after outer sky, before clouds. */
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    RB_Cod1SunSky();
+    qglDepthRange(r_showsky->integer?0.0:1.0,r_showsky->integer?0.0:1.0);
+#endif
 	// generate the vertexes for all the clouds, which will be drawn
 	// by the generic shader routine
 	R_BuildCloudData( &tess );
@@ -1027,4 +1047,3 @@ void RB_StageIteratorSky( void ) {
 	// note that sky was drawn so we will draw a sun later
 	backEnd.skyRenderedThisView = qtrue;
 }
-

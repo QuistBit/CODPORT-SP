@@ -403,6 +403,8 @@ typedef struct {
 	void ( *stopCinematic )( int handle );
 	void ( *drawCinematic )( int handle, float x, float y, float w, float h );
 	void ( *runCinematicFrame )( int handle );
+	/* Retail CoD's savegamehide checks g_lastSaveGame on disk. */
+	qboolean ( *savegameExists )( const char *lastSaveGame );
 
 	float yscale;
 	float xscale;

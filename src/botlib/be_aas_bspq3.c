@@ -45,6 +45,7 @@ If you have questions concerning this license or the applicable additional terms
 #include "../game/be_aas.h"
 #include "be_aas_funcs.h"
 #include "be_aas_def.h"
+#include <limits.h>
 
 extern botlib_import_t botimport;
 
@@ -52,8 +53,6 @@ extern botlib_import_t botimport;
 
 #define ON_EPSILON      0.005
 //#define DEG2RAD( a ) (( a * M_PI ) / 180.0F)
-
-#define MAX_BSPENTITIES     2048
 
 typedef struct rgb_s
 {
@@ -86,7 +85,8 @@ typedef struct bsp_s
 	char *dentdata;
 	//bsp entities
 	int numentities;
-	bsp_entity_t entities[MAX_BSPENTITIES];
+	int maxentities;
+	bsp_entity_t *entities;
 	//memory used for strings and epairs
 	byte *ebuffer;
 } bsp_t;
@@ -371,6 +371,12 @@ void AAS_FreeBSPEntities( void ) {
 	if ( bspworld.ebuffer ) {
 		FreeMemory( bspworld.ebuffer );
 	}
+	if ( bspworld.entities ) {
+		FreeMemory( bspworld.entities );
+	}
+	bspworld.ebuffer = NULL;
+	bspworld.entities = NULL;
+	bspworld.maxentities = 0;
 	bspworld.numentities = 0;
 } //end of the function AAS_FreeBSPEntities
 //===========================================================================
@@ -386,6 +392,8 @@ void AAS_ParseBSPEntities( void ) {
 	bsp_epair_t *epair;
 	byte *buffer, *buftrav;
 	int bufsize;
+	int entityCount;
+	size_t keylen, valuelen, entrySize;
 
 	// RF, modified this, so that it first gathers up memory requirements, then allocates a single chunk,
 	// and places the strings all in there
@@ -396,6 +404,7 @@ void AAS_ParseBSPEntities( void ) {
 	SetScriptFlags( script, SCFL_NOSTRINGWHITESPACES | SCFL_NOSTRINGESCAPECHARS ); //SCFL_PRIMITIVE);
 
 	bufsize = 0;
+	entityCount = 1; // BSP entity handles start at 1; 0 means no entity.
 
 	while ( PS_ReadToken( script, &token ) )
 	{
@@ -405,16 +414,18 @@ void AAS_ParseBSPEntities( void ) {
 			FreeScript( script );
 			return;
 		} //end if
-		if ( bspworld.numentities >= MAX_BSPENTITIES ) {
-			botimport.Print( PRT_MESSAGE, "too many entities in BSP file\n" );
-			break;
+		if ( entityCount >= INT_MAX / (int)sizeof( bsp_entity_t ) ) {
+			botimport.Print( PRT_FATAL, "too many entities in BSP file\n" );
+			AAS_FreeBSPEntities();
+			FreeScript( script );
+			return;
 		} //end if
+		entityCount++;
 		while ( PS_ReadToken( script, &token ) )
 		{
 			if ( !strcmp( token.string, "}" ) ) {
 				break;
 			}
-			bufsize += sizeof( bsp_epair_t );
 			if ( token.type != TT_STRING ) {
 				ScriptError( script, "invalid %s\n", token.string );
 				AAS_FreeBSPEntities();
@@ -422,14 +433,26 @@ void AAS_ParseBSPEntities( void ) {
 				return;
 			} //end if
 			StripDoubleQuotes( token.string );
-			bufsize += strlen( token.string ) + 1;
+			keylen = strlen( token.string ) + 1;
 			if ( !PS_ExpectTokenType( script, TT_STRING, 0, &token ) ) {
 				AAS_FreeBSPEntities();
 				FreeScript( script );
 				return;
 			} //end if
 			StripDoubleQuotes( token.string );
-			bufsize += strlen( token.string ) + 1;
+			valuelen = strlen( token.string ) + 1;
+			entrySize = sizeof( bsp_epair_t ) + keylen + valuelen;
+			/* The next epair contains pointers and must begin on a pointer
+			 * boundary even when the preceding strings have odd lengths. */
+			entrySize += (sizeof( void * ) -
+				((size_t)bufsize + entrySize) % sizeof( void * )) % sizeof( void * );
+			if ( entrySize > (size_t)( INT_MAX - bufsize ) ) {
+				botimport.Print( PRT_FATAL, "BSP entity data is too large\n" );
+				AAS_FreeBSPEntities();
+				FreeScript( script );
+				return;
+			}
+			bufsize += (int)entrySize;
 		} //end while
 		if ( strcmp( token.string, "}" ) ) {
 			ScriptError( script, "missing }\n" );
@@ -440,6 +463,9 @@ void AAS_ParseBSPEntities( void ) {
 	} //end while
 	FreeScript( script );
 
+	bspworld.maxentities = entityCount;
+	bspworld.entities = (bsp_entity_t *)GetClearedHunkMemory(
+		entityCount * sizeof( bsp_entity_t ) );
 	buffer = (byte *)GetClearedHunkMemory( bufsize );
 	buftrav = buffer;
 	bspworld.ebuffer = buffer;
@@ -454,6 +480,12 @@ void AAS_ParseBSPEntities( void ) {
 
 	while ( PS_ReadToken( script, &token ) )
 	{
+		if ( bspworld.numentities >= bspworld.maxentities ) {
+			botimport.Print( PRT_FATAL, "BSP entity count changed while parsing\n" );
+			AAS_FreeBSPEntities();
+			FreeScript( script );
+			return;
+		}
 		ent = &bspworld.entities[bspworld.numentities];
 		bspworld.numentities++;
 		ent->epairs = NULL;
@@ -476,6 +508,8 @@ void AAS_ParseBSPEntities( void ) {
 			StripDoubleQuotes( token.string );
 			epair->value = (char *) buftrav; buftrav += ( strlen( token.string ) + 1 );
 			strcpy( epair->value, token.string );
+			buftrav = buffer + (((size_t)(buftrav - buffer) + sizeof( void * ) - 1) &
+				~(sizeof( void * ) - 1));
 		} //end while
 	} //end while
 	FreeScript( script );

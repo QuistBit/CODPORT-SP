@@ -29,6 +29,15 @@ If you have questions concerning this license or the applicable additional terms
 // tr_models.c -- model loading and caching
 
 #include "tr_local.h"
+#include "tr_cod1_viewmodel.h"
+#include "tr_cod1_native.h"
+#include "tr_cod1_native_animated.h"
+#include "tr_cod1_worldmodel.h"
+#define COD1_ACTOR_CAPTURE_IMPLEMENTATION
+#include "tr_cod1_actor_capture.h"
+#undef COD1_ACTOR_CAPTURE_IMPLEMENTATION
+#include "tr_cod1_turret_resource.inc"
+#include "tr_cod1_turret_actor_resource.inc"
 
 #define LL( x ) x = LittleLong( x )
 
@@ -150,6 +159,48 @@ qhandle_t RE_RegisterModel( const char *name ) {
 
 	// make sure the render thread is stopped
 	R_SyncRenderThread();
+
+	/* Native CoD1 viewmodel has no MD3 file on disk. Do not use the
+	 * disk-model cache: shader handles must be rebuilt after vid_restart. */
+	if ( !Q_strncmp(name, "cod1native2/", 12) ) {
+		if ( r_cod1NativeXModel && r_cod1NativeXModel->integer >= 2 &&
+			 R_LoadCod1NativeViewWeapon(mod, name+12) && R_LoadCod1NativeAnimated(mod, name+12) ) return mod->index;
+		mod->type = MOD_BAD;
+		return 0;
+	}
+	if ( !Q_strncmp(name, "cod1native/", 11) ) {
+		if ( r_cod1NativeXModel && r_cod1NativeXModel->integer && R_LoadCod1NativeViewWeapon(mod, name+11) ) return mod->index;
+		mod->type = MOD_BAD;
+		return 0;
+	}
+	/* Character composites retain all LOD weights in their own namespace.
+	 * Entity scripts and playback will connect to this explicit pilot later. */
+	if (!Q_strncmp(name,"cod1turret/",11)) {
+        if (R_RegisterCod1TurretResource(mod,name)) return mod->index;
+        mod->type=MOD_BAD; return 0;
+    }
+	if ( !Q_strncmp(name, "cod1actor/", 10) ) {
+        if(!Q_stricmp(name,COD1_ACTOR_MOODY_ALIAS)){extern int R_Cod1MoodyPrecache(void);if(!R_Cod1MoodyPrecache()){mod->type=MOD_BAD;return 0;}}
+		if ( R_LoadCod1ActorPilot(mod, name + 10) ) return mod->index;
+		mod->type = MOD_BAD;
+		return 0;
+	}
+
+	if ( !Q_strncmp(name, "cod1view35/", 11) || !Q_strncmp(name, "cod1view61/", 11) || !Q_strncmp(name, "cod1view62/", 11) || !Q_strncmp(name, "cod1view63/", 11) || !Q_strncmp(name, "cod1view64/", 11) ) {
+		if ( R_LoadCod1ViewWeapon(mod, name+11) ) return mod->index;
+		mod->type = MOD_BAD;
+		return 0;
+	}
+
+	if ( !Q_stricmpn(name, "xmodel/", 7) || !Q_stricmpn(name, "xmodel\\", 7) ) {
+        char path[MAX_QPATH];size_t at;
+        /* Keep mod->name spelling/cache identity. Normalize only loader input. */
+        for(at=0;name[at];++at)path[at]=name[at]=='\\'?'/':name[at];
+        path[at]=0;memcpy(path,"xmodel/",7);
+		if ( R_LoadCod1WorldModel(mod, path) ) return mod->index;
+		mod->type = MOD_BAD;
+		return 0;
+	}
 
 	// Ridah, look for it cached
 	if ( R_FindCachedModel( name, mod ) ) {
@@ -410,21 +461,6 @@ qboolean R_MDC_EncodeXyzCompressed( const vec3_t vec, const vec3_t normal, mdcXy
 	return qtrue;
 }
 
-/*
-=================
-R_MDC_DecodeXyzCompressed
-=================
-*/
-#if 0   // unoptimized version, used for finding right settings
-void R_MDC_DecodeXyzCompressed( mdcXyzCompressed_t *xyzComp, vec3_t out, vec3_t normal ) {
-	int i;
-
-	for ( i = 0; i < 3; i++ ) {
-		out[i] = ( (float)( ( xyzComp->ofsVec >> ( i * MDC_BITS_PER_AXIS ) ) & ( ( 1 << MDC_BITS_PER_AXIS ) - 1 ) ) - MDC_MAX_OFS ) * MDC_DIST_SCALE;
-	}
-	R_MDC_GetVec( ( unsigned char )( xyzComp->ofsVec >> 24 ), normal );
-}
-#endif
 
 /*
 =================
@@ -1298,6 +1334,9 @@ static qboolean R_LoadMDS( model_t *mod, void *buffer, const char *mod_name ) {
 ** RE_BeginRegistration
 */
 void RE_BeginRegistration( glconfig_t *glconfigOut ) {
+    if(tr.registered)R_SyncRenderThread();
+    R_Cod1TurretReset();
+    R_Cod1TurretActorReset();
 	ri.Hunk_Clear();    // (SA) MEM NOTE: not in missionpack
 
 	R_Init();
@@ -1353,9 +1392,13 @@ void R_Modellist_f( void ) {
 	for ( i = 1 ; i < tr.numModels; i++ ) {
 		mod = tr.models[i];
 		lods = 1;
-		for ( j = 1 ; j < MD3_MAX_LODS ; j++ ) {
-			if ( mod->md3[j] && mod->md3[j] != mod->md3[j - 1] ) {
-				lods++;
+		if ( mod->type == MOD_COD1_ACTOR_XMODEL && mod->cod1Actor ) {
+			lods = mod->cod1Actor->part[COD1_ACTOR_BODY].numLods;
+		} else if ( mod->type == MOD_MESH ) {
+			for ( j = 1 ; j < MD3_MAX_LODS ; j++ ) {
+				if ( mod->md3[j] && mod->md3[j] != mod->md3[j - 1] ) {
+					lods++;
+				}
 			}
 		}
 		ri.Printf( PRINT_ALL, "%8i : (%i) %s\n",mod->dataSize, lods, mod->name );
@@ -1363,11 +1406,6 @@ void R_Modellist_f( void ) {
 	}
 	ri.Printf( PRINT_ALL, "%8i : Total models\n", total );
 
-#if 0       // not working right with new hunk
-	if ( tr.world ) {
-		ri.Printf( PRINT_ALL, "\n%8i : %s\n", tr.world->dataSize, tr.world->name );
-	}
-#endif
 }
 
 
@@ -1528,6 +1566,17 @@ int R_LerpTag( orientation_t *tag, const refEntity_t *refent, const char *tagNam
 	}
 */
 	model = R_GetModelByHandle( handle );
+	if ( model->type == MOD_COD1_XMODEL ) {
+		return R_Cod1NativeLerpTag( model->cod1Native, tag, tagName, startIndex );
+	}
+	/* An actor tag depends on the queued pose; the model handle alone cannot
+	 * supply it. Use the part-qualified snapshot API. */
+	if (model->type==MOD_COD1_TURRET_XMODEL || model->type==MOD_COD1_TURRET_ACTOR) {memset(tag,0,sizeof(*tag));return -1;}
+	if ( model->type == MOD_COD1_ACTOR_XMODEL ) {
+		AxisClear( tag->axis );
+		VectorClear( tag->origin );
+		return -1;
+	}
 	if ( !model->md3[0] && !model->mdc[0] && !model->mds ) {
 		AxisClear( tag->axis );
 		VectorClear( tag->origin );
@@ -1654,6 +1703,20 @@ void R_ModelBounds( qhandle_t handle, vec3_t mins, vec3_t maxs ) {
 	md3Frame_t  *frame;
 
 	model = R_GetModelByHandle( handle );
+	if ( model->type == MOD_COD1_XMODEL && model->cod1Native ) {
+		VectorCopy( model->cod1Native->bounds[0], mins );
+		VectorCopy( model->cod1Native->bounds[1], maxs );
+		return;
+	}
+	if (model->type==MOD_COD1_TURRET_XMODEL && model->cod1Turret) {
+        VectorCopy(model->cod1Turret->bounds[0],mins);VectorCopy(model->cod1Turret->bounds[1],maxs);return;
+    }
+    if(model->type==MOD_COD1_TURRET_ACTOR && model->cod1TurretActor){VectorCopy(model->cod1TurretActor->bounds[0],mins);VectorCopy(model->cod1TurretActor->bounds[1],maxs);return;}
+	if ( model->type == MOD_COD1_ACTOR_XMODEL && model->cod1Actor ) {
+		VectorCopy( model->cod1Actor->bounds[0], mins );
+		VectorCopy( model->cod1Actor->bounds[1], maxs );
+		return;
+	}
 
 	if ( model->bmodel ) {
 		VectorCopy( model->bmodel->bounds[0], mins );
@@ -1922,7 +1985,9 @@ void R_BackupModels( void ) {
 	for ( i = 0; i < tr.numModels; i++ ) {
 		mod = tr.models[i];
 
-		if ( mod->type && mod->type != MOD_BRUSH && mod->type != MOD_MDS ) {
+		if ( mod->type && mod->type != MOD_BRUSH && mod->type != MOD_MDS &&
+			 mod->type != MOD_COD1_XMODEL &&
+			 mod->type != MOD_COD1_ACTOR_XMODEL && mod->type != MOD_COD1_TURRET_XMODEL && mod->type != MOD_COD1_TURRET_ACTOR ) {
 			memcpy( modBack, mod, sizeof( *mod ) );
 			switch ( mod->type ) {
 			case MOD_MESH:

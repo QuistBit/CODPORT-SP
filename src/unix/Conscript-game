@@ -36,6 +36,8 @@ $env = new cons(
   ../game/bg_misc.c
   ../game/bg_pmove.c
   ../game/bg_slidemove.c
+  ../game/cod_step.c
+  ../game/cod_jump_land.c
   ../game/g_active.c
   ../game/g_alarm.c
   ../game/g_bot.c

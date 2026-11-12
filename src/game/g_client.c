@@ -27,6 +27,16 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "g_local.h"
+#include "g_cod1_gsc_test.h"
+#include "g_cod1_body_reserve.inc"
+#include "g_cod1_entity_host.h"
+#include "g_cod1_player_lifetime.h"
+#include "g_cod1_player_lifetime.inc"
+#include "g_cod1_turret_shot.h"
+#include "g_cod1_r200_spawn_fixture.inc"
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+#include "g_cod1_r216_spawn_fixture.inc"
+#endif
 
 // g_client.c -- client functions that don't happen every frame
 
@@ -71,7 +81,11 @@ void SP_info_player_deathmatch( gentity_t *ent ) {
 /*QUAKED info_player_start (1 0 0) (-16 -16 -24) (16 16 32)
 equivelant to info_player_deathmatch
 */
+#include "g_cod1_spawn_point.inc"
 void SP_info_player_start( gentity_t *ent ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+ if(Cod1SpawnPointStart(ent))return;
+#endif
 	ent->classname = "info_player_deathmatch";
 	SP_info_player_deathmatch( ent );
 }
@@ -288,6 +302,9 @@ void InitBodyQue( void ) {
 		ent->classname = "bodyque";
 		ent->neverFree = qtrue;
 		level.bodyQue[i] = ent;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+        Cod1BodyReserveBorn(i,ent);
+#endif
 	}
 }
 
@@ -331,6 +348,9 @@ void CopyToBodyQue( gentity_t *ent ) {
 
 	// grab a body que and cycle to the next one
 	body = level.bodyQue[ level.bodyQueIndex ];
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    Cod1BodyReserveConsume(body);
+#endif
 	level.bodyQueIndex = ( level.bodyQueIndex + 1 ) % BODY_QUEUE_SIZE;
 
 	trap_UnlinkEntity( body );
@@ -643,6 +663,7 @@ respawn
 */
 void respawn( gentity_t *ent ) {
 	gentity_t   *tent;
+	G_Cod1PlayerLifetimeRetire( ent );
 
 	// Ridah, if single player, reload the last saved game for this player
 	if ( g_gametype.integer == GT_SINGLE_PLAYER ) {
@@ -829,14 +850,14 @@ void SetWolfSpawnWeapons( gclient_t *client ) {
 	client->ps.weapons[1] = 0;
 	COM_BitSet( client->ps.weapons, WP_KNIFE );
 
-	client->ps.ammo[BG_FindAmmoForWeapon( WP_KNIFE )] = 1;
+	client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_KNIFE )] = 1;
 	client->ps.weapon = WP_KNIFE;
 	client->ps.weaponstate = WEAPON_READY;
 
 	// Engineer gets dynamite
 	if ( pc == PC_ENGINEER ) {
 		COM_BitSet( client->ps.weapons, WP_DYNAMITE );
-		client->ps.ammo[BG_FindAmmoForWeapon( WP_DYNAMITE )] = 0;
+		client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_DYNAMITE )] = 0;
 		client->ps.ammoclip[BG_FindClipForWeapon( WP_DYNAMITE )] = 1;
 	}
 
@@ -845,7 +866,7 @@ void SetWolfSpawnWeapons( gclient_t *client ) {
 		client->ps.stats[STAT_KEYS] |= ( 1 << INV_BINOCS );
 /* no grenades for balance JPW NERVE
 		COM_BitSet( client->ps.weapons, WP_GRENADE_LAUNCHER );
-		client->ps.ammo[BG_FindAmmoForWeapon(WP_GRENADE_LAUNCHER)] = 2;
+		client->ps.ammo[BG_PlayerAmmoIndex(&client->ps,WP_GRENADE_LAUNCHER)] = 2;
 		client->ps.ammoclip[BG_FindClipForWeapon(WP_GRENADE_LAUNCHER)] = 1;
 */
 	}
@@ -865,13 +886,13 @@ void SetWolfSpawnWeapons( gclient_t *client ) {
 	case TEAM_RED: // JPW NERVE
 		COM_BitSet( client->ps.weapons, WP_LUGER );
 		client->ps.ammoclip[BG_FindClipForWeapon( WP_LUGER )] += 8;
-		client->ps.ammo[BG_FindAmmoForWeapon( WP_LUGER )] += 24;
+		client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_LUGER )] += 24;
 		client->ps.weapon = WP_LUGER;
 		break;
 	default: // '0' // TEAM_BLUE
 		COM_BitSet( client->ps.weapons, WP_COLT );
 		client->ps.ammoclip[BG_FindClipForWeapon( WP_COLT )] += 8;
-		client->ps.ammo[BG_FindAmmoForWeapon( WP_COLT )] += 24;
+		client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_COLT )] += 24;
 		client->ps.weapon = WP_COLT;
 		break;
 	}
@@ -883,17 +904,17 @@ void SetWolfSpawnWeapons( gclient_t *client ) {
 
 		case TEAM_BLUE:
 			COM_BitSet( client->ps.weapons, WP_GRENADE_PINEAPPLE );
-			client->ps.ammo[BG_FindAmmoForWeapon( WP_GRENADE_PINEAPPLE )] = 4;
+			client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_GRENADE_PINEAPPLE )] = 4;
 			client->ps.ammoclip[BG_FindClipForWeapon( WP_GRENADE_PINEAPPLE )] = 1;
 			break;
 		case TEAM_RED:
 			COM_BitSet( client->ps.weapons, WP_GRENADE_LAUNCHER );
-			client->ps.ammo[BG_FindAmmoForWeapon( WP_GRENADE_LAUNCHER )] = 4;
+			client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_GRENADE_LAUNCHER )] = 4;
 			client->ps.ammoclip[BG_FindClipForWeapon( WP_GRENADE_LAUNCHER )] = 1;
 			break;
 		default:
 			COM_BitSet( client->ps.weapons, WP_GRENADE_PINEAPPLE );
-			client->ps.ammo[BG_FindAmmoForWeapon( WP_GRENADE_PINEAPPLE )] = 4;
+			client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_GRENADE_PINEAPPLE )] = 4;
 			client->ps.ammoclip[BG_FindClipForWeapon( WP_GRENADE_PINEAPPLE )] = 1;
 			break;
 		}
@@ -917,9 +938,9 @@ void SetWolfSpawnWeapons( gclient_t *client ) {
 			COM_BitSet( client->ps.weapons, WP_MP40 );
 			client->ps.ammoclip[BG_FindClipForWeapon( WP_MP40 )] += 32;
 			if ( pc == PC_SOLDIER ) {
-				client->ps.ammo[BG_FindAmmoForWeapon( WP_MP40 )] += 64;
+				client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_MP40 )] += 64;
 			} else {
-				client->ps.ammo[BG_FindAmmoForWeapon( WP_MP40 )] += 32;
+				client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_MP40 )] += 32;
 			}
 			client->ps.weapon = WP_MP40;
 			break;
@@ -928,9 +949,9 @@ void SetWolfSpawnWeapons( gclient_t *client ) {
 			COM_BitSet( client->ps.weapons, WP_THOMPSON );
 			client->ps.ammoclip[BG_FindClipForWeapon( WP_THOMPSON )] += 30;
 			if ( pc == PC_SOLDIER ) {
-				client->ps.ammo[BG_FindAmmoForWeapon( WP_THOMPSON )] += 60;
+				client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_THOMPSON )] += 60;
 			} else {
-				client->ps.ammo[BG_FindAmmoForWeapon( WP_THOMPSON )] += 30;
+				client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_THOMPSON )] += 30;
 			}
 			client->ps.weapon = WP_THOMPSON;
 			break;
@@ -939,9 +960,9 @@ void SetWolfSpawnWeapons( gclient_t *client ) {
 			COM_BitSet( client->ps.weapons, WP_STEN );
 			client->ps.ammoclip[BG_FindClipForWeapon( WP_STEN )] += 32;
 			if ( pc == PC_SOLDIER ) {
-				client->ps.ammo[BG_FindAmmoForWeapon( WP_STEN )] += 64;
+				client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_STEN )] += 64;
 			} else {
-				client->ps.ammo[BG_FindAmmoForWeapon( WP_STEN )] += 32;
+				client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_STEN )] += 32;
 			}
 			client->ps.weapon = WP_STEN;
 			break;
@@ -953,12 +974,12 @@ void SetWolfSpawnWeapons( gclient_t *client ) {
 
 			COM_BitSet( client->ps.weapons, WP_SNIPERRIFLE );
 			client->ps.ammoclip[BG_FindClipForWeapon( WP_SNIPERRIFLE )] = 10;
-			client->ps.ammo[BG_FindAmmoForWeapon( WP_SNIPERRIFLE )] = 10;
+			client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_SNIPERRIFLE )] = 10;
 			client->ps.weapon = WP_SNIPERRIFLE;
 
 			COM_BitSet( client->ps.weapons, WP_MAUSER );
 			client->ps.ammoclip[BG_FindClipForWeapon( WP_MAUSER )] = 10;
-			client->ps.ammo[BG_FindAmmoForWeapon( WP_MAUSER )] = 10;
+			client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_MAUSER )] = 10;
 			client->ps.weapon = WP_MAUSER;
 			break;
 
@@ -969,12 +990,12 @@ void SetWolfSpawnWeapons( gclient_t *client ) {
 
 			COM_BitSet( client->ps.weapons, WP_SNOOPERSCOPE );
 			client->ps.ammoclip[BG_FindClipForWeapon( WP_SNOOPERSCOPE )] = 5;
-			client->ps.ammo[BG_FindAmmoForWeapon( WP_SNOOPERSCOPE )] = 15;
+			client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_SNOOPERSCOPE )] = 15;
 			client->ps.weapon = WP_SNOOPERSCOPE;
 
 			COM_BitSet( client->ps.weapons, WP_GARAND );
 			client->ps.ammoclip[BG_FindClipForWeapon( WP_GARAND )] = 5;
-			client->ps.ammo[BG_FindAmmoForWeapon( WP_GARAND )] = 15;
+			client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_GARAND )] = 15;
 			client->ps.weapon = WP_GARAND;
 
 			break;
@@ -985,7 +1006,7 @@ void SetWolfSpawnWeapons( gclient_t *client ) {
 			}
 
 			COM_BitSet( client->ps.weapons, WP_PANZERFAUST );
-			client->ps.ammo[BG_FindAmmoForWeapon( WP_PANZERFAUST )] = 4;
+			client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_PANZERFAUST )] = 4;
 			client->ps.weapon = WP_PANZERFAUST;
 			break;
 
@@ -996,7 +1017,7 @@ void SetWolfSpawnWeapons( gclient_t *client ) {
 // JPW NERVE may not keep this, but put it in to test
 			COM_BitSet( client->ps.weapons, WP_VENOM );
 			client->ps.ammoclip[BG_FindClipForWeapon( WP_VENOM )] = 200;
-			client->ps.ammo[BG_FindAmmoForWeapon( WP_VENOM )] = 500;
+			client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_VENOM )] = 500;
 			client->ps.weapon = WP_VENOM;
 			break;
 
@@ -1006,7 +1027,7 @@ void SetWolfSpawnWeapons( gclient_t *client ) {
 			}
 
 			COM_BitSet( client->ps.weapons, WP_FLAMETHROWER );
-			client->ps.ammo[BG_FindAmmoForWeapon( WP_FLAMETHROWER )] = 300;
+			client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_FLAMETHROWER )] = 300;
 			client->ps.weapon = WP_FLAMETHROWER;
 			break;
 
@@ -1014,12 +1035,12 @@ void SetWolfSpawnWeapons( gclient_t *client ) {
 			if ( client->sess.sessionTeam == TEAM_RED ) { // JPW NERVE
 				COM_BitSet( client->ps.weapons, WP_MP40 );
 				client->ps.ammoclip[BG_FindClipForWeapon( WP_MP40 )] += 32;
-				client->ps.ammo[BG_FindAmmoForWeapon( WP_MP40 )] += 64;
+				client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_MP40 )] += 64;
 				client->ps.weapon = WP_MP40;
 			} else { // TEAM_BLUE
 				COM_BitSet( client->ps.weapons, WP_THOMPSON );
 				client->ps.ammoclip[BG_FindClipForWeapon( WP_THOMPSON )] += 30;
-				client->ps.ammo[BG_FindAmmoForWeapon( WP_THOMPSON )] += 60;
+				client->ps.ammo[BG_PlayerAmmoIndex(&client->ps, WP_THOMPSON )] += 60;
 				client->ps.weapon = WP_THOMPSON;
 			}
 			break;
@@ -1205,6 +1226,101 @@ qboolean G_GetModelInfo( int clientNum, char *modelName, animModelInfo_t **model
 }
 
 /*
+========================
+G_CoD1DataPresent
+
+The RTCW game module normally requires models/players/<name>/wolfanim.cfg.
+Retail CoD1 does not use that player/animation format at all: it uses xmodel/
+and xanim/ assets. Detect a CoD1 data set by a retail-only marker so the
+bootstrap path can get far enough to bring up the CoD world.
+========================
+*/
+static qboolean G_CoD1DataPresent( void ) {
+	static int cached = -1;
+	fileHandle_t f;
+	int len;
+
+	if ( cached >= 0 ) {
+		return cached ? qtrue : qfalse;
+	}
+
+	len = trap_FS_FOpenFile( "xmodel/playerbody_default", &f, FS_READ );
+	if ( len > 0 ) {
+		trap_FS_FCloseFile( f );
+		cached = 1;
+		G_Printf( "CoD1 compatibility: retail xmodel data detected\n" );
+		return qtrue;
+	}
+
+	cached = 0;
+	return qfalse;
+}
+
+static long G_CoD1AnimNameHash( const char *name ) {
+	int i;
+	long hash;
+	char letter;
+
+	hash = 0;
+	for ( i = 0; name && name[i]; i++ ) {
+		letter = name[i];
+		if ( letter >= 'A' && letter <= 'Z' ) {
+			letter = (char)( letter - 'A' + 'a' );
+		}
+		hash += (long)letter * ( i + 119 );
+	}
+	if ( hash == -1 ) {
+		hash = 0;
+	}
+	return hash;
+}
+
+/*
+========================
+G_InitCoD1AnimationFallback
+
+This is deliberately NOT an implementation of CoD1 XAnim. It is a safe
+placeholder for the RTCW-only player animation table while CoD's XAnim/XModel
+loader is still being ported. Fixed RTCW animation indices remain valid,
+but no third-person animation is produced from this table.
+========================
+*/
+static void G_InitCoD1AnimationFallback( char *modelname, gclient_t *cl ) {
+	animModelInfo_t *modelInfo;
+	animation_t *anim;
+	int i;
+
+	modelInfo = cl->modelInfo;
+	memset( modelInfo, 0, sizeof( *modelInfo ) );
+	Q_strncpyz( modelInfo->modelname, modelname, sizeof( modelInfo->modelname ) );
+	modelInfo->gender = GENDER_MALE;
+	modelInfo->footsteps = FOOTSTEP_NORMAL;
+	modelInfo->version = 0;
+	modelInfo->isSkeletal = qfalse;
+	modelInfo->numAnimations = MAX_ANIMATIONS;
+
+	for ( i = 0; i < MAX_ANIMATIONS; i++ ) {
+		anim = &modelInfo->animations[i];
+		if ( animStrings[i] ) {
+			Q_strncpyz( anim->name, animStrings[i], sizeof( anim->name ) );
+		}
+		anim->nameHash = G_CoD1AnimNameHash( anim->name );
+		anim->firstFrame = 0;
+		anim->numFrames = 1;
+		anim->loopFrames = 1;
+		anim->frameLerp = 1000;
+		anim->initialLerp = 0;
+		anim->moveSpeed = 0;
+		anim->animBlend = 0;
+		anim->priority = 0;
+		anim->duration = 1000;
+	}
+
+	G_Printf( "CoD1 compatibility: RTCW wolfanim missing for '%s'; using bootstrap animation table (%d entries)\n",
+		modelname, modelInfo->numAnimations );
+}
+
+/*
 =============
 G_ParseAnimationFiles
 =============
@@ -1223,6 +1339,10 @@ qboolean G_ParseAnimationFiles( char *modelname, gclient_t *cl ) {
 	len = trap_FS_FOpenFile( filename, &f, FS_READ );
 	if ( len <= 0 ) {
 		G_Printf( "G_ParseAnimationFiles(): file '%s' not found\n", filename );       //----(SA)	added
+		if ( G_CoD1DataPresent() ) {
+			G_InitCoD1AnimationFallback( modelname, cl );
+			return qtrue;
+		}
 		return qfalse;
 	}
 	if ( len >= sizeof( text ) - 1 ) {
@@ -1490,6 +1610,7 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	gentity_t   *ent;
 
 	ent = &g_entities[ clientNum ];
+	G_Cod1PlayerLifetimeRetire( ent );
 
 	trap_GetUserinfo( clientNum, userinfo, sizeof( userinfo ) );
 
@@ -1558,8 +1679,12 @@ void ClientBegin( int clientNum ) {
 	gentity_t   *tent;
 	int flags;
 	int spawn_count;                // DHM - Nerve
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	uint64_t cod1LifeBegin;
+#endif
 
 	ent = g_entities + clientNum;
+	G_Cod1PlayerLifetimeRetire( ent );
 
 	if ( ent->botDelayBegin ) {
 		G_QueueBotBegin( clientNum );
@@ -1568,14 +1693,23 @@ void ClientBegin( int clientNum ) {
 	}
 
 	client = level.clients + clientNum;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	cod1LifeBegin = Cod1PlayerLifeBegin( ent );
+#endif
 
 	if ( ent->r.linked ) {
 		trap_UnlinkEntity( ent );
 	}
+	#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	Cod1PlayerLifeExpectBirth( ent, cod1LifeBegin );
+	#endif
 	G_InitGentity( ent );
 	ent->touch = 0;
 	ent->pain = 0;
 	ent->client = client;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	Cod1PlayerLifeBind( ent, cod1LifeBegin );
+#endif
 
 	client->pers.connected = CON_CONNECTED;
 	client->pers.enterTime = level.time;
@@ -1623,6 +1757,10 @@ void ClientBegin( int clientNum ) {
 
 	// count current clients and rank for scoreboard
 	CalculateRanks();
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	Cod1PlayerLifeComplete( ent, cod1LifeBegin );
+#endif
+	G_Cod1GscTestClientSpawned( ent );
 
 }
 
@@ -1647,6 +1785,9 @@ void ClientSpawn( gentity_t *ent ) {
 	int flags;
 	int savedPing;
 	int savedTeam;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	uint64_t cod1LifeSpawn = Cod1PlayerLifeSpawnEntered( ent );
+#endif
 
 	index = ent - g_entities;
 	client = ent->client;
@@ -1808,10 +1949,10 @@ void ClientSpawn( gentity_t *ent ) {
 	if (!(ent->r.svFlags & SVF_CASTAI) && level.scriptAI && strstr (level.scriptAI, "beach assault"))
 	{
 		COM_BitSet( client->ps.weapons, WP_THOMPSON );
-		client->ps.ammo[BG_FindAmmoForWeapon(WP_THOMPSON)] = 100;
+		client->ps.ammo[BG_PlayerAmmoIndex(&client->ps,WP_THOMPSON)] = 100;
 
 		COM_BitSet( client->ps.weapons, WP_GRENADE_PINEAPPLE );
-		client->ps.ammo[BG_FindAmmoForWeapon(WP_GRENADE_PINEAPPLE)] = 5;
+		client->ps.ammo[BG_PlayerAmmoIndex(&client->ps,WP_GRENADE_PINEAPPLE)] = 5;
 
 		client->ps.weapon = WP_THOMPSON;
 		client->ps.weaponstate = WEAPON_READY;
@@ -1820,16 +1961,16 @@ void ClientSpawn( gentity_t *ent ) {
 	//----(SA) no longer giving the player any default stuff
 
 //	COM_BitSet( client->ps.weapons, WP_MP40 );
-//	client->ps.ammo[BG_FindAmmoForWeapon(WP_MP40)] = 100;
+//	client->ps.ammo[BG_PlayerAmmoIndex(&client->ps,WP_MP40)] = 100;
 
 //	if ( g_gametype.integer == GT_SINGLE_PLAYER ) {
-//		client->ps.ammo[BG_FindAmmoForWeapon(WP_LUGER)] = 50;
+//		client->ps.ammo[BG_PlayerAmmoIndex(&client->ps,WP_LUGER)] = 50;
 //	} else {
-//		client->ps.ammo[BG_FindAmmoForWeapon(WP_LUGER)] = 100;
+//		client->ps.ammo[BG_PlayerAmmoIndex(&client->ps,WP_LUGER)] = 100;
 //	}
 
 //	COM_BitSet( client->ps.weapons, WP_GAUNTLET );
-//	client->ps.ammo[BG_FindAmmoForWeapon(WP_GAUNTLET)] = -1;
+//	client->ps.ammo[BG_PlayerAmmoIndex(&client->ps,WP_GAUNTLET)] = -1;
 
 	// health will count down towards max_health
 //	ent->health = client->ps.stats[STAT_HEALTH] = client->ps.stats[STAT_MAX_HEALTH] * 1.25;
@@ -1838,6 +1979,10 @@ void ClientSpawn( gentity_t *ent ) {
 // SetWolfSpawnWeapons() now adds medic team bonus and stores in ps.stats[STAT_MAX_HEALTH].
 	ent->health = client->ps.stats[STAT_HEALTH] = client->ps.stats[STAT_MAX_HEALTH];
 
+	Cod1R200FixtureSpawn( ent, spawn_origin, spawn_angles );
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+	Cod1R216FixtureSpawn( ent, spawn_origin, spawn_angles );
+#endif
 	G_SetOrigin( ent, spawn_origin );
 	VectorCopy( spawn_origin, client->ps.origin );
 
@@ -1907,6 +2052,20 @@ void ClientSpawn( gentity_t *ent ) {
 
 	// clear entity state values
 	BG_PlayerStateToEntityState( &client->ps, &ent->s, qtrue );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	/* Selected native SP playerinit component, before any script shot can run.
+	 * A failed lease is explicit; no missing sentient is inferred to be allied. */
+	if (trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1 &&
+	    G_Cod1MapEntities() && g_gametype.integer==GT_SINGLE_PLAYER &&
+	    ent==&g_entities[0] && client->pers.connected==CON_CONNECTED) {
+		GscEntityRef player;
+		if (!G_Cod1EntityCapture(ent,&player) || !G_Cod1TurretShotPlayerBegin(&player))
+			G_Error("R232 original player sentient initialization refused");
+	}
+#endif
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	Cod1PlayerLifeSpawnReturned( ent, cod1LifeSpawn );
+#endif
 }
 
 
@@ -1928,6 +2087,7 @@ void ClientDisconnect( int clientNum ) {
 	int i;
 
 	ent = g_entities + clientNum;
+	G_Cod1PlayerLifetimeRetire( ent );
 	if ( !ent->client ) {
 		return;
 	}

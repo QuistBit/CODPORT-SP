@@ -39,10 +39,6 @@ typedef struct teamgame_s
 
 teamgame_t teamgame;
 
-void Team_InitGame( void ) {
-	memset( &teamgame, 0, sizeof teamgame );
-}
-
 int OtherTeam( int team ) {
 	if ( team == TEAM_RED ) {
 		return TEAM_BLUE;
@@ -61,28 +57,6 @@ const char *TeamName( int team ) {
 		return "SPECTATOR";
 	}
 	return "FREE";
-}
-
-const char *OtherTeamName( int team ) {
-	if ( team == TEAM_RED ) {
-		return "BLUE";
-	} else if ( team == TEAM_BLUE )  {
-		return "RED";
-	} else if ( team == TEAM_SPECTATOR )  {
-		return "SPECTATOR";
-	}
-	return "FREE";
-}
-
-const char *TeamColorString( int team ) {
-	if ( team == TEAM_RED ) {
-		return S_COLOR_RED;
-	} else if ( team == TEAM_BLUE )  {
-		return S_COLOR_BLUE;
-	} else if ( team == TEAM_SPECTATOR )  {
-		return S_COLOR_YELLOW;
-	}
-	return S_COLOR_WHITE;
 }
 
 // NULL for everyone

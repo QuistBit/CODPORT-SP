@@ -30,6 +30,7 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "client.h"
 #include <limits.h>
+#include "cl_r241_frame_trace.inc"
 
 cvar_t  *cl_nodelta;
 cvar_t  *cl_debugMove;
@@ -109,9 +110,6 @@ typedef struct serverStatus_s
 serverStatus_t cl_serverStatusList[MAX_SERVERSTATUSREQUESTS];
 int serverStatusCount;
 
-#if 0 // MrE defined __USEA3D && defined __A3D_GEOM
-void hA3Dg_ExportRenderGeom( refexport_t *incoming_re );
-#endif
 
 extern void SV_BotFrame( int time );
 void CL_CheckForResend( void );
@@ -174,24 +172,6 @@ void CL_AddReliableCommand( const char *cmd ) {
 	clc.reliableSequence++;
 	index = clc.reliableSequence & ( MAX_RELIABLE_COMMANDS - 1 );
 	Q_strncpyz( clc.reliableCommands[ index ], cmd, sizeof( clc.reliableCommands[ index ] ) );
-}
-
-/*
-======================
-CL_ChangeReliableCommand
-======================
-*/
-void CL_ChangeReliableCommand( void ) {
-	int r, index, l;
-
-	r = clc.reliableSequence - ( random() * 5 );
-	index = clc.reliableSequence & ( MAX_RELIABLE_COMMANDS - 1 );
-	l = strlen( clc.reliableCommands[ index ] );
-	if ( l >= MAX_STRING_CHARS - 1 ) {
-		l = MAX_STRING_CHARS - 2;
-	}
-	clc.reliableCommands[ index ][ l ] = '\n';
-	clc.reliableCommands[ index ][ l + 1 ] = '\0';
 }
 
 /*
@@ -2283,9 +2263,48 @@ void CL_InitRenderer( void ) {
 
 	// load character sets
 	cls.charSetShader = re.RegisterShader( "gfx/2d/bigchars" );
+	memset( &cls.consoleFont, 0, sizeof( cls.consoleFont ) );
+	re.RegisterFont( "", 16, &cls.consoleFont );
+	cls.consoleFontValid = ( cls.consoleFont.glyphs['A'].glyph != 0 );
+	cls.consoleFontScale = 1.0f;
+	cls.consoleFontBaseline = SMALLCHAR_HEIGHT - 2.0f;
+	if ( cls.consoleFontValid ) {
+		int ch;
+		int maxTop = 0;
+		int minBottom = 0;
+		int naturalHeight;
+
+		/* The old port sampled the native CoD atlas but stretched every glyph
+		 * to the full 8x16 cell.  Preserve the fixed console grid while using
+		 * the font's own vertical metrics, leaving a small inter-line gap. */
+		for ( ch = 32; ch < 127; ch++ ) {
+			glyphInfo_t *g = &cls.consoleFont.glyphs[ch];
+			if ( !g->glyph ) {
+				continue;
+			}
+			if ( g->top > maxTop ) {
+				maxTop = g->top;
+			}
+			if ( g->bottom < minBottom ) {
+				minBottom = g->bottom;
+			}
+		}
+
+		naturalHeight = maxTop - minBottom;
+		if ( naturalHeight > 0 ) {
+			cls.consoleFontScale = ( SMALLCHAR_HEIGHT - 4.0f ) / (float)naturalHeight;
+			if ( cls.consoleFontScale > 1.0f ) {
+				cls.consoleFontScale = 1.0f;
+			} else if ( cls.consoleFontScale < 0.25f ) {
+				cls.consoleFontScale = 0.25f;
+			}
+			cls.consoleFontBaseline = 2.0f + maxTop * cls.consoleFontScale;
+		}
+	}
+	Com_Printf( "CoD console font: %s (scale %.3f baseline %.2f)\n",
+		cls.consoleFontValid ? "loaded" : "unavailable (using bigchars)",
+		cls.consoleFontScale, cls.consoleFontBaseline );
 	cls.whiteShader = re.RegisterShader( "white" );
-	cls.consoleShader = re.RegisterShader( "console" );
-	cls.consoleShader2 = re.RegisterShader( "console2" );
 	g_console_field_width = cls.glconfig.vidWidth / SMALLCHAR_WIDTH - 2;
 	g_consoleField.widthInChars = g_console_field_width;
 }
@@ -2361,6 +2380,8 @@ void CL_InitRef( void ) {
 	ri.Hunk_AllocateTempMemory = Hunk_AllocateTempMemory;
 	ri.Hunk_FreeTempMemory = Hunk_FreeTempMemory;
 	ri.CM_DrawDebugSurface = CM_DrawDebugSurface;
+	ri.CM_Cod1LightTrace = CM_Cod1LightTrace;
+	ri.CM_PointContentsV59 = CM_PointContentsV59;
 	ri.FS_ReadFile = FS_ReadFile;
 	ri.FS_FreeFile = FS_FreeFile;
 	ri.FS_WriteFile = FS_WriteFile;
@@ -2379,9 +2400,6 @@ void CL_InitRef( void ) {
 
 	ret = GetRefAPI( REF_API_VERSION, &ri );
 
-#if 0 // MrE defined __USEA3D && defined __A3D_GEOM
-	hA3Dg_ExportRenderGeom( ret );
-#endif
 
 	Com_Printf( "-------------------------------\n" );
 
@@ -2454,6 +2472,7 @@ CL_Init
 ====================
 */
 void CL_Init( void ) {
+    CL_R241TraceInit();
 	Com_Printf( "----- Client Initialization -----\n" );
 
 	Con_Init();
@@ -2639,6 +2658,7 @@ void CL_Shutdown( void ) {
 		return;
 	}
 	recursive = qtrue;
+    CL_R241TraceShutdown();
 
 	CL_Disconnect( qtrue );
 
@@ -3169,19 +3189,6 @@ void CL_GetPing( int n, char *buf, int buflen, int *pingtime ) {
 	CL_SetServerInfoByAddress( cl_pinglist[n].adr, cl_pinglist[n].info, cl_pinglist[n].time );
 
 	*pingtime = time;
-}
-
-/*
-==================
-CL_UpdateServerInfo
-==================
-*/
-void CL_UpdateServerInfo( int n ) {
-	if ( !cl_pinglist[n].adr.port ) {
-		return;
-	}
-
-	CL_SetServerInfoByAddress( cl_pinglist[n].adr, cl_pinglist[n].info, cl_pinglist[n].time );
 }
 
 /*

@@ -30,17 +30,25 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "server.h"
 
+#include "../qcommon/vm_local.h"
+#include "sv_cod1_navigation_owner.inc"
+#include "../game/bg_cod1_keybinding.h"
+extern qboolean CL_Cod1KeyBindingQuery(cod1KeyBindingQuery_t *);
+static qboolean SV_Cod1KeyBindingQuery(int low,int high) {
+    uint64_t raw;uintptr_t pointer;
+    if(!gvm||!gvm->dllHandle||!gvm->entryPoint||currentVM!=gvm||
+       sv.state!=SS_GAME||sv.restarting||!sv_gametype||sv_gametype->integer!=GT_SINGLE_PLAYER||
+       (sv_reloading&&sv_reloading->integer))return qfalse;
+    raw=(uint64_t)(uint32_t)low|((uint64_t)(uint32_t)high<<32);pointer=(uintptr_t)raw;
+    if((uint64_t)pointer!=raw||!pointer)return qfalse;
+    return CL_Cod1KeyBindingQuery((cod1KeyBindingQuery_t *)pointer);
+}
+
+
 #include "../game/botlib.h"
+#include "sv_cod1_ambient_module.inc"
 
 botlib_export_t *botlib_export;
-
-void SV_GameError( const char *string ) {
-	Com_Error( ERR_DROP, "%s", string );
-}
-
-void SV_GamePrint( const char *string ) {
-	Com_Printf( "%s", string );
-}
 
 // these functions must be used instead of pointer arithmetic, because
 // the game allocates gentities with private information after the server shared part
@@ -319,6 +327,20 @@ The module is making a system call
 
 #define VMF( x )  ( (float *)args )[x]
 
+/* R113 paired private query; no shared/network layout change. */
+int SV_Cod1SpatialPointTrace(const cod1SpatialTraceQuery_t *query, trace_t *output);
+
+/* Original syscall149 resets entity token cursor to the current CM entity string.
+ * This port exposes the selected prepass handoff only once, after EOF, during
+ * GAME_INIT. No map/Actor/program execution certificate is created here. */
+static int sv_cod1EntityParseInit,sv_cod1EntityParseRewound;
+static int SV_Cod1EntityParseRewind(void){
+ char *base;
+ if(!sv_cod1EntityParseInit||sv_cod1EntityParseRewound||sv.state!=SS_LOADING||sv.entityParsePoint)return 0;
+ base=CM_EntityString();if(!base||!base[0])return 0;
+ sv.entityParsePoint=base;sv_cod1EntityParseRewound=1;return 1;
+}
+
 int SV_GameSystemCalls( int *args ) {
 	switch ( args[0] ) {
 	case G_PRINT:
@@ -333,13 +355,13 @@ int SV_GameSystemCalls( int *args ) {
 	case G_MILLISECONDS:
 		return Sys_Milliseconds();
 	case G_CVAR_REGISTER:
-		Cvar_Register( VMA( 1 ), VMA( 2 ), VMA( 3 ), args[4] );
+		SV_Cod1AmbientRegisterGameCvar( VMA( 1 ), VMA( 2 ), VMA( 3 ), args[4] );
 		return 0;
 	case G_CVAR_UPDATE:
 		Cvar_Update( VMA( 1 ) );
 		return 0;
 	case G_CVAR_SET:
-		Cvar_Set( (const char *)VMA( 1 ), (const char *)VMA( 2 ) );
+		SV_Cod1AmbientSetGameCvar( (const char *)VMA( 1 ), (const char *)VMA( 2 ) );
 		return 0;
 	case G_CVAR_VARIABLE_INTEGER_VALUE:
 		return Cvar_VariableIntegerValue( (const char *)VMA( 1 ) );
@@ -358,8 +380,7 @@ int SV_GameSystemCalls( int *args ) {
 	case G_FS_FOPEN_FILE:
 		return FS_FOpenFileByMode( VMA( 1 ), VMA( 2 ), args[3] );
 	case G_FS_READ:
-		FS_Read( VMA( 1 ), args[2], args[3] );
-		return 0;
+		return FS_Read( VMA( 1 ), args[2], args[3] );
 	case G_FS_WRITE:
 		return FS_Write( VMA( 1 ), args[2], args[3] );
 	case G_FS_RENAME:
@@ -383,6 +404,28 @@ int SV_GameSystemCalls( int *args ) {
 	case G_SEND_SERVER_COMMAND:
 		SV_GameSendServerCommand( args[1], VMA( 2 ) );
 		return 0;
+	case G_COD1_TRY_SEND_SERVER_COMMAND:
+		return SV_Cod1TrySendServerCommand( args[1], VMA( 2 ) );
+	case G_COD1_LOCALIZED_ACQUIRE:
+		return SV_Cod1LocalizedAcquire(VMA(1),args[2]);
+	case G_COD1_NAVIGATION_RESOURCE:
+		return CM_Cod1NavigationResource(VMA(1),VMA(2),VMA(3),(uint32_t)args[4]);
+	case G_COD1_LOCALIZED_RELEASE:
+		return SV_Cod1LocalizedRelease(VMA(1));
+	case G_COD1_LOCALIZED_STARTUP:
+		return SV_Cod1LocalizedStartup(VMA(1));
+	case G_COD1_TRY_SET_LOCALIZED_CONFIGSTRING:
+		return SV_Cod1TrySetLocalizedConfigstring( args[1], VMA( 2 ), VMA( 3 ), VMA( 4 ) );
+	case G_COD1_TRY_SET_HUD_MARKER:
+		return SV_Cod1TrySetHudMarker( VMA( 1 ), VMA( 2 ) );
+	case G_COD1_CVAR_VALUE:
+		{
+			union { float f; int i; } result;
+			result.f = Cvar_VariableValue( VMA( 1 ) );
+			return result.i;
+		}
+	case G_COD1_KEYBINDING_QUERY:
+        return SV_Cod1KeyBindingQuery(args[1],args[2]);
 	case G_LINKENTITY:
 		SV_LinkEntity( VMA( 1 ) );
 		return 0;
@@ -398,6 +441,43 @@ int SV_GameSystemCalls( int *args ) {
 	case G_TRACE:
 		SV_Trace( VMA( 1 ), VMA( 2 ), VMA( 3 ), VMA( 4 ), VMA( 5 ), args[6], args[7], /* int capsule */ qfalse );
 		return 0;
+	case G_TRACE_USE_ENTITY:
+		SV_TraceUseEntity(VMA(1), VMA(2), VMA(3), args[4]);
+		return 0;
+	case G_COD1_SPATIAL_CAPSULE_TRACE:
+		return SV_Cod1SpatialCapsuleTrace(VMA(1), VMA(2));
+	case G_COD1_SPATIAL_POINT_TRACE:
+		return SV_Cod1SpatialPointTrace(VMA(1), VMA(2));
+	case G_COD1_SPATIAL_AREA:
+		return SV_Cod1SpatialArea(VMA(1), VMA(2), args[3], VMA(4));
+	case G_COD1_SPATIAL_SIGHT:
+		return SV_Cod1SpatialSight(VMA(1), VMA(2));
+	case G_COD1_SPATIAL_ACTOR_LINK:
+		return SV_Cod1SpatialActorLink(VMA(1));
+	case G_COD1_SPATIAL_ACTOR_UNLINK:
+		return SV_Cod1SpatialActorUnlink(VMA(1));
+	case G_COD1_PATH_SIGHT:
+		return SV_Cod1PathSight(VMA(1),VMA(2));
+	case G_COD1_SPATIAL_ACTOR_CONTENTS:
+		return SV_Cod1SpatialActorContents(VMA(1));
+	case G_COD1_SPATIAL_SCENE_RESET:
+		return SV_Cod1SpatialSceneReset(VMA(1));
+	case G_COD1_DOBJ_BUILD:
+		return SV_Cod1DObjBuild(VMA(1), VMA(2));
+	case G_COD1_DOBJ_FREE:
+		return SV_Cod1DObjFree(VMA(1));
+	case G_COD1_DOBJ_SCENE_RESET:
+		return SV_Cod1DObjSceneReset(VMA(1));
+	case G_COD1_DOBJ_QUERY:
+		return SV_Cod1DObjQuery(VMA(1), VMA(2));
+	case G_COD1_RESOURCE_MODEL_PRECACHE:
+		return SV_Cod1ModelPrecache(VMA(1));
+	case G_COD1_MODEL_RESOURCE_REFERENCE:
+		return SV_Cod1ModelResourceReference(VMA(1), VMA(2));
+	case G_COD1_ACTOR_MODEL_APPLY:
+		return SV_Cod1ActorModelApply(VMA(1), VMA(2));
+	case G_COD1_ACTOR_REGISTERED_MODELS_APPLY:
+		return SV_Cod1ActorRegisteredModelsApply(VMA(1), VMA(2));
 	case G_TRACECAPSULE:
 		SV_Trace( VMA( 1 ), VMA( 2 ), VMA( 3 ), VMA( 4 ), VMA( 5 ), args[6], args[7], /* int capsule */ qtrue );
 		return 0;
@@ -441,6 +521,8 @@ int SV_GameSystemCalls( int *args ) {
 	case G_GET_USERCMD:
 		SV_GetUsercmd( args[1], VMA( 2 ) );
 		return 0;
+	case G_COD1_ENTITY_PARSE_REWIND:
+		return SV_Cod1EntityParseRewind();
 	case G_GET_ENTITY_TOKEN:
 	{
 		const char  *s;
@@ -910,11 +992,30 @@ SV_ShutdownGameProgs
 Called every time a map changes
 ===============
 */
+/* Client records survive a map change, but their entity pointers belong to
+ * the current game VM. A bootstrap server command can inspect svFlags before
+ * clients reconnect, so discard those references before unloading the VM.
+ * SV_SpawnServer can apply a new maxclients cvar before this VM shuts down,
+ * while reallocating the client array only afterwards. Keep this VM's count,
+ * captured when its allocation was established, for every clear. */
+static int sv_gameEntityClientCount;
+
+static void SV_ClearGameEntityReferences( void ) {
+	int i;
+	for ( i = 0 ; i < sv_gameEntityClientCount ; i++ ) {
+		svs.clients[i].gentity = NULL;
+	}
+}
+
 void SV_ShutdownGameProgs( void ) {
 	if ( !gvm ) {
+		SV_Cod1PrecacheClearScene();
 		return;
 	}
+	SV_Cod1LocalizedEndGameModule();
 	VM_Call( gvm, GAME_SHUTDOWN, qfalse );
+	SV_Cod1PrecacheClearScene();
+	SV_ClearGameEntityReferences();
 	VM_Free( gvm );
 	gvm = NULL;
 }
@@ -927,20 +1028,47 @@ Called for both a full init and a restart
 ==================
 */
 static void SV_InitGameVM( qboolean restart ) {
-	int i;
+	/* GAME_INIT may now emit authored fog through SV_SendServerCommand.
+	 * Clearing only afterwards leaves the previous map's entities reachable
+	 * while that command filters clients, including native DLL reloads. */
+	sv_gameEntityClientCount = sv_maxclients->integer;
+	SV_ClearGameEntityReferences();
+	if (VM_Call(gvm, GAME_COD1_STATE_ABI, sizeof(playerState_t), sizeof(usercmd_t)) != COD1_STATE_ABI) {
+		Com_Error(ERR_DROP, "PATCH42: rebuild and copy qagamex86.dll together with WolfSP.exe");
+	}
+
+
+	/* ABI checked; register before any GAME_INIT resource/registry intake. */
+	SV_Cod1NavigationBeginGameModule();
+
+	/* A fast restart retains the server world sectors while the native GAME
+	 * module replaces its entity array. Early BSP constructors can trace before
+	 * every old slot is allocated/relinked, so retire the previous spatial
+	 * scene before GAME_INIT. Preserve network baselines and snapshot metadata.
+	 * No pointer into the retired GAME array is dereferenced here. */
+	if ( restart && CM_HasV59() ) {
+		int slot;
+		SV_ClearWorld();
+		for ( slot = 0; slot < MAX_GENTITIES; ++slot ) {
+			sv.svEntities[slot].worldSector = NULL;
+			sv.svEntities[slot].nextEntityInWorldSector = NULL;
+		}
+	}
 
 	// start the entity parsing at the beginning
 	sv.entityParsePoint = CM_EntityString();
 
 	// use the current msec count for a random seed
 	// init for this gamestate
+	SV_Cod1AmbientBeginGameModule();
+	SV_Cod1LocalizedBeginGameModule();
+	sv_cod1EntityParseInit=1;sv_cod1EntityParseRewound=0;
 	VM_Call( gvm, GAME_INIT, svs.time, Com_Milliseconds(), restart );
+	sv_cod1EntityParseInit=0;
 
-	// clear all gentity pointers that might still be set from
-	// a previous level
-	for ( i = 0 ; i < sv_maxclients->integer ; i++ ) {
-		svs.clients[i].gentity = NULL;
-	}
+	// Keep the existing post-init reset. Reconnecting clients receive their
+	// current game entities later, after this initialization has completed.
+	SV_ClearGameEntityReferences();
 }
 
 
@@ -956,7 +1084,9 @@ void SV_RestartGameProgs( void ) {
 	if ( !gvm ) {
 		return;
 	}
+	SV_Cod1LocalizedEndGameModule();
 	VM_Call( gvm, GAME_SHUTDOWN, qtrue );
+	SV_ClearGameEntityReferences();
 
 	// do a restart instead of a free
 	gvm = VM_Restart( gvm );

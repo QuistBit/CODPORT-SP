@@ -29,6 +29,13 @@ If you have questions concerning this license or the applicable additional terms
 // world.c -- world query functions
 
 #include "server.h"
+#include "../game/bg_cod1_character_contact.h"
+#include <float.h>
+#include "../game/cod1_spatial.h"
+
+static void SV_Cod1SpatialClearScene( void );
+static void SV_Cod1SpatialDropSlot( int slot );
+static void SV_Cod1DObjClearScene( void );
 
 /*
 ================
@@ -154,6 +161,9 @@ SV_ClearWorld
 void SV_ClearWorld( void ) {
 	clipHandle_t h;
 	vec3_t mins, maxs;
+	SV_Cod1SpatialClearScene();
+	SV_Cod1DObjClearScene();
+	SV_Cod1PrecacheClearScene();
 
 	memset( sv_worldSectors, 0, sizeof( sv_worldSectors ) );
 	sv_numworldSectors = 0;
@@ -179,6 +189,7 @@ void SV_UnlinkEntity( sharedEntity_t *gEnt ) {
 	ent = SV_SvEntityForGentity( gEnt );
 
 	gEnt->r.linked = qfalse;
+	SV_Cod1SpatialDropSlot( (int)(ent - sv.svEntities) );
 
 	ws = ent->worldSector;
 	if ( !ws ) {
@@ -210,7 +221,9 @@ SV_LinkEntity
 */
 #define MAX_TOTAL_ENT_LEAFS     128
 worldSector_t *debugNode;
-void SV_LinkEntity( sharedEntity_t *gEnt ) {
+/* Native DObj area XY is distinct from the ordinary hull/PVS bounds. */
+static void SV_LinkEntityArea( sharedEntity_t *gEnt, const float *areaMins,
+                              const float *areaMaxs ) {
 	worldSector_t   *node;
 	int leafs[MAX_TOTAL_ENT_LEAFS];
 	int cluster;
@@ -359,9 +372,9 @@ void SV_LinkEntity( sharedEntity_t *gEnt ) {
 		if ( node->axis == -1 ) {
 			break;
 		}
-		if ( gEnt->r.absmin[node->axis] > node->dist ) {
+		if ( (areaMins ? areaMins : gEnt->r.absmin)[node->axis] > node->dist ) {
 			node = node->children[0];
-		} else if ( gEnt->r.absmax[node->axis] < node->dist ) {
+		} else if ( (areaMaxs ? areaMaxs : gEnt->r.absmax)[node->axis] < node->dist ) {
 			node = node->children[1];
 		} else {
 			break;      // crosses the node
@@ -374,6 +387,10 @@ void SV_LinkEntity( sharedEntity_t *gEnt ) {
 	node->entities = ent;
 
 	gEnt->r.linked = qtrue;
+}
+
+void SV_LinkEntity( sharedEntity_t *gEnt ) {
+	SV_LinkEntityArea(gEnt, NULL, NULL);
 }
 
 /*
@@ -465,6 +482,34 @@ int SV_AreaEntities( const vec3_t mins, const vec3_t maxs, int *entityList, int 
 
 
 //===========================================================================
+
+/* R89 private port query: target geometry, independently of brush contents.
+ * Ordinary world/entity traces continue to apply both existing content masks. */
+void SV_TraceUseEntity(trace_t *results, const vec3_t start, const vec3_t end, int entityNum) {
+    sharedEntity_t *target;
+    int i;
+    if (!results) return;
+    memset(results, 0, sizeof(*results));
+    results->fraction = 1.0f;
+    results->entityNum = ENTITYNUM_NONE;
+    if (!start || !end) return;
+    for (i = 0; i < 3; ++i)
+        if (!(start[i] >= -FLT_MAX && start[i] <= FLT_MAX) ||
+            !(end[i] >= -FLT_MAX && end[i] <= FLT_MAX)) return;
+    VectorCopy(end, results->endpos);
+    if (!sv.gentities || sv.gentitySize < (int)sizeof(sharedEntity_t) ||
+        sv.gentitySize > INT_MAX / MAX_GENTITIES ||
+        sv.num_entities <= 0 || sv.num_entities > MAX_GENTITIES ||
+        entityNum < 0 || entityNum >= sv.num_entities || entityNum >= ENTITYNUM_WORLD) return;
+    target = SV_GentityNum(entityNum);
+    if (target->s.number != entityNum || !target->r.linked || !target->r.bmodel ||
+        target->s.modelindex <= 0 || !(target->r.contents & CONTENTS_TRIGGER) ||
+        target->s.eType != ET_INVISIBLE || !(target->r.svFlags & SVF_NOCLIENT)) return;
+    CM_TraceUseInlineModel(results, start, end, target->s.modelindex,
+        target->r.currentOrigin, target->r.currentAngles);
+    if (results->fraction < 1.0f || results->startsolid || results->allsolid)
+        results->entityNum = entityNum;
+}
 
 
 typedef struct {
@@ -605,6 +650,11 @@ void SV_ClipMoveToEntities( moveclip_t *clip ) {
 								clip->mins, clip->maxs, clipHandle,  clip->contentmask,
 								origin, angles, clip->capsule );
 #endif
+        if(clip->passEntityNum==0 && clip->capsule && (clip->contentmask&CONTENTS_BODY) &&
+           trace.startsolid && touch->s.eType==ET_GENERAL && touch->s.cod1TurretActorVersion &&
+           touch->s.cod1TurretActorGeneration && !touch->r.bmodel &&
+           BG_Cod1SeparatingContact(clip->start,clip->end,clip->mins,clip->maxs,origin,touch->r.mins,touch->r.maxs))
+            continue;
 		if ( trace.allsolid ) {
 			clip->trace.allsolid = qtrue;
 			trace.entityNum = touch->s.number;
@@ -729,4 +779,30 @@ int SV_PointContents( const vec3_t p, int passEntityNum ) {
 	return contents;
 }
 
+#include "sv_cod1_spatial.inc"
+#include "sv_cod1_dobj.inc"
 
+
+#include "sv_cod1_precache.inc"
+#include "sv_cod1_actor_model_apply.inc"
+
+/* R243: snapshot-only admission. Physical queries retain the original checked
+ * model lane and its exact key; this never grants link/DObj mutation authority. */
+#include "../game/bg_cod1_unmounted_actor_wire.h"
+#include "../game/scripted_wire.h"
+qboolean SV_Cod1UnmountedSnapshotCurrent(const sharedEntity_t *ent) {
+ const cod1SpatialActorState_t *state;const cod1DObjInstance_t *object;int slot;
+ if(!ent||!CS_TableReady()||!CM_HasV59())return qfalse;
+ slot=ent->s.number;
+ if(slot<0||slot>=sv.num_entities||slot>=ENTITYNUM_WORLD||SV_GentityNum(slot)!=ent||
+    !(ent->r.svFlags&SVF_NOCLIENT)||ent->s.cod1TurretActorTick!=svs.time||
+    !(ent->s.cod1TurretActorVersion==COD1_SCRIPTED_ACTOR_WIRE_VERSION?C1ScriptedWireValid(&ent->s,svs.time):C1UAW_Valid(&ent->s,svs.time))||!CS_StateValid(slot,ent)||!CS_ModelLaneCurrent(slot))return qfalse;
+ state=cod1SpatialActors+slot;object=cod1DObjInstances[slot];
+ if(!state->hasDObj||!CS_KeyValid(&state->key)||!object||!CD_Associated(object)||
+    !CS_KeyEqual(&state->key,&object->key)||object->entity!=ent||
+    state->key.epoch!=((uint64_t)(uint32_t)ent->s.cod1TurretEpochLo|((uint64_t)(uint32_t)ent->s.cod1TurretEpochHi<<32))||
+    state->key.generation!=(uint32_t)ent->s.cod1TurretActorGeneration||
+    !VectorCompare(ent->r.currentOrigin,ent->s.pos.trBase)||
+    !VectorCompare(ent->r.currentAngles,ent->s.apos.trBase))return qfalse;
+ return qtrue;
+}

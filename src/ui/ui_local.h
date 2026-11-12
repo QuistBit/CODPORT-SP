@@ -691,6 +691,7 @@ typedef struct {
 	const char *date;
 
 	qtime_t tm;
+	qboolean compatible;              // save data matches this engine's SAVE_VERSION
 
 } savegameInfo;
 //----(SA)	end

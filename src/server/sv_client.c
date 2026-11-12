@@ -544,7 +544,10 @@ void SV_SendClientGameState( client_t *client ) {
 	int start;
 	entityState_t   *base, nullstate;
 	msg_t msg;
-	byte msgBuffer[MAX_MSGLEN];
+	byte msgBuffer[SV_MESSAGE_BUFFER_SIZE];
+	clientState_t oldState = client->state;
+	int oldPure = client->pureAuthentic;
+	int oldGameState = client->gamestateMessageNum;
 
 	Com_DPrintf( "SV_SendClientGameState() for %s\n", client->name );
 	Com_DPrintf( "Going from CS_CONNECTED to CS_PRIMED for %s\n", client->name );
@@ -556,7 +559,8 @@ void SV_SendClientGameState( client_t *client ) {
 	// gamestate message was not just sent, forcing a retransmit
 	client->gamestateMessageNum = client->netchan.outgoingSequence;
 
-	MSG_Init( &msg, msgBuffer, sizeof( msgBuffer ) );
+	MSG_Init( &msg, msgBuffer, MAX_MSGLEN );
+	msg.allowoverflow = qtrue;
 
 	// NOTE, MRE: all server->client messages now acknowledge
 	// let the client know which reliable clientCommands we have received
@@ -600,7 +604,11 @@ void SV_SendClientGameState( client_t *client ) {
 	MSG_WriteLong( &msg, sv.checksumFeed );
 
 	// deliver this to the client
-	SV_SendMessageToClient( &msg, client );
+	if ( !SV_SendMessageToClient( &msg, client ) ) {
+		client->state = oldState;
+		client->pureAuthentic = oldPure;
+		client->gamestateMessageNum = oldGameState;
+	}
 }
 
 
@@ -747,13 +755,62 @@ Check to see if the client wants a file, open it if needed and start pumping the
 Fill up msg with data
 ==================
 */
-void SV_WriteDownloadToClient( client_t *cl, msg_t *msg ) {
-	int curindex;
+/* Append one complete download record only when its encoded form and the
+ * real outer EOF fit beside the already accepted mandatory payload.  The
+ * probe is isolated from encoder diagnostics and the caller's bytes/state. */
+static qboolean SV_TryWriteDownloadRecord( msg_t *msg, int block, int fileSize,
+		int size, const byte *data, const char *error ) {
+	byte bytes[SV_MESSAGE_BUFFER_SIZE];
+	msg_t probe;
+	int savedOldsize;
+	extern int oldsize;
+	if ( !SV_MessageFitsWithEOF( msg ) || size < 0 ||
+		 size > MAX_DOWNLOAD_BLKSIZE || ( size && !data ) ) return qfalse;
+	probe = *msg;
+	probe.data = bytes;
+	memcpy( bytes, msg->data, msg->cursize );
+	savedOldsize = oldsize;
+	oldsize = 0;
+	MSG_WriteByte( &probe, svc_download );
+	MSG_WriteShort( &probe, block );
+	if ( block == 0 ) MSG_WriteLong( &probe, fileSize );
+	if ( error ) {
+		MSG_WriteString( &probe, error );
+	} else {
+		MSG_WriteShort( &probe, size );
+		if ( size ) MSG_WriteData( &probe, data, size );
+	}
+	MSG_WriteByte( &probe, svc_EOF );
+	oldsize = savedOldsize;
+	if ( probe.overflowed || probe.cursize > probe.maxsize ||
+		 probe.bit > probe.maxsize * 8 ||
+		 probe.cursize > SV_MESSAGE_PAYLOAD_LIMIT ) return qfalse;
+	/* Serialize again into untouched real backing.  Copying the probe's
+	 * partially occupied final byte would retain trial EOF bits because
+	 * Huff_putBit ORs bits rather than clearing each already occupied bit. */
+	MSG_WriteByte( msg, svc_download );
+	MSG_WriteShort( msg, block );
+	if ( block == 0 ) MSG_WriteLong( msg, fileSize );
+	if ( error ) {
+		MSG_WriteString( msg, error );
+	} else {
+		MSG_WriteShort( msg, size );
+		if ( size ) MSG_WriteData( msg, data, size );
+	}
+	return qtrue;
+}
+
+void SV_WriteDownloadToClient( client_t *cl, msg_t *msg, svDownloadSend_t *send ) {
+	int curindex, block;
 	int rate;
 	int blockspersnap;
 	int idPack, missionPack;
 	char errorMessage[1024];
 
+	if ( !send ) return;
+	send->xmitBlock = cl->downloadXmitBlock;
+	send->sendTime = cl->downloadSendTime;
+	send->clearName = qfalse;
 	if ( !*cl->downloadName ) {
 		return; // Nothing being downloaded
 
@@ -792,17 +849,15 @@ void SV_WriteDownloadToClient( client_t *cl, msg_t *msg ) {
 				Com_Printf( "clientDownload: %d : \"%s\" file not found on server\n", cl - svs.clients, cl->downloadName );
 				Com_sprintf( errorMessage, sizeof( errorMessage ), "File \"%s\" not found on server for autodownloading.\n", cl->downloadName );
 			}
-			MSG_WriteByte( msg, svc_download );
-			MSG_WriteShort( msg, 0 ); // client is expecting block zero
-			MSG_WriteLong( msg, -1 ); // illegal file size
-			MSG_WriteString( msg, errorMessage );
-
-			*cl->downloadName = 0;
+			if ( SV_TryWriteDownloadRecord( msg, 0, -1, 0, NULL, errorMessage ) ) {
+				send->clearName = qtrue;
+			}
 			return;
 		}
 
 		// Init
 		cl->downloadCurrentBlock = cl->downloadClientBlock = cl->downloadXmitBlock = 0;
+		send->xmitBlock = 0;
 		cl->downloadCount = 0;
 		cl->downloadEOF = qfalse;
 	}
@@ -877,43 +932,33 @@ void SV_WriteDownloadToClient( client_t *cl, msg_t *msg ) {
 			return; // Nothing to transmit
 
 		}
-		if ( cl->downloadXmitBlock == cl->downloadCurrentBlock ) {
+		block = send->xmitBlock;
+		if ( block == cl->downloadCurrentBlock ) {
 			// We have transmitted the complete window, should we start resending?
 
 			//FIXME:  This uses a hardcoded one second timeout for lost blocks
 			//the timeout should be based on client rate somehow
-			if ( svs.time - cl->downloadSendTime > 1000 ) {
-				cl->downloadXmitBlock = cl->downloadClientBlock;
+			if ( svs.time - send->sendTime > 1000 ) {
+				block = cl->downloadClientBlock;
 			} else {
 				return;
 			}
 		}
 
 		// Send current block
-		curindex = ( cl->downloadXmitBlock % MAX_DOWNLOAD_WINDOW );
-
-		MSG_WriteByte( msg, svc_download );
-		MSG_WriteShort( msg, cl->downloadXmitBlock );
-
-		// block zero is special, contains file size
-		if ( cl->downloadXmitBlock == 0 ) {
-			MSG_WriteLong( msg, cl->downloadSize );
+		curindex = ( block % MAX_DOWNLOAD_WINDOW );
+		if ( !SV_TryWriteDownloadRecord( msg, block, cl->downloadSize,
+				cl->downloadBlockSize[curindex], cl->downloadBlocks[curindex], NULL ) ) {
+			return; /* Keep the already complete mandatory packet and blocks. */
 		}
 
-		MSG_WriteShort( msg, cl->downloadBlockSize[curindex] );
-
-		// Write the block
-		if ( cl->downloadBlockSize[curindex] ) {
-			MSG_WriteData( msg, cl->downloadBlocks[curindex], cl->downloadBlockSize[curindex] );
-		}
-
-		Com_DPrintf( "clientDownload: %d : writing block %d\n", cl - svs.clients, cl->downloadXmitBlock );
+		Com_DPrintf( "clientDownload: %d : writing block %d\n", cl - svs.clients, block );
 
 		// Move on to the next block
 		// It will get sent with next snap shot.  The rate will keep us in line.
-		cl->downloadXmitBlock++;
+		send->xmitBlock = block + 1;
 
-		cl->downloadSendTime = svs.time;
+		send->sendTime = svs.time;
 	}
 }
 

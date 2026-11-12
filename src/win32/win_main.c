@@ -40,15 +40,6 @@ If you have questions concerning this license or the applicable additional terms
 #include <io.h>
 #include <conio.h>
 
-//#define	CD_BASEDIR	"wolf"
-#define CD_BASEDIR  ""
-//#define	CD_EXE		"wolf.exe"
-#define CD_EXE      "setup\\setup.exe"
-//#define	CD_BASEDIR_LINUX	"bin\\x86\\glibc-2.1"
-#define CD_BASEDIR_LINUX    "bin\\x86\\glibc-2.1"
-//#define	CD_EXE_LINUX "wolf"
-#define CD_EXE_LINUX "setup\\setup"
-
 #define MEM_THRESHOLD 96 * 1024 * 1024
 
 static char sys_cmdline[MAX_STRING_CHARS];
@@ -471,58 +462,6 @@ void    Sys_FreeFileList( char **list ) {
 
 /*
 ================
-Sys_ScanForCD
-
-Search all the drives to see if there is a valid CD to grab
-the cddir from
-================
-*/
-qboolean Sys_ScanForCD( void ) {
-	static char cddir[MAX_OSPATH];
-	char drive[4];
-	FILE        *f;
-	char test[MAX_OSPATH];
-#if 0
-	// don't override a cdpath on the command line
-	if ( strstr( sys_cmdline, "cdpath" ) ) {
-		return;
-	}
-#endif
-
-	drive[0] = 'c';
-	drive[1] = ':';
-	drive[2] = '\\';
-	drive[3] = 0;
-
-	// scan the drives
-	for ( drive[0] = 'c' ; drive[0] <= 'z' ; drive[0]++ ) {
-		if ( GetDriveType( drive ) != DRIVE_CDROM ) {
-			continue;
-		}
-
-		sprintf( cddir, "%s%s", drive, CD_BASEDIR );
-		sprintf( test, "%s\\%s", cddir, CD_EXE );
-		f = fopen( test, "r" );
-		if ( f ) {
-			fclose( f );
-			return qtrue;
-
-		} else {
-			sprintf( cddir, "%s%s", drive, CD_BASEDIR_LINUX );
-			sprintf( test, "%s\\%s", cddir, CD_EXE_LINUX );
-			f = fopen( test, "r" );
-			if ( f ) {
-				fclose( f );
-				return qtrue;
-			}
-		}
-	}
-
-	return qfalse;
-}
-
-/*
-================
 Sys_CheckCD
 
 Return true if the proper CD is in the drive
@@ -531,7 +470,6 @@ Return true if the proper CD is in the drive
 qboolean    Sys_CheckCD( void ) {
 	// FIXME: mission pack
 	return qtrue;
-//	return Sys_ScanForCD();
 }
 
 
@@ -624,7 +562,7 @@ void * QDECL Sys_LoadDll( const char *name, int( QDECL **entryPoint ) ( int, ...
 		if ( FS_FileExists( filename ) ) {
 			lastWarning = timestamp;
 			ret = MessageBoxEx( NULL, "You are about to load a .DLL executable that\n"
-									  "has not been verified for use with Wolfenstein.\n"
+									  "has not been verified for use with " COD1_WINDOW_TITLE ".\n"
 									  "This type of file can compromise the security of\n"
 									  "your computer.\n\n"
 									  "Select 'OK' if you choose to load it anyway.",
@@ -1172,10 +1110,10 @@ void Sys_Init( void ) {
 	}
 
 	if ( g_wv.osversion.dwMajorVersion < 4 ) {
-		Sys_Error( "Wolf requires Windows version 4 or greater" );
+		Sys_Error( COD1_WINDOW_TITLE " requires Windows version 4 or greater" );
 	}
 	if ( g_wv.osversion.dwPlatformId == VER_PLATFORM_WIN32s ) {
-		Sys_Error( "Wolf doesn't run on Win32s" );
+		Sys_Error( COD1_WINDOW_TITLE " doesn't run on Win32s" );
 	}
 
 	if ( g_wv.osversion.dwPlatformId == VER_PLATFORM_WIN32_NT ) {
@@ -1278,6 +1216,16 @@ int WINAPI WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	char cwd[MAX_OSPATH];
 	int startTime, endTime;
 
+	/* PATCH24: establish DPI awareness before creating any HWND.
+     * Resolve dynamically to retain compatibility with old Windows. */
+    {
+        HMODULE user32 = GetModuleHandleA("user32.dll");
+        typedef BOOL (WINAPI *setDpiAware_t)(void);
+        setDpiAware_t setDpiAware = user32 ?
+            (setDpiAware_t)GetProcAddress(user32, "SetProcessDPIAware") : NULL;
+        if (setDpiAware) setDpiAware();
+    }
+
 	// should never get a previous instance in Win32
 	if ( hPrevInstance ) {
 		return 0;
@@ -1294,17 +1242,6 @@ int WINAPI WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 
 	// get the initial time base
 	Sys_Milliseconds();
-
-// re-enabled CD checking for proper 'setup.exe' file on game cd
-// (SA) enable to do cd check for setup\setup.exe
-//#if 1
-#if 0
-	// if we find the CD, add a +set cddir xxx command line
-	if ( !Sys_ScanForCD() ) {
-		Sys_Error( "Game CD not in drive" );
-	}
-
-#endif
 
 	Sys_InitStreamThread();
 

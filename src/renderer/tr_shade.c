@@ -46,13 +46,29 @@ This is just for OpenGL conformance testing, it should never be the fastest
 */
 static void APIENTRY R_ArrayElementDiscrete( GLint index ) {
 	qglColor4ubv( tess.svars.colors[ index ] );
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	if ( glState.currenttmu == 2 ) {
+		int b;
+		for ( b = 0; b < NUM_TEXTURE_BUNDLES; b++ ) {
+			qglMultiTexCoord2fARB( GL_TEXTURE0_ARB + b,
+				tess.svars.texcoords[b][index][0], tess.svars.texcoords[b][index][1] );
+		}
+	} else
+#endif
 	if ( glState.currenttmu ) {
 		qglMultiTexCoord2fARB( 0, tess.svars.texcoords[ 0 ][ index ][0], tess.svars.texcoords[ 0 ][ index ][1] );
 		qglMultiTexCoord2fARB( 1, tess.svars.texcoords[ 1 ][ index ][0], tess.svars.texcoords[ 1 ][ index ][1] );
 	} else {
 		qglTexCoord2fv( tess.svars.texcoords[ 0 ][ index ] );
 	}
-	qglVertex3fv( tess.xyz[ index ] );
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	if ( tess.shader && tess.shader->cod1SunDirectional ) {
+		qglVertex4fv( tess.xyz[ index ] );
+	} else
+#endif
+	{
+		qglVertex3fv( tess.xyz[ index ] );
+	}
 }
 
 /*
@@ -260,6 +276,8 @@ Draws triangle outlines for debugging
 ================
 */
 static void DrawTris( shaderCommands_t *input ) {
+	qboolean arraysLocked = qfalse;
+
 	GL_Bind( tr.whiteImage );
 	qglColor3f( 1,1,1 );
 
@@ -274,14 +292,16 @@ static void DrawTris( shaderCommands_t *input ) {
 
 	qglVertexPointer( 3, GL_FLOAT, 16, input->xyz ); // padded for SIMD
 
-	if ( qglLockArraysEXT ) {
+	// Cloudless sky can leave zero vertices; CVA requires a positive count.
+	if ( input->numVertexes > 0 && qglLockArraysEXT && qglUnlockArraysEXT ) {
 		qglLockArraysEXT( 0, input->numVertexes );
+		arraysLocked = qtrue;
 		GLimp_LogComment( "glLockArraysEXT\n" );
 	}
 
 	R_DrawElements( input->numIndexes, input->indexes );
 
-	if ( qglUnlockArraysEXT ) {
+	if ( arraysLocked ) {
 		qglUnlockArraysEXT();
 		GLimp_LogComment( "glUnlockArraysEXT\n" );
 	}
@@ -337,6 +357,7 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 	tess.shader = state;
 	tess.fogNum = fogNum;
 	tess.dlightBits = 0;        // will be OR'd in by surface functions
+	tess.cod1PreparedModelDiffuse = qfalse;
 	tess.xstages = state->stages;
 	tess.numPasses = state->numUnfoggedPasses;
 	tess.currentStageIteratorFunc = state->optimalStageIteratorFunc;
@@ -347,6 +368,119 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 	}
 	// done.
 }
+
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+static void Cod1StageFogForDraw( const shaderStage_t *stage, unsigned long stateBits );
+static qboolean Cod1StageFogSceneAvailable( void );
+#endif
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+static void Cod1FogStateProbeDraw( const shaderStage_t *stage );
+static void Cod1FogSnapshotDraw( const shaderStage_t *stage, int stageIndex, int iteratorKind );
+#endif
+
+#if defined(COD1_WATER_GL_DRAW_PROBE) && COD1_WATER_GL_DRAW_PROBE
+/* Read-only diagnostic of the state that reaches a water draw. Never call
+ * GL_SelectTexture here: sample unit 0 while the renderer has it selected,
+ * then unit 1 at the draw. The hardware state, not glState's cache, is read. */
+#ifndef GL_BLEND_SRC
+#define GL_BLEND_SRC 0x0BE1
+#endif
+#ifndef GL_BLEND
+#define GL_BLEND 0x0BE2
+#endif
+#ifndef GL_BLEND_DST
+#define GL_BLEND_DST 0x0BE0
+#endif
+#ifndef GL_DEPTH_TEST
+#define GL_DEPTH_TEST 0x0B71
+#endif
+#ifndef GL_DEPTH_WRITEMASK
+#define GL_DEPTH_WRITEMASK 0x0B72
+#endif
+#ifndef GL_DEPTH_FUNC
+#define GL_DEPTH_FUNC 0x0B74
+#endif
+#ifndef GL_TEXTURE_BINDING_2D
+#define GL_TEXTURE_BINDING_2D 0x8069
+#endif
+#ifndef GL_TEXTURE_ENV
+#define GL_TEXTURE_ENV 0x2300
+#endif
+#ifndef GL_TEXTURE_ENV_MODE
+#define GL_TEXTURE_ENV_MODE 0x2200
+#endif
+
+typedef struct {
+	int selectedUnit;
+	int enabled;
+	int binding;
+	int envMode;
+} cod1WaterProbeTexture_t;
+
+static int cod1WaterProbeDraws;
+
+static qboolean Cod1WaterProbeWanted( void ) {
+	return cod1WaterProbeDraws < 128 && tess.shader &&
+	       !strcmp( tess.shader->name, "textures/sfx/damwater" ) &&
+	       tess.numIndexes > 0 && r_primitives &&
+	       r_primitives->integer >= 0 && r_primitives->integer <= 3 &&
+	       ri.Printf && qglIsEnabled && qglGetBooleanv && qglGetFloatv &&
+	       qglGetIntegerv && qglGetTexEnviv;
+}
+
+static void Cod1WaterProbeTexture( cod1WaterProbeTexture_t *sample ) {
+	GLint value;
+	sample->selectedUnit = glState.currenttmu;
+	sample->enabled = qglIsEnabled( GL_TEXTURE_2D ) ? 1 : 0;
+	qglGetIntegerv( GL_TEXTURE_BINDING_2D, &value );
+	sample->binding = value;
+	qglGetTexEnviv( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &value );
+	sample->envMode = value;
+}
+
+static void Cod1WaterProbeDraw( int stage, int indexes,
+		const cod1WaterProbeTexture_t *base ) {
+	cod1WaterProbeTexture_t active;
+	GLfloat color[4], start, end, density;
+	GLboolean writeDepth;
+	GLint mode, src, dst, depthFunc;
+	shaderStage_t *chosen;
+	const char *image0, *image1;
+
+	if ( !Cod1WaterProbeWanted() ) {
+		return;
+	}
+	chosen = tess.xstages[stage];
+	Cod1WaterProbeTexture( &active );
+	if ( !base ) {
+		base = &active;
+	}
+	qglGetIntegerv( GL_FOG_MODE, &mode );
+	qglGetFloatv( GL_FOG_COLOR, color );
+	qglGetFloatv( GL_FOG_START, &start );
+	qglGetFloatv( GL_FOG_END, &end );
+	qglGetFloatv( GL_FOG_DENSITY, &density );
+	qglGetIntegerv( GL_BLEND_SRC, &src );
+	qglGetIntegerv( GL_BLEND_DST, &dst );
+	qglGetIntegerv( GL_DEPTH_FUNC, &depthFunc );
+	qglGetBooleanv( GL_DEPTH_WRITEMASK, &writeDepth );
+	image0 = chosen->bundle[0].image[0] ? chosen->bundle[0].image[0]->imgName : "(none)";
+	image1 = chosen->bundle[1].image[0] ? chosen->bundle[1].image[0]->imgName : "(none)";
+	ri.Printf( PRINT_ALL,
+		"COD1_WATER_GL_DRAW frame=%d draw=%d shader=%s stage=%d indexes=%d "
+		"fog=%d fogMode=0x%x fogColor=%g,%g,%g,%g fogStart=%g fogEnd=%g fogDensity=%g "
+		"blend=%d blendSrc=0x%x blendDst=0x%x depthTest=%d depthWrite=%d depthFunc=0x%x "
+		"unit0=%d,%d,%d,0x%x active=%d,%d,%d,0x%x image0=%s image1=%s\n",
+		tr.frameCount, cod1WaterProbeDraws++, tess.shader->name, stage, indexes,
+		qglIsEnabled( GL_FOG ) ? 1 : 0, mode,
+		color[0], color[1], color[2], color[3], start, end, density,
+		qglIsEnabled( GL_BLEND ) ? 1 : 0, src, dst,
+		qglIsEnabled( GL_DEPTH_TEST ) ? 1 : 0, writeDepth ? 1 : 0, depthFunc,
+		base->selectedUnit, base->enabled, base->binding, base->envMode,
+		active.selectedUnit, active.enabled, active.binding, active.envMode,
+		image0, image1 );
+}
+#endif
 
 /*
 ===================
@@ -360,10 +494,32 @@ t1 = most downstream according to spec
 */
 static void DrawMultitextured( shaderCommands_t *input, int stage ) {
 	shaderStage_t   *pStage;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	qboolean thirdBundle;
+#endif
+#if defined(COD1_WATER_GL_DRAW_PROBE) && COD1_WATER_GL_DRAW_PROBE
+	cod1WaterProbeTexture_t waterBase;
+	qboolean waterBaseValid = qfalse;
+#endif
 
 	pStage = tess.xstages[stage];
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	thirdBundle = pStage->bundle[2].image[0] != NULL;
+	if ( thirdBundle && ( glConfig.maxActiveTextures < 3 ||
+		 !qglActiveTextureARB || !qglClientActiveTextureARB ) ) {
+		ri.Error( ERR_DROP, "CoD1 ordinary third bundle: texture unit unavailable" );
+		return;
+	}
+#endif
 
 	// Ridah
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+	if ( pStage->cod1NativeFogColor && !Cod1StageFogSceneAvailable() ) {
+		/* R_FogOn checks glfogNum, but not RDF_NOWORLDMODEL. Do not
+		 * undo SetIteratorFog's explicit off decision for opt-in stages. */
+		R_FogOff();
+	} else
+#endif
 	if ( tess.shader->noFog && pStage->isFogged ) {
 		R_FogOn();
 	} else if ( tess.shader->noFog && !pStage->isFogged ) {
@@ -387,6 +543,12 @@ static void DrawMultitextured( shaderCommands_t *input, int stage ) {
 	GL_SelectTexture( 0 );
 	qglTexCoordPointer( 2, GL_FLOAT, 0, input->svars.texcoords[0] );
 	R_BindAnimatedImage( &pStage->bundle[0] );
+#if defined(COD1_WATER_GL_DRAW_PROBE) && COD1_WATER_GL_DRAW_PROBE
+	if ( Cod1WaterProbeWanted() ) {
+		Cod1WaterProbeTexture( &waterBase );
+		waterBaseValid = qtrue;
+	}
+#endif
 
 	//
 	// lightmap/secondary pass
@@ -395,21 +557,73 @@ static void DrawMultitextured( shaderCommands_t *input, int stage ) {
 	qglEnable( GL_TEXTURE_2D );
 	qglEnableClientState( GL_TEXTURE_COORD_ARRAY );
 
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	/* The lightmap debug override applies to lightmaps, never to a regular
+	 * second authored texture. Keep ordinary RTCW handling unchanged. */
+	if ( (tess.shader->cod1ShaderType || tess.shader->cod1StaticModelSource
+#if defined(COD1_WATER_FIXED2_CANDIDATE) && COD1_WATER_FIXED2_CANDIDATE
+          || tess.shader->cod1WaterFixed2Candidate
+#endif
+#if defined(COD1_BSP59_EXACT_VERTEX_ALPHA) && COD1_BSP59_EXACT_VERTEX_ALPHA
+          || tess.shader->cod1Bsp59WorldMaterialSource
+#endif
+          ) &&
+	     !pStage->bundle[1].isLightmap && pStage->cod1TexEnv ) {
+		GL_TexEnv( pStage->cod1TexEnv );
+	} else
+#endif
 	if ( r_lightmap->integer ) {
 		GL_TexEnv( GL_REPLACE );
 	} else {
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+		GL_TexEnv( pStage->cod1TexEnv ? pStage->cod1TexEnv : tess.shader->multitextureEnv );
+#else
 		GL_TexEnv( tess.shader->multitextureEnv );
+#endif
 	}
 
 	qglTexCoordPointer( 2, GL_FLOAT, 0, input->svars.texcoords[1] );
 
 	R_BindAnimatedImage( &pStage->bundle[1] );
 
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	if ( thirdBundle ) {
+		GL_SelectTexture( 2 );
+		qglEnable( GL_TEXTURE_2D );
+		qglEnableClientState( GL_TEXTURE_COORD_ARRAY );
+		GL_TexEnv( r_lightmap->integer && pStage->bundle[2].isLightmap ?
+			GL_REPLACE : ( pStage->cod1TexEnv2 ? pStage->cod1TexEnv2 : GL_MODULATE ) );
+		qglTexCoordPointer( 2, GL_FLOAT, 0, input->svars.texcoords[2] );
+		R_BindAnimatedImage( &pStage->bundle[2] );
+	}
+#endif
+
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+	Cod1StageFogForDraw( pStage, glState.glStateBits );
+#endif
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	Cod1FogStateProbeDraw( pStage );
+	Cod1FogSnapshotDraw( pStage, stage, 1 );
+#endif
+#if defined(COD1_WATER_GL_DRAW_PROBE) && COD1_WATER_GL_DRAW_PROBE
+	Cod1WaterProbeDraw( stage, input->numIndexes,
+		waterBaseValid ? &waterBase : NULL );
+#endif
 	R_DrawElements( input->numIndexes, input->indexes );
 
 	//
-	// disable texturing on TEXTURE1, then select TEXTURE0
+	// disable downstream texturing, then select TEXTURE0
 	//
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	if ( thirdBundle ) {
+		/* Keep unit two neutral and disabled for the following two-unit draw.
+		 * Its actual image binding and renderer cache remain coherent. */
+		GL_TexEnv( GL_MODULATE );
+		qglDisableClientState( GL_TEXTURE_COORD_ARRAY );
+		qglDisable( GL_TEXTURE_2D );
+		GL_SelectTexture( 1 );
+	}
+#endif
 	//qglDisableClientState( GL_TEXTURE_COORD_ARRAY );
 	qglDisable( GL_TEXTURE_2D );
 
@@ -439,6 +653,8 @@ static void ProjectDlightTexture( void ) {
 	float radius;
 	vec3_t floatColor;
 
+	/* Model diffuse already contains its selected scene lights. */
+	if ( tess.cod1PreparedModelDiffuse ) return;
 	if ( !backEnd.refdef.num_dlights ) {
 		return;
 	}
@@ -452,7 +668,7 @@ static void ProjectDlightTexture( void ) {
 	for ( l = 0 ; l < backEnd.refdef.num_dlights ; l++ ) {
 		dlight_t    *dl;
 
-		if ( !( tess.dlightBits & ( 1 << l ) ) ) {
+		if ( !( tess.dlightBits & ( 1u << l ) ) ) {
 			continue;   // this surface definately doesn't have any of this light
 		}
 		texCoords = texCoordsArray[0];
@@ -738,6 +954,7 @@ ComputeColors
 */
 static void ComputeColors( shaderStage_t *pStage ) {
 	int i;
+    qboolean cod1PrecalcConstant=qfalse;
 
 	//
 	// rgbGen
@@ -808,6 +1025,14 @@ static void ComputeColors( shaderStage_t *pStage ) {
 	case CGEN_WAVEFORM:
 		RB_CalcWaveColor( &pStage->rgbWave, ( unsigned char * ) tess.svars.colors );
 		break;
+	case CGEN_COD1_PRECALC:
+        if (tess.shader->cod1StaticModelSource) {
+            memcpy(tess.svars.colors,tess.cod1PrecalcColors,
+                   tess.numVertexes*sizeof(tess.cod1PrecalcColors[0]));
+        } else {
+            cod1PrecalcConstant=RB_CalcCod1PrecalcModelColor(pStage,(unsigned char*)tess.svars.colors);
+        }
+        break;
 	case CGEN_ENTITY:
 		RB_CalcColorFromEntity( ( unsigned char * ) tess.svars.colors );
 		break;
@@ -819,7 +1044,7 @@ static void ComputeColors( shaderStage_t *pStage ) {
 	//
 	// alphaGen
 	//
-	switch ( pStage->alphaGen )
+	if(!cod1PrecalcConstant)switch ( pStage->alphaGen )
 	{
 	case AGEN_SKIP:
 		break;
@@ -1100,6 +1325,386 @@ static void ComputeTexCoords( shaderStage_t *pStage ) {
 
 extern void R_Fog( glfog_t *curfog );
 
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+/* Opt-in r_speeds 5 diagnostics read actual backend GL state at a world
+ * draw. They do not change fog parameters or consume the GL error queue. */
+static void Cod1FogStateProbeDraw( const shaderStage_t *stage ) {
+	static qboolean logged;
+	static int lastTime;
+	GLint mode, hint, distanceMode;
+	GLfloat density, start, end, color[4];
+	int time;
+
+	if ( !cod1Bsp59MapActive || !r_speeds || r_speeds->integer != 5 ||
+		 !stage || !tess.shader ||
+		 backEnd.projection2D || backEnd.viewParms.isPortal ||
+		 ( backEnd.refdef.rdflags & ( RDF_NOWORLDMODEL | RDF_DRAWINGSKY |
+								 RDF_SKYBOXPORTAL ) ) ) {
+		return;
+	}
+	time = backEnd.refdef.time;
+	if ( logged && time >= lastTime && (double)time - (double)lastTime < 1000.0 ) {
+		return;
+	}
+	logged = qtrue;
+	lastTime = time;
+	qglGetIntegerv( GL_FOG_MODE, &mode );
+	qglGetIntegerv( GL_FOG_HINT, &hint );
+	qglGetFloatv( GL_FOG_DENSITY, &density );
+	qglGetFloatv( GL_FOG_START, &start );
+	qglGetFloatv( GL_FOG_END, &end );
+	qglGetFloatv( GL_FOG_COLOR, color );
+	distanceMode = 0;
+	if ( glConfig.NVFogAvailable ) {
+		qglGetIntegerv( GL_FOG_DISTANCE_MODE_NV, &distanceMode );
+	}
+	ri.Printf( PRINT_ALL,
+		"CoD1 fog draw: shader=%s enabled=%i cache=%i mode=0x%x den=%.9g "
+		"near=%.9g far=%.9g GLrgb=(%.6g %.6g %.6g) "
+		"rawRGB=(%.6g %.6g %.6g) identity=%.6g overbright=%i "
+		"fullscreen=%i hwGamma=%i hint=0x%x NVdistance=0x%x "
+		"noFog=%i stageFog=%i blend=0x%lx view=(%.3f %.3f %.3f) zFar=%.3f\n",
+		tess.shader->name, qglIsEnabled( GL_FOG ) ? 1 : 0, fogIsOn,
+		(unsigned int)mode, density, start, end, color[0], color[1], color[2],
+		glfogsettings[FOG_CURRENT].color[0], glfogsettings[FOG_CURRENT].color[1],
+		glfogsettings[FOG_CURRENT].color[2], tr.identityLight, tr.overbrightBits,
+		glConfig.isFullscreen, glConfig.deviceSupportsGamma, (unsigned int)hint,
+		(unsigned int)distanceMode, tess.shader->noFog, stage->isFogged,
+		glState.glStateBits & ( GLS_SRCBLEND_BITS | GLS_DSTBLEND_BITS ),
+		backEnd.refdef.vieworg[0], backEnd.refdef.vieworg[1],
+		backEnd.refdef.vieworg[2], backEnd.viewParms.zFar );
+}
+
+/* r_speeds 7 observes one main-world frame. The immutable draw tuple is
+ * sampled for each distinct shader/stage/iterator/effective blend; depth
+ * bounds include every submitted batch of that tuple in the frame. Nothing
+ * here enables, binds, modifies or clears OpenGL state. */
+#define COD1_FOG_SNAPSHOT_CAP 128
+#ifndef GL_FOG_COORDINATE_SOURCE_EXT
+#define GL_FOG_COORDINATE_SOURCE_EXT 0x8450
+#endif
+#ifndef GL_CURRENT_FOG_COORDINATE_EXT
+#define GL_CURRENT_FOG_COORDINATE_EXT 0x8453
+#endif
+#ifndef GL_FOG_COORDINATE_ARRAY_EXT
+#define GL_FOG_COORDINATE_ARRAY_EXT 0x8457
+#endif
+
+typedef struct {
+	const shader_t *shaderKey;
+	const shaderStage_t *stageKey;
+	int stageIndex, iteratorKind;
+	unsigned long blend;
+	char shaderName[MAX_QPATH];
+	char images[3][MAX_QPATH];
+	int passes, rgbGen, alphaGen, nativeFog, noFog, stageFog;
+	int draws, vertices;
+	GLint enabled, cache, mode, hint, distanceMode;
+	GLfloat density, start, end, color[4];
+	GLint coordSource, coordArray;
+	GLfloat coordCurrent;
+	GLfloat eyeMin, eyeMax;
+} cod1FogSnapshotEntry_t;
+
+typedef struct {
+	/* 0 waits for a world draw, 1 collects, 2 has already been printed. */
+	int phase, count, droppedDraws;
+	int frame, scene, time;
+	qboolean coordAvailable;
+	vec3_t view;
+	float zFar, identity;
+	int overbright, fullscreen, hwGamma;
+	int fogNum, wolfFog, uiFullscreen;
+	glfog_t currentFog, targetFog;
+	vec3_t rawColor;
+	cod1FogSnapshotEntry_t entries[COD1_FOG_SNAPSHOT_CAP];
+} cod1FogSnapshot_t;
+
+static cod1FogSnapshot_t cod1FogSnapshot;
+
+static qboolean Cod1FogSnapshotMode( void ) {
+	if ( !r_speeds || r_speeds->integer != 7 ) {
+		if ( cod1FogSnapshot.phase ) {
+			memset( &cod1FogSnapshot, 0, sizeof( cod1FogSnapshot ) );
+		}
+		return qfalse;
+	}
+	return qtrue;
+}
+
+static qboolean Cod1FogSnapshotCoordAvailable( void ) {
+	const char *version, *extensions, *found;
+	const char *token = "GL_EXT_fog_coord";
+	int major = 0, minor = 0;
+	size_t length = strlen( token );
+
+	version = (const char *)qglGetString( GL_VERSION );
+	if ( version && sscanf( version, "%d.%d", &major, &minor ) == 2 &&
+		 ( major > 1 || ( major == 1 && minor >= 4 ) ) ) {
+		return qtrue;
+	}
+	/* GL 1.1 supports querying its extension string, but not fog-coordinate
+ 	 * enums. Require a complete advertised token before querying those. */
+	extensions = (const char *)qglGetString( GL_EXTENSIONS );
+	if ( !extensions ) {
+		return qfalse;
+	}
+	for ( found = strstr( extensions, token ); found;
+		  found = strstr( found + length, token ) ) {
+		if ( ( found == extensions || found[-1] == ' ' ) &&
+			 ( !found[length] || found[length] == ' ' ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+static void Cod1FogSnapshotDraw( const shaderStage_t *stage, int stageIndex, int iteratorKind ) {
+	cod1FogSnapshotEntry_t *entry = NULL;
+	GLfloat matrix[16], depth;
+	unsigned long blend;
+	int i, b;
+
+	if ( !Cod1FogSnapshotMode() || cod1FogSnapshot.phase == 2 ||
+		 !cod1Bsp59MapActive || !stage || !tess.shader ||
+		 tess.numVertexes <= 0 || tess.numIndexes <= 0 ||
+		 backEnd.projection2D || backEnd.viewParms.isPortal ||
+		 ( backEnd.refdef.rdflags & ( RDF_NOWORLDMODEL | RDF_DRAWINGSKY |
+								 RDF_SKYBOXPORTAL ) ) ) {
+		return;
+	}
+	if ( !cod1FogSnapshot.phase ) {
+		cod1FogSnapshot.phase = 1;
+		cod1FogSnapshot.frame = backEnd.viewParms.frameCount;
+		cod1FogSnapshot.scene = backEnd.viewParms.frameSceneNum;
+		cod1FogSnapshot.time = backEnd.refdef.time;
+		VectorCopy( backEnd.refdef.vieworg, cod1FogSnapshot.view );
+		cod1FogSnapshot.zFar = backEnd.viewParms.zFar;
+		cod1FogSnapshot.identity = tr.identityLight;
+		cod1FogSnapshot.overbright = tr.overbrightBits;
+		cod1FogSnapshot.fullscreen = glConfig.isFullscreen;
+		cod1FogSnapshot.hwGamma = glConfig.deviceSupportsGamma;
+		cod1FogSnapshot.fogNum = glfogNum;
+		cod1FogSnapshot.wolfFog = r_wolffog ? r_wolffog->integer : -1;
+		cod1FogSnapshot.uiFullscreen = r_uiFullScreen ? r_uiFullScreen->integer : -1;
+		memcpy( &cod1FogSnapshot.currentFog, &glfogsettings[FOG_CURRENT],
+			sizeof( cod1FogSnapshot.currentFog ) );
+		memcpy( &cod1FogSnapshot.targetFog, &glfogsettings[FOG_TARGET],
+			sizeof( cod1FogSnapshot.targetFog ) );
+		VectorCopy( glfogsettings[FOG_CURRENT].color, cod1FogSnapshot.rawColor );
+		cod1FogSnapshot.coordAvailable = Cod1FogSnapshotCoordAvailable();
+	} else if ( cod1FogSnapshot.frame != backEnd.viewParms.frameCount ||
+				cod1FogSnapshot.scene != backEnd.viewParms.frameSceneNum ||
+				cod1FogSnapshot.time != backEnd.refdef.time ) {
+		/* An extra view must not add a different scene to the first snapshot. */
+		return;
+	}
+	blend = glState.glStateBits & ( GLS_SRCBLEND_BITS | GLS_DSTBLEND_BITS );
+	for ( i = 0; i < cod1FogSnapshot.count; ++i ) {
+		entry = &cod1FogSnapshot.entries[i];
+		if ( entry->shaderKey == tess.shader && entry->stageKey == stage &&
+			 entry->stageIndex == stageIndex && entry->iteratorKind == iteratorKind &&
+			 entry->blend == blend ) {
+			break;
+		}
+	}
+	if ( i == cod1FogSnapshot.count ) {
+		if ( cod1FogSnapshot.count == COD1_FOG_SNAPSHOT_CAP ) {
+			++cod1FogSnapshot.droppedDraws;
+			return;
+		}
+		entry = &cod1FogSnapshot.entries[cod1FogSnapshot.count++];
+		memset( entry, 0, sizeof( *entry ) );
+		entry->shaderKey = tess.shader;
+		entry->stageKey = stage;
+		entry->stageIndex = stageIndex;
+		entry->iteratorKind = iteratorKind;
+		entry->blend = blend;
+		Q_strncpyz( entry->shaderName, tess.shader->name, sizeof( entry->shaderName ) );
+		for ( b = 0; b < 3; ++b ) {
+			/* Record compiled bundle metadata without changing active texture
+			 * units. The first authored image is not a GL binding assertion. */
+			Q_strncpyz( entry->images[b],
+				b < NUM_TEXTURE_BUNDLES && stage->bundle[b].image[0] ?
+				stage->bundle[b].image[0]->imgName : "(none)", sizeof( entry->images[b] ) );
+		}
+		entry->passes = tess.shader->numUnfoggedPasses;
+		entry->rgbGen = stage->rgbGen;
+		entry->alphaGen = stage->alphaGen;
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+		entry->nativeFog = stage->cod1NativeFogColor;
+#endif
+		entry->noFog = tess.shader->noFog;
+		entry->stageFog = stage->isFogged;
+		entry->enabled = qglIsEnabled( GL_FOG ) ? 1 : 0;
+		entry->cache = fogIsOn;
+		qglGetIntegerv( GL_FOG_MODE, &entry->mode );
+		qglGetIntegerv( GL_FOG_HINT, &entry->hint );
+		qglGetFloatv( GL_FOG_DENSITY, &entry->density );
+		qglGetFloatv( GL_FOG_START, &entry->start );
+		qglGetFloatv( GL_FOG_END, &entry->end );
+		qglGetFloatv( GL_FOG_COLOR, entry->color );
+		if ( glConfig.NVFogAvailable ) {
+			qglGetIntegerv( GL_FOG_DISTANCE_MODE_NV, &entry->distanceMode );
+		}
+		if ( cod1FogSnapshot.coordAvailable ) {
+			qglGetIntegerv( GL_FOG_COORDINATE_SOURCE_EXT, &entry->coordSource );
+			qglGetFloatv( GL_CURRENT_FOG_COORDINATE_EXT, &entry->coordCurrent );
+			entry->coordArray = qglIsEnabled( GL_FOG_COORDINATE_ARRAY_EXT ) ? 1 : 0;
+		}
+	}
+
+	qglGetFloatv( GL_MODELVIEW_MATRIX, matrix );
+	for ( i = 0; i < tess.numVertexes; ++i ) {
+		/* All four iterator vertex pointers submit three components, so the
+		 * affine input w is 1 even when the padding in tess.xyz[][3] is 0. */
+		depth = -( matrix[2] * tess.xyz[i][0] + matrix[6] * tess.xyz[i][1] +
+				   matrix[10] * tess.xyz[i][2] + matrix[14] );
+		if ( !entry->vertices && !i ) {
+			entry->eyeMin = entry->eyeMax = depth;
+		} else {
+			if ( depth < entry->eyeMin ) entry->eyeMin = depth;
+			if ( depth > entry->eyeMax ) entry->eyeMax = depth;
+		}
+	}
+	++entry->draws;
+	entry->vertices += tess.numVertexes;
+}
+
+void RB_Cod1FogSnapshotFlush( void ) {
+	static const char *iteratorNames[4] = {
+		"generic", "generic_multitexture", "vertexlit", "lightmapped"
+	};
+	cod1FogSnapshotEntry_t *entry;
+	int i;
+
+	if ( !Cod1FogSnapshotMode() ) {
+		return;
+	}
+	if ( !cod1Bsp59MapActive ) {
+		/* Do not report an interrupted native view after a map/context
+		 * change. A legacy-only frame never consumes the armed snapshot. */
+		if ( cod1FogSnapshot.phase == 1 ) {
+			memset( &cod1FogSnapshot, 0, sizeof( cod1FogSnapshot ) );
+		}
+		return;
+	}
+	if ( cod1FogSnapshot.phase != 1 || !cod1FogSnapshot.count ) {
+		return;
+	}
+	cod1FogSnapshot.phase = 2;
+	ri.Printf( PRINT_ALL,
+		"CoD1 fog snapshot: frame=%i scene=%i time=%i entries=%i cap=%i "
+		"truncated=%i droppedDraws=%i view=(%.3f %.3f %.3f) zFar=%.3f "
+		"identity=%.6g overbright=%i fullscreen=%i hwGamma=%i "
+		"rawRGB=(%.6g %.6g %.6g) fogCoords=%i\n",
+		cod1FogSnapshot.frame, cod1FogSnapshot.scene, cod1FogSnapshot.time,
+		cod1FogSnapshot.count, COD1_FOG_SNAPSHOT_CAP,
+		cod1FogSnapshot.droppedDraws ? 1 : 0, cod1FogSnapshot.droppedDraws,
+		cod1FogSnapshot.view[0], cod1FogSnapshot.view[1], cod1FogSnapshot.view[2],
+		cod1FogSnapshot.zFar, cod1FogSnapshot.identity, cod1FogSnapshot.overbright,
+		cod1FogSnapshot.fullscreen, cod1FogSnapshot.hwGamma,
+		cod1FogSnapshot.rawColor[0], cod1FogSnapshot.rawColor[1],
+		cod1FogSnapshot.rawColor[2], cod1FogSnapshot.coordAvailable );
+	ri.Printf( PRINT_ALL,
+		"CoD1 fog scene: selected=%i wolfFog=%i uiFullscreen=%i "
+		"currentRegistered=%i currentMode=0x%x currentDen=%.9g "
+		"currentNear=%.9g currentFar=%.9g currentRGB=(%.6g %.6g %.6g) currentDrawSky=%i "
+		"targetRegistered=%i targetMode=0x%x targetDen=%.9g "
+		"targetNear=%.9g targetFar=%.9g targetRGB=(%.6g %.6g %.6g) targetDrawSky=%i\n",
+		cod1FogSnapshot.fogNum, cod1FogSnapshot.wolfFog, cod1FogSnapshot.uiFullscreen,
+		cod1FogSnapshot.currentFog.registered, (unsigned int)cod1FogSnapshot.currentFog.mode,
+		cod1FogSnapshot.currentFog.density, cod1FogSnapshot.currentFog.start,
+		cod1FogSnapshot.currentFog.end, cod1FogSnapshot.currentFog.color[0],
+		cod1FogSnapshot.currentFog.color[1], cod1FogSnapshot.currentFog.color[2],
+		cod1FogSnapshot.currentFog.drawsky, cod1FogSnapshot.targetFog.registered,
+		(unsigned int)cod1FogSnapshot.targetFog.mode, cod1FogSnapshot.targetFog.density,
+		cod1FogSnapshot.targetFog.start, cod1FogSnapshot.targetFog.end,
+		cod1FogSnapshot.targetFog.color[0], cod1FogSnapshot.targetFog.color[1],
+		cod1FogSnapshot.targetFog.color[2], cod1FogSnapshot.targetFog.drawsky );
+	for ( i = 0; i < cod1FogSnapshot.count; ++i ) {
+		entry = &cod1FogSnapshot.entries[i];
+		ri.Printf( PRINT_ALL,
+			"CoD1 fog surface: shader=%s stage=%i passes=%i iterator=%s "
+			"draws=%i verts=%i eyeDepth=(%.6g %.6g) enabled=%i cache=%i "
+			"mode=0x%x den=%.9g near=%.9g far=%.9g GLrgb=(%.6g %.6g %.6g) "
+			"hint=0x%x NVdistance=0x%x coordSource=0x%x coordCurrent=%.6g "
+			"coordArray=%i noFog=%i stageFog=%i nativeFog=%i blend=0x%lx "
+			"rgbGen=%i alphaGen=%i bundles=(%s %s %s)\n",
+			entry->shaderName, entry->stageIndex, entry->passes,
+			iteratorNames[entry->iteratorKind], entry->draws, entry->vertices,
+			entry->eyeMin, entry->eyeMax, entry->enabled, entry->cache,
+			(unsigned int)entry->mode, entry->density, entry->start, entry->end,
+			entry->color[0], entry->color[1], entry->color[2], (unsigned int)entry->hint,
+			(unsigned int)entry->distanceMode, (unsigned int)entry->coordSource,
+			entry->coordCurrent, entry->coordArray, entry->noFog, entry->stageFog,
+			entry->nativeFog, entry->blend, entry->rgbGen, entry->alphaGen,
+			entry->images[0], entry->images[1], entry->images[2] );
+	}
+	ri.Printf( PRINT_ALL, "CoD1 fog snapshot end: entries=%i; set r_speeds 0 then 7 to capture again\n",
+		cod1FogSnapshot.count );
+}
+#endif
+
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+/* CoDSP 0x4C8A20 selects black RGB when the *effective* destination blend
+ * bits equal ONE, while retaining the scene fog alpha. Otherwise native
+ * fog RGB is scaled by identityLight when submitted to GL. This context is
+ * populated only after RTCW has accepted a registered fog for this iterator.
+ * Per-stage opt-in keeps ordinary RTCW materials on their existing path. */
+static vec4_t cod1StageFogSceneColor;
+static qboolean cod1StageFogSceneValid;
+static qboolean cod1StageFogBlack;
+
+static qboolean Cod1StageFogSceneAvailable( void ) {
+	return cod1StageFogSceneValid;
+}
+
+static void Cod1StageFogRestore( void ) {
+	if ( cod1StageFogBlack && cod1StageFogSceneValid ) {
+		qglFogfv( GL_FOG_COLOR, cod1StageFogSceneColor );
+	}
+	cod1StageFogBlack = qfalse;
+}
+
+static void Cod1StageFogScene( const glfog_t *fog ) {
+	cod1StageFogSceneValid = fog && fog->registered && r_wolffog &&
+		r_wolffog->integer && fogIsOn;
+	if ( cod1StageFogSceneValid ) {
+		memcpy( cod1StageFogSceneColor, fog->color, sizeof( cod1StageFogSceneColor ) );
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+		/* Match R_Fog's submitted base colour, without changing the authored
+		 * record or multiplying again when restoring after an additive pass. */
+		if ( cod1Bsp59MapActive ) {
+			cod1StageFogSceneColor[0] *= tr.identityLight;
+			cod1StageFogSceneColor[1] *= tr.identityLight;
+			cod1StageFogSceneColor[2] *= tr.identityLight;
+		}
+#endif
+	}
+}
+
+static void Cod1StageFogForDraw( const shaderStage_t *stage, unsigned long stateBits ) {
+	GLfloat black[4];
+
+	if ( !cod1StageFogSceneValid || !stage->cod1NativeFogColor || !fogIsOn ) {
+		Cod1StageFogRestore();
+		return;
+	}
+	if ( ( stateBits & GLS_DSTBLEND_BITS ) != GLS_DSTBLEND_ONE ) {
+		Cod1StageFogRestore();
+		return;
+	}
+	if ( cod1StageFogBlack ) {
+		return;
+	}
+	black[0] = black[1] = black[2] = 0.0f;
+	black[3] = cod1StageFogSceneColor[3];
+	qglFogfv( GL_FOG_COLOR, black );
+	cod1StageFogBlack = qtrue;
+}
+#endif
+
 /*
 ==============
 SetIteratorFog
@@ -1107,6 +1712,10 @@ SetIteratorFog
 ==============
 */
 void SetIteratorFog( void ) {
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+	Cod1StageFogRestore();
+	cod1StageFogSceneValid = qfalse;
+#endif
 	// changed for problem when you start the game with r_fastsky set to '1'
 //	if(r_fastsky->integer || backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) {
 	if ( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) {
@@ -1117,6 +1726,9 @@ void SetIteratorFog( void ) {
 	if ( backEnd.refdef.rdflags & RDF_DRAWINGSKY ) {
 		if ( glfogsettings[FOG_SKY].registered ) {
 			R_Fog( &glfogsettings[FOG_SKY] );
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+			Cod1StageFogScene( &glfogsettings[FOG_SKY] );
+#endif
 		} else {
 			R_FogOff();
 		}
@@ -1127,12 +1739,18 @@ void SetIteratorFog( void ) {
 	if ( skyboxportal && backEnd.refdef.rdflags & RDF_SKYBOXPORTAL ) {
 		if ( glfogsettings[FOG_PORTALVIEW].registered ) {
 			R_Fog( &glfogsettings[FOG_PORTALVIEW] );
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+			Cod1StageFogScene( &glfogsettings[FOG_PORTALVIEW] );
+#endif
 		} else {
 			R_FogOff();
 		}
 	} else {
 		if ( glfogNum > FOG_NONE ) {
 			R_Fog( &glfogsettings[FOG_CURRENT] );
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+			Cod1StageFogScene( &glfogsettings[FOG_CURRENT] );
+#endif
 		} else {
 			R_FogOff();
 		}
@@ -1185,6 +1803,11 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input ) {
 			}
 
 			// Ridah, per stage fogging (detail textures)
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+			if ( pStage->cod1NativeFogColor && !Cod1StageFogSceneAvailable() ) {
+				R_FogOff();
+			} else
+#endif
 			if ( tess.shader->noFog && pStage->isFogged ) {
 				R_FogOn();
 			} else if ( tess.shader->noFog && !pStage->isFogged ) {
@@ -1236,21 +1859,45 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input ) {
 			//
 			// draw
 			//
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+			Cod1StageFogForDraw( pStage, glState.glStateBits );
+#endif
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+			Cod1FogStateProbeDraw( pStage );
+			Cod1FogSnapshotDraw( pStage, stage, 0 );
+#endif
+#if defined(COD1_WATER_GL_DRAW_PROBE) && COD1_WATER_GL_DRAW_PROBE
+			Cod1WaterProbeDraw( stage, input->numIndexes, NULL );
+#endif
 			R_DrawElements( input->numIndexes, input->indexes );
 		}
 		// allow skipping out to show just lightmaps during development
-		if ( r_lightmap->integer && ( pStage->bundle[0].isLightmap || pStage->bundle[1].isLightmap || pStage->bundle[0].vertexLightmap ) ) {
+		if ( r_lightmap->integer && ( pStage->bundle[0].isLightmap || pStage->bundle[1].isLightmap || pStage->bundle[0].vertexLightmap
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+			 || pStage->bundle[2].isLightmap
+#endif
+			 ) ) {
 			break;
 		}
 	}
+#if defined(COD1_NATIVE_STAGE_FOG_COLOR_WIP) && COD1_NATIVE_STAGE_FOG_COLOR_WIP
+	/* The stage override must not leak into dlights, fog passes or the next
+	 * shader, including after a debug lightmap break or skipped fade. */
+	Cod1StageFogRestore();
+#endif
 }
 
+
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+#include "tr_cod1_perlight_runtime.h"
+#endif
 
 /*
 ** RB_StageIteratorGeneric
 */
 void RB_StageIteratorGeneric( void ) {
 	shaderCommands_t *input;
+	qboolean arraysLocked = qfalse;
 
 	input = &tess;
 
@@ -1286,8 +1933,16 @@ void RB_StageIteratorGeneric( void ) {
 
 	// set polygon offset if necessary
 	if ( input->shader->polygonOffset ) {
+		float factor = r_offsetFactor->value;
+		float units = r_offsetUnits->value;
+		if ( input->shader->cod1PolygonOffsetMode == 1 ) {
+			factor *= 2.0f;
+			units *= 2.0f;
+		} else if ( input->shader->cod1PolygonOffsetMode == 2 ) {
+			factor = 0.0f;
+		}
 		qglEnable( GL_POLYGON_OFFSET_FILL );
-		qglPolygonOffset( r_offsetFactor->value, r_offsetUnits->value );
+		qglPolygonOffset( factor, units );
 	}
 
 	//
@@ -1296,7 +1951,11 @@ void RB_StageIteratorGeneric( void ) {
 	// to avoid compiling those arrays since they will change
 	// during multipass rendering
 	//
-	if ( tess.numPasses > 1 || input->shader->multitextureEnv ) {
+	if ( tess.numPasses > 1 || input->shader->multitextureEnv
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+         || input->shader->cod1PerlightRuntime
+#endif
+         ) {
 		setArraysOnce = qfalse;
 		qglDisableClientState( GL_COLOR_ARRAY );
 		qglDisableClientState( GL_TEXTURE_COORD_ARRAY );
@@ -1318,12 +1977,31 @@ void RB_StageIteratorGeneric( void ) {
 		qglNormalPointer( GL_FLOAT, 16, input->normal );
 	}
 
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    if(input->shader->cod1PerlightRuntime && qglClientActiveTextureARB) {
+        int unit;
+        /* Secondary coordinate arrays may remain enabled after an ordinary
+         * multitexture pass. Keep mutable perLight UVs outside CVA locking. */
+        for(unit=1;unit<NUM_TEXTURE_BUNDLES && unit<glConfig.maxActiveTextures;++unit) {
+            qglClientActiveTextureARB(GL_TEXTURE0_ARB+unit);
+            qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+        }
+        qglClientActiveTextureARB(GL_TEXTURE0_ARB);
+    }
+#endif
 	//
 	// lock XYZ
 	//
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	qglVertexPointer( input->shader->cod1SunDirectional ? 4 : 3,
+		GL_FLOAT, 16, input->xyz ); // preserve native directional w=0
+#else
 	qglVertexPointer( 3, GL_FLOAT, 16, input->xyz ); // padded for SIMD
-	if ( qglLockArraysEXT ) {
+#endif
+	// Cloudless sky can leave zero vertices; CVA requires a positive count.
+	if ( input->numVertexes > 0 && qglLockArraysEXT && qglUnlockArraysEXT ) {
 		qglLockArraysEXT( 0, input->numVertexes );
+		arraysLocked = qtrue;
 		GLimp_LogComment( "glLockArraysEXT\n" );
 	}
 
@@ -1343,7 +2021,11 @@ void RB_StageIteratorGeneric( void ) {
 	//
 	// now do any dynamic lighting needed
 	//
-	if ( tess.dlightBits && tess.shader->sort <= SS_OPAQUE
+	if (
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+         !RB_Cod1PerlightDynamic() &&
+#endif
+         tess.dlightBits && tess.shader->sort <= SS_OPAQUE
 		 && !( tess.shader->surfaceFlags & ( SURF_NODLIGHT | SURF_SKY ) ) ) {
 		ProjectDlightTexture();
 	}
@@ -1358,7 +2040,7 @@ void RB_StageIteratorGeneric( void ) {
 	//
 	// unlock arrays
 	//
-	if ( qglUnlockArraysEXT ) {
+	if ( arraysLocked ) {
 		qglUnlockArraysEXT();
 		GLimp_LogComment( "glUnlockArraysEXT\n" );
 	}
@@ -1389,6 +2071,7 @@ void RB_StageIteratorGeneric( void ) {
 void RB_StageIteratorVertexLitTexture( void ) {
 	shaderCommands_t *input;
 	shader_t        *shader;
+	qboolean arraysLocked = qfalse;
 
 	input = &tess;
 
@@ -1438,8 +2121,10 @@ void RB_StageIteratorVertexLitTexture( void ) {
 	qglVertexPointer( 3, GL_FLOAT, 16, input->xyz );
 
 
-	if ( qglLockArraysEXT ) {
+	// Cloudless sky can leave zero vertices; CVA requires a positive count.
+	if ( input->numVertexes > 0 && qglLockArraysEXT && qglUnlockArraysEXT ) {
 		qglLockArraysEXT( 0, input->numVertexes );
+		arraysLocked = qtrue;
 		GLimp_LogComment( "glLockArraysEXT\n" );
 	}
 
@@ -1448,6 +2133,10 @@ void RB_StageIteratorVertexLitTexture( void ) {
 	//
 	R_BindAnimatedImage( &tess.xstages[0]->bundle[0] );
 	GL_State( tess.xstages[0]->stateBits );
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	Cod1FogStateProbeDraw( tess.xstages[0] );
+	Cod1FogSnapshotDraw( tess.xstages[0], 0, 2 );
+#endif
 	R_DrawElements( input->numIndexes, input->indexes );
 
 	//
@@ -1467,7 +2156,7 @@ void RB_StageIteratorVertexLitTexture( void ) {
 	//
 	// unlock arrays
 	//
-	if ( qglUnlockArraysEXT ) {
+	if ( arraysLocked ) {
 		qglUnlockArraysEXT();
 		GLimp_LogComment( "glUnlockArraysEXT\n" );
 	}
@@ -1486,6 +2175,7 @@ void RB_StageIteratorVertexLitTexture( void ) {
 
 void RB_StageIteratorLightmappedMultitexture( void ) {
 	shaderCommands_t *input;
+	qboolean arraysLocked = qfalse;
 
 	input = &tess;
 
@@ -1563,11 +2253,17 @@ void RB_StageIteratorLightmappedMultitexture( void ) {
 	//
 	// lock arrays
 	//
-	if ( qglLockArraysEXT ) {
+	// Cloudless sky can leave zero vertices; CVA requires a positive count.
+	if ( input->numVertexes > 0 && qglLockArraysEXT && qglUnlockArraysEXT ) {
 		qglLockArraysEXT( 0, input->numVertexes );
+		arraysLocked = qtrue;
 		GLimp_LogComment( "glLockArraysEXT\n" );
 	}
 
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	Cod1FogStateProbeDraw( tess.xstages[0] );
+	Cod1FogSnapshotDraw( tess.xstages[0], 0, 3 );
+#endif
 	R_DrawElements( input->numIndexes, input->indexes );
 
 	//
@@ -1599,7 +2295,7 @@ void RB_StageIteratorLightmappedMultitexture( void ) {
 	//
 	// unlock arrays
 	//
-	if ( qglUnlockArraysEXT ) {
+	if ( arraysLocked ) {
 		qglUnlockArraysEXT();
 		GLimp_LogComment( "glUnlockArraysEXT\n" );
 	}
@@ -1690,3 +2386,6 @@ void RB_EndSurface( void ) {
 	GLimp_LogComment( "----------\n" );
 }
 
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+#include "tr_cod1_water_runtime.h"
+#endif

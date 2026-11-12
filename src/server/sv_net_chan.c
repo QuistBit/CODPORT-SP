@@ -152,8 +152,34 @@ SV_Netchan_Transmit
 */
 
 //extern byte chksum[65536];
-void SV_Netchan_Transmit( client_t *client, msg_t *msg ) {   //int length, const byte *data ) {
+/* Exact encoded EOF preflight.  Scratch padding protects the legacy MSG
+ * writer's final symbol, while maxsize remains the logical wire limit. */
+qboolean SV_MessageFitsWithEOF( const msg_t *msg ) {
+	byte bytes[SV_MESSAGE_BUFFER_SIZE];
+	msg_t probe;
+	int savedOldsize;
+	extern int oldsize;
+	if ( !msg || !msg->data || msg->oob || msg->overflowed ||
+		 msg->maxsize < 4 || msg->maxsize > MAX_MSGLEN ||
+		 msg->cursize < 0 || msg->cursize > msg->maxsize ||
+		 msg->bit < 0 || msg->bit > msg->maxsize * 8 ||
+		 ( msg->cursize == 0 ? msg->bit != 0 :
+			msg->cursize != ( msg->bit >> 3 ) + 1 ) ) return qfalse;
+	probe = *msg;
+	probe.data = bytes;
+	memcpy( bytes, msg->data, msg->cursize );
+	savedOldsize = oldsize;
+	oldsize = 0;
+	MSG_WriteByte( &probe, svc_EOF );
+	oldsize = savedOldsize;
+	return !probe.overflowed && probe.cursize <= probe.maxsize &&
+		probe.bit <= probe.maxsize * 8 &&
+		probe.cursize <= SV_MESSAGE_PAYLOAD_LIMIT;
+}
+
+qboolean SV_Netchan_Transmit( client_t *client, msg_t *msg ) {
 //	int i;
+	if ( !SV_MessageFitsWithEOF( msg ) ) return qfalse;
 	MSG_WriteByte( msg, svc_EOF );
 //	for(i=SV_ENCODE_START;i<msg->cursize;i++) {
 //		chksum[i-SV_ENCODE_START] = msg->data[i];
@@ -163,6 +189,7 @@ void SV_Netchan_Transmit( client_t *client, msg_t *msg ) {   //int length, const
 	SV_Netchan_Encode( client, msg );
 #endif
 	Netchan_Transmit( &client->netchan, msg->cursize, msg->data );
+	return qtrue;
 }
 
 /*

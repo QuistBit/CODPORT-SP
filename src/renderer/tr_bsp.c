@@ -29,6 +29,32 @@ If you have questions concerning this license or the applicable additional terms
 // tr_map.c
 
 #include "tr_local.h"
+#include "../qcommon/cod1_bsp.h"
+#include <limits.h>
+
+/* R12 research trace. The default build has no extra renderer path. */
+#ifndef COD1_LIGHTMAP_NUMERIC_DIAGNOSTICS
+#define COD1_LIGHTMAP_NUMERIC_DIAGNOSTICS 0
+#endif
+
+/* Research-only CoD v59 RGB conversion. Keep the installed RTCW path by default. */
+#ifndef COD1_NATIVE_LIGHTMAP_RGB
+#define COD1_NATIVE_LIGHTMAP_RGB 0
+#endif
+#ifndef COD1_NATIVE_LIGHTMAP_GL
+#define COD1_NATIVE_LIGHTMAP_GL 0
+#endif
+#ifndef COD1_NATIVE_LIGHTMAP_PACK
+#define COD1_NATIVE_LIGHTMAP_PACK 0
+#endif
+#if COD1_NATIVE_LIGHTMAP_PACK && ( !COD1_NATIVE_LIGHTMAP_RGB || !COD1_NATIVE_LIGHTMAP_GL )
+#error "Packed CoD1 lightmaps require native RGB conversion and direct GL upload"
+#endif
+#if COD1_NATIVE_LIGHTMAP_PACK
+#include "tr_cod1_lightmap_packer.h"
+/* Only the BSP soup registration window uses exact packed-group shader keys. */
+qboolean cod1PackedWorldShaders;
+#endif
 
 /*
 
@@ -42,6 +68,45 @@ void RE_LoadWorldMap( const char *name );
 
 static world_t s_worldData;
 static byte        *fileBase;
+qboolean cod1Bsp59MapActive;
+
+#if COD1_LIGHTMAP_NUMERIC_DIAGNOSTICS
+static qboolean cod1LmTraceDam;
+static qboolean R_Cod1LmTraceDamName( const char *name ) {
+	const char *base, *slash, *backslash;
+	if ( !name ) return qfalse;
+	slash = strrchr( name, '/' );
+	backslash = strrchr( name, '\\' );
+	base = slash && ( !backslash || slash > backslash ) ? slash + 1 :
+		backslash ? backslash + 1 : name;
+	return !Q_stricmp( base, "dam.bsp" ) || !Q_stricmp( base, "dam" );
+}
+
+/* These two verified dam world soups use atlas 0 (mountain) and atlas 12
+ * (waterfall). A stage may be a legacy fallback: report what was registered. */
+static void R_Cod1LmTraceSoup( int index, const char *name,
+		int requestedAtlas, const shader_t *registered ) {
+	int stage, bundle;
+	if ( !cod1LmTraceDam || ( index != 49 && index != 113 ) || !registered ) return;
+	ri.Printf( PRINT_ALL,
+		"CoD1 LM soup=%d material=%s requestedAtlas=%d shaderAtlas=%d passes=%d sort=%g env=%d fallback=%d\n",
+		index, name, requestedAtlas, registered->lightmapIndex,
+		registered->numUnfoggedPasses, registered->sort,
+		registered->multitextureEnv, registered->defaultShader );
+	for ( stage = 0; stage < registered->numUnfoggedPasses; stage++ ) {
+		const shaderStage_t *s = registered->stages[stage];
+		if ( !s ) continue;
+		for ( bundle = 0; bundle < NUM_TEXTURE_BUNDLES; bundle++ ) {
+			const textureBundle_t *b = &s->bundle[bundle];
+			const image_t *image = b->image[0];
+			ri.Printf( PRINT_ALL,
+				"CoD1 LM soup=%d stage=%d bundle=%d image=%s isLightmap=%d tcGen=%d stateBits=%u\n",
+				index, stage, bundle, image ? image->imgName : "(none)",
+				b->isLightmap, b->tcGen, s->stateBits );
+		}
+	}
+}
+#endif
 
 int c_subdivisions;
 int c_gridVerts;
@@ -274,7 +339,8 @@ static void R_LoadVisibility( lump_t *l ) {
 ShaderForShaderNum
 ===============
 */
-static shader_t *ShaderForShaderNum( int shaderNum, int lightmapNum ) {
+static shader_t *ShaderForShaderNum( int shaderNum, int lightmapNum,
+		cod1SurfaceMaterial_t *source ) {
 	shader_t    *shader;
 	dshader_t   *dsh;
 
@@ -283,6 +349,7 @@ static shader_t *ShaderForShaderNum( int shaderNum, int lightmapNum ) {
 		ri.Error( ERR_DROP, "ShaderForShaderNum: bad num %i", shaderNum );
 	}
 	dsh = &s_worldData.shaders[ shaderNum ];
+	if ( source ) source->requestedLightmap = lightmapNum;
 
 	if ( r_vertexLight->integer || glConfig.hardwareType == GLHW_PERMEDIA2 ) {
 		lightmapNum = LIGHTMAP_BY_VERTEX;
@@ -291,8 +358,15 @@ static shader_t *ShaderForShaderNum( int shaderNum, int lightmapNum ) {
 	if ( r_fullbright->integer ) {
 		lightmapNum = LIGHTMAP_WHITEIMAGE;
 	}
+	if ( source ) source->effectiveLightmap = lightmapNum;
 
-	shader = R_FindShader( dsh->shader, lightmapNum, qtrue );
+	shader = R_FindShaderForBspMaterial( dsh->shader, lightmapNum, qtrue, s_worldData.isCod1 );
+	if ( source ) {
+		source->route = shader->cod1MaterialRoute;
+		source->registeredLightmap = shader->lightmapIndex;
+		source->resolvedShaderIndex = shader->index;
+		source->fromBackup = shader->cod1MaterialFromBackup;
+	}
 
 	// if the shader had errors, just use default shader
 	if ( shader->defaultShader ) {
@@ -361,7 +435,7 @@ static void ParseFace( dsurface_t *ds, drawVert_t *verts, msurface_t *surf, int 
 	surf->fogIndex = LittleLong( ds->fogNum ) + 1;
 
 	// get shader value
-	surf->shader = ShaderForShaderNum( ds->shaderNum, lightmapNum );
+	surf->shader = ShaderForShaderNum( ds->shaderNum, lightmapNum, NULL );
 	if ( r_singleShader->integer && !surf->shader->isSky ) {
 		surf->shader = tr.defaultShader;
 	}
@@ -438,7 +512,7 @@ static void ParseMesh( dsurface_t *ds, drawVert_t *verts, msurface_t *surf ) {
 	surf->fogIndex = LittleLong( ds->fogNum ) + 1;
 
 	// get shader value
-	surf->shader = ShaderForShaderNum( ds->shaderNum, lightmapNum );
+	surf->shader = ShaderForShaderNum( ds->shaderNum, lightmapNum, NULL );
 	if ( r_singleShader->integer && !surf->shader->isSky ) {
 		surf->shader = tr.defaultShader;
 	}
@@ -498,7 +572,7 @@ static void ParseTriSurf( dsurface_t *ds, drawVert_t *verts, msurface_t *surf, i
 	surf->fogIndex = LittleLong( ds->fogNum ) + 1;
 
 	// get shader
-	surf->shader = ShaderForShaderNum( ds->shaderNum, LIGHTMAP_BY_VERTEX );
+	surf->shader = ShaderForShaderNum( ds->shaderNum, LIGHTMAP_BY_VERTEX, NULL );
 	if ( r_singleShader->integer && !surf->shader->isSky ) {
 		surf->shader = tr.defaultShader;
 	}
@@ -512,6 +586,8 @@ static void ParseTriSurf( dsurface_t *ds, drawVert_t *verts, msurface_t *surf, i
 						   + numIndexes * sizeof( tri->indexes[0] ) );
 
 	tri->surfaceType = SF_TRIANGLES;
+	tri->cod1PrecalcValid = qfalse;
+	memset(tri->cod1PrecalcRGBA, 0, sizeof(tri->cod1PrecalcRGBA));
 	tri->numVerts = numVerts;
 	tri->numIndexes = numIndexes;
 	tri->verts = ( drawVert_t * )( tri + 1 );
@@ -559,7 +635,7 @@ static void ParseFlare( dsurface_t *ds, drawVert_t *verts, msurface_t *surf, int
 	surf->fogIndex = LittleLong( ds->fogNum ) + 1;
 
 	// get shader
-	surf->shader = ShaderForShaderNum( ds->shaderNum, LIGHTMAP_BY_VERTEX );
+	surf->shader = ShaderForShaderNum( ds->shaderNum, LIGHTMAP_BY_VERTEX, NULL );
 	if ( r_singleShader->integer && !surf->shader->isSky ) {
 		surf->shader = tr.defaultShader;
 	}
@@ -2120,6 +2196,813 @@ void R_LoadEntities( lump_t *l ) {
 }
 
 /*
+================
+R_LoadCod1Surfaces
+
+Translate CoD1 triangle soups into the renderer's existing triangle-surface
+representation.  The map remains in its original coordinate system; this is
+deliberately a render-only bridge, not a Q3 BSP reinterpretation.
+================
+*/
+static const char *R_Cod1MaterialRouteName( cod1MaterialRoute_t route ) {
+	switch ( route ) {
+	case COD1_MATERIAL_SCRIPT_LEGACY: return "script-legacy";
+	case COD1_MATERIAL_SCRIPT_WINDOW: return "script-static-glow";
+    case COD1_MATERIAL_SCRIPT_PERLIGHT_PARTIAL: return "script-static-perlight-deferred";
+	case COD1_MATERIAL_SCRIPT_IR: return "script-ir";
+	case COD1_MATERIAL_SCRIPT_WATER_CANDIDATE: return "script-water-candidate";
+	case COD1_MATERIAL_SCRIPT_DIFFUSE: return "script-diffuse-fallback";
+	case COD1_MATERIAL_IMPLICIT_IMAGE: return "implicit-image";
+	case COD1_MATERIAL_SCRIPT_PARSE_FAILED: return "script-parse-failed";
+	case COD1_MATERIAL_MISSING_IMAGE: return "implicit-missing-image";
+	case COD1_MATERIAL_STYPE_SUBSET: return "stype-subset";
+	case COD1_MATERIAL_STYPE_FAILED: return "stype-unsupported";
+	default: return "unresolved";
+	}
+}
+
+/* This is the surface registration state, before remaps and frame rendering.
+ * r_cod1MaterialTrace=1 prints one representative of each BSP material,
+ * signed atlas and renderer route used by world or inline soups. */
+static void R_Cod1ReportMaterials( const cod1BspWorldInfo_t *info ) {
+	const cod1SurfaceMaterial_t *sources = s_worldData.cod1SurfaceMaterials;
+	cvar_t *trace = ri.Cvar_Get( "r_cod1MaterialTrace", "0", 0 );
+	int routes[COD1_MATERIAL_ROUTE_COUNT], flagSkipped = 0, sky = 0, drawn = 0;
+	int defaults = 0, backup = 0, negativeAtlas = 0;
+	int i, s, b, used = 0, slots = 0;
+	int *firstByKey = NULL;
+	byte *usedMaterial = ri.Hunk_AllocateTempMemory( s_worldData.numShaders );
+	if ( !usedMaterial ) return;
+	if ( trace->integer && info->soupCount > 0 && info->soupCount < INT_MAX / 16 ) {
+		slots = 1;
+		while ( slots < info->soupCount * 2 ) slots <<= 1;
+		firstByKey = ri.Hunk_AllocateTempMemory( slots * sizeof( *firstByKey ) );
+		if ( firstByKey ) memset( firstByKey, 0, slots * sizeof( *firstByKey ) );
+	}
+	memset( routes, 0, sizeof( routes ) );
+	memset( usedMaterial, 0, s_worldData.numShaders );
+	for ( i = 0; i < info->soupCount; i++ ) {
+		const cod1SurfaceMaterial_t *source = &sources[i];
+		const shader_t *sh = s_worldData.surfaces[i].shader;
+		const shader_t *resolved = source->resolvedShaderIndex >= 0 &&
+			source->resolvedShaderIndex < tr.numShaders ?
+			tr.shaders[source->resolvedShaderIndex] : NULL;
+		unsigned slot;
+		if ( !usedMaterial[source->materialIndex] ) {
+			usedMaterial[source->materialIndex] = 1;
+			used++;
+		}
+		if ( source->fromBackup ) backup++;
+		if ( source->sourceAtlas < 0 ) negativeAtlas++;
+		if ( source->status == COD1_SURFACE_FLAG_SKIP ) flagSkipped++;
+		else if ( source->status == COD1_SURFACE_SKY_SKIP ) sky++;
+		else {
+			drawn++;
+			if ( source->status == COD1_SURFACE_DEFAULT_SHADER ) defaults++;
+			if ( source->route >= 0 && source->route < COD1_MATERIAL_ROUTE_COUNT )
+				routes[source->route]++;
+			else routes[COD1_MATERIAL_UNRESOLVED]++;
+		}
+		if ( !firstByKey ) continue;
+		slot = ( (unsigned)source->materialIndex * 2654435761u ^
+			(unsigned)source->sourceAtlas * 2246822519u ^
+			(unsigned)source->effectiveLightmap * 3266489917u ^
+			(unsigned)source->route * 668265263u ^
+			(unsigned)source->status ) & (unsigned)( slots - 1 );
+		while ( firstByKey[slot] ) {
+			const cod1SurfaceMaterial_t *previous = &sources[firstByKey[slot] - 1];
+			if ( previous->materialIndex == source->materialIndex &&
+				 previous->sourceAtlas == source->sourceAtlas &&
+				 previous->effectiveLightmap == source->effectiveLightmap &&
+				 previous->route == source->route &&
+				 previous->status == source->status &&
+				 previous->fromBackup == source->fromBackup ) break;
+			slot = ( slot + 1 ) & (unsigned)( slots - 1 );
+		}
+		if ( firstByKey[slot] ) continue;
+		firstByKey[slot] = i + 1;
+		ri.Printf( PRINT_ALL,
+			"CoD1 material path: soup=%d id=%d name=%.*s flags=%08x contents=%08x rawAtlas=%d portRequestLm=%d effectiveLm=%d shaderLm=%d resolvedShader=%d surfaceShader=%d status=%s route=%s backupCache=%d combinedScriptOffset=%d passes=%d sort=%g\n",
+			i, source->materialIndex,
+			(int)sizeof(s_worldData.shaders[source->materialIndex].shader),
+			s_worldData.shaders[source->materialIndex].shader,
+			source->surfaceFlags, source->contentFlags, source->sourceAtlas,
+			source->requestedLightmap, source->effectiveLightmap,
+			source->registeredLightmap, source->resolvedShaderIndex,
+			sh ? sh->index : -1,
+			source->status == COD1_SURFACE_FLAG_SKIP ? "flag-skip" :
+			(source->status == COD1_SURFACE_SKY_SKIP ? "sky-skip" :
+			 (source->status == COD1_SURFACE_DEFAULT_SHADER ? "default-shader" : "drawn")),
+			R_Cod1MaterialRouteName( source->route ), source->fromBackup,
+			resolved && !source->fromBackup && resolved->cod1HasScriptSource ?
+				(int)resolved->cod1ScriptOffset : -1,
+			sh ? sh->numUnfoggedPasses : 0, sh ? sh->sort : 0.0f );
+		if ( !sh || source->status == COD1_SURFACE_FLAG_SKIP ||
+			 source->status == COD1_SURFACE_SKY_SKIP ) continue;
+		for ( s = 0; s < sh->numUnfoggedPasses; s++ ) {
+			const shaderStage_t *stage = sh->stages[s];
+			if ( !stage ) continue;
+			for ( b = 0; b < NUM_TEXTURE_BUNDLES; b++ ) {
+				const textureBundle_t *bundle = &stage->bundle[b];
+				if ( !bundle->image[0] ) continue;
+				ri.Printf( PRINT_ALL,
+					"CoD1 material stage: soup=%d id=%d stage=%d bundle=%d image=%s lightmap=%d tcGen=%d rgbGen=%d alphaGen=%d state=%08x\n",
+					i, source->materialIndex, s, b, bundle->image[0]->imgName,
+					bundle->isLightmap, bundle->tcGen, stage->rgbGen,
+					stage->alphaGen, stage->stateBits );
+			}
+		}
+	}
+	ri.Printf( PRINT_ALL,
+		"CoD1 material routes: %d used BSP records, %d drawn soups (%d default shader), %d flag skips, %d sky skips, %d signed-negative atlas soups, %d backup-cache soups; legacy=%d staticGlow=%d ir=%d waterCandidate=%d diffuseFallback=%d implicit=%d scriptParseFailed=%d missingImage=%d unresolved=%d stype=%d stypeUnsupported=%d partialPerlight=%d\n",
+		used, drawn, defaults, flagSkipped, sky, negativeAtlas, backup,
+		routes[COD1_MATERIAL_SCRIPT_LEGACY],
+		routes[COD1_MATERIAL_SCRIPT_WINDOW], routes[COD1_MATERIAL_SCRIPT_IR],
+		routes[COD1_MATERIAL_SCRIPT_WATER_CANDIDATE],
+		routes[COD1_MATERIAL_SCRIPT_DIFFUSE], routes[COD1_MATERIAL_IMPLICIT_IMAGE],
+		routes[COD1_MATERIAL_SCRIPT_PARSE_FAILED],
+		routes[COD1_MATERIAL_MISSING_IMAGE], routes[COD1_MATERIAL_UNRESOLVED],
+        routes[COD1_MATERIAL_STYPE_SUBSET],routes[COD1_MATERIAL_STYPE_FAILED],routes[COD1_MATERIAL_SCRIPT_PERLIGHT_PARTIAL] );
+	if ( firstByKey ) ri.Hunk_FreeTempMemory( firstByKey );
+	ri.Hunk_FreeTempMemory( usedMaterial );
+}
+
+static void R_LoadCod1Surfaces( const cod1Bsp_t *bsp,
+								const cod1BspWorldInfo_t *info,
+#if COD1_NATIVE_LIGHTMAP_PACK
+								const bsp59_lm_layout_t *lightmapLayout,
+#endif
+								vec3_t bounds[2] ) {
+	const byte *soups;
+	const byte *verts;
+	const byte *meshverts;
+	int soupLength, vertLength, meshvertLength;
+	int i, j;
+	int cod1SkippedSurfaces = 0;
+	int cod1DefaultedSurfaces = 0;
+	int cod1DefaultedMaterials = 0;
+	byte *cod1ReportedMaterials;
+	msurface_t *out;
+	static surfaceType_t cod1SkipSurface = SF_SKIP;
+
+	soups = COD1_BSP_LumpData( bsp, COD1_BSP_LUMP_TRIANGLE_SOUPS, &soupLength );
+	verts = COD1_BSP_LumpData( bsp, COD1_BSP_LUMP_DRAWVERTS, &vertLength );
+	meshverts = COD1_BSP_LumpData( bsp, COD1_BSP_LUMP_MESHVERTS, &meshvertLength );
+	if ( !soups || !verts || !meshverts || info->soupCount <= 0 ) {
+		ri.Error( ERR_DROP, "CoD1 BSP has no world triangle soups" );
+	}
+
+	if ( soupLength % COD1_BSP_TRIANGLE_SOUP_STRIDE ||
+		 vertLength % COD1_BSP_DRAWVERT_STRIDE ||
+		 meshvertLength % COD1_BSP_MESHVERT_STRIDE ) {
+		ri.Error( ERR_DROP, "CoD1 BSP has a malformed geometry lump" );
+	}
+
+	s_worldData.surfaces = out = ri.Hunk_Alloc( info->soupCount * sizeof( *out ), h_low );
+	s_worldData.numsurfaces = info->soupCount;
+    s_worldData.cod1FirstWorldSurface=info->worldFirstSoup;
+    s_worldData.cod1WorldSurfaceCount=info->worldSoupCount;
+    s_worldData.cod1MarkFlags=ri.Hunk_Alloc(info->soupCount*sizeof(unsigned),h_low);
+	s_worldData.cod1SurfaceMaterials=ri.Hunk_Alloc(
+		info->soupCount*sizeof(*s_worldData.cod1SurfaceMaterials),h_low);
+	cod1ReportedMaterials = ri.Hunk_Alloc( s_worldData.numShaders, h_low );
+	memset( cod1ReportedMaterials, 0, s_worldData.numShaders );
+	R_InitSurfMemory();
+	ClearBounds( bounds[0], bounds[1] );
+
+	for ( i = 0; i < info->soupCount; i++, out++ ) {
+		const byte *soup;
+		cod1SurfaceMaterial_t *source = &s_worldData.cod1SurfaceMaterials[i];
+		int material;
+		int lightmap;
+#if COD1_NATIVE_LIGHTMAP_PACK
+		int shaderLightmap;
+#endif
+		int firstVert;
+		int numVerts;
+		int numIndexes;
+		int firstIndex;
+		int k;
+		int triangleBytes;
+		srfTriangles_t *tri;
+
+		soup = soups + i * COD1_BSP_TRIANGLE_SOUP_STRIDE;
+		material = (int) ( soup[0] | ( soup[1] << 8 ) );
+		lightmap = (int)(short)( soup[2] | ( soup[3] << 8 ) );
+		source->materialIndex = material;
+		source->sourceAtlas = lightmap;
+		firstVert = (int) ( (unsigned int)soup[4] |
+							 ( (unsigned int)soup[5] << 8 ) |
+							 ( (unsigned int)soup[6] << 16 ) |
+							 ( (unsigned int)soup[7] << 24 ) );
+		numVerts = (int) ( soup[8] | ( soup[9] << 8 ) );
+		numIndexes = (int) ( soup[10] | ( soup[11] << 8 ) );
+		firstIndex = (int) ( (unsigned int)soup[12] |
+							  ( (unsigned int)soup[13] << 8 ) |
+							  ( (unsigned int)soup[14] << 16 ) |
+							  ( (unsigned int)soup[15] << 24 ) );
+
+		if ( material < 0 || material >= s_worldData.numShaders ||
+			 firstVert < 0 || numVerts <= 0 ||
+			 firstVert > info->drawVertCount - numVerts ||
+			 firstIndex < 0 || numIndexes <= 0 || ( numIndexes % 3 ) ||
+			 firstIndex > info->meshVertCount - numIndexes ) {
+			ri.Error( ERR_DROP, "CoD1 triangle soup is out of range" );
+		}
+
+		source->surfaceFlags=(unsigned)s_worldData.shaders[material].surfaceFlags;
+		source->contentFlags=(unsigned)s_worldData.shaders[material].contentFlags;
+		source->requestedLightmap=source->effectiveLightmap=
+			source->registeredLightmap=LIGHTMAP_NONE;
+		source->resolvedShaderIndex=-1;
+		source->fromBackup=qfalse;
+		source->route=COD1_MATERIAL_UNRESOLVED;
+		source->status=COD1_SURFACE_DRAWN;
+        s_worldData.cod1MarkFlags[i]=source->surfaceFlags;
+		if ( lightmap < 0 || lightmap >= info->lightmapTiles ) {
+			lightmap = LIGHTMAP_BY_VERTEX;
+		}
+#if COD1_NATIVE_LIGHTMAP_PACK
+		shaderLightmap = lightmap >= 0 ?
+			(int)lightmapLayout->page[lightmap].group : LIGHTMAP_BY_VERTEX;
+#endif
+		out->viewCount = 0;
+		out->fogIndex = 0;
+		/* An asset folder is not a visibility flag. In dam, a real metal
+		 * quad is authored under textures/common/ with neither no-draw bit.
+		 * Keep only explicit compiler surface flags as the early skip rule;
+		 * shader registration may still select its own render path. */
+		if ( source->surfaceFlags & ( SURF_NODRAW | SURF_SKIP ) ) {
+			out->shader = tr.defaultShader;
+			out->data = &cod1SkipSurface;
+			source->status=COD1_SURFACE_FLAG_SKIP;
+			cod1SkippedSurfaces++;
+			continue;
+		}
+		out->shader = ShaderForShaderNum( material,
+#if COD1_NATIVE_LIGHTMAP_PACK
+			shaderLightmap,
+#else
+			lightmap,
+#endif
+			source );
+#if COD1_LIGHTMAP_NUMERIC_DIAGNOSTICS
+		#if COD1_NATIVE_LIGHTMAP_PACK
+		if ( cod1LmTraceDam && ( i == 49 || i == 113 ) ) {
+			ri.Printf( PRINT_ALL, "CoD1 LM soup=%d sourcePage=%d packedGroup=%d\n",
+				i, lightmap, shaderLightmap );
+		}
+		R_Cod1LmTraceSoup( i, s_worldData.shaders[material].shader,
+			shaderLightmap, out->shader );
+		#else
+		R_Cod1LmTraceSoup( i, s_worldData.shaders[material].shader,
+			lightmap, out->shader );
+		#endif
+#endif
+		/* Native 0x4d02cb..0x4d02db binds a failed registration to the
+		 * common default material. ShaderForShaderNum already performs that
+		 * substitution. A texture directory does not select visibility:
+		 * retain valid ordinary materials and the native default fallback,
+		 * while accepted sky shaders keep their own sky iterator. */
+		if ( out->shader == tr.defaultShader ) {
+			source->status=COD1_SURFACE_DEFAULT_SHADER;
+			cod1DefaultedSurfaces++;
+			if ( !cod1ReportedMaterials[material] ) {
+				cod1ReportedMaterials[material] = 1;
+				cod1DefaultedMaterials++;
+				if ( cod1DefaultedMaterials <= 32 ) {
+					ri.Printf( PRINT_WARNING, "CoD1 material defaulted: %s\n",
+						s_worldData.shaders[material].shader );
+				}
+			}
+		}
+		/* Retail factory/hurtgen/rocket contain soups larger than the RTCW
+		 * 256 KiB surface slab. R_GetSurfMemory cannot fit such a request. */
+		triangleBytes = sizeof( *tri ) + numVerts * sizeof( tri->verts[0] ) +
+			numIndexes * sizeof( tri->indexes[0] );
+		tri = triangleBytes > SURF_HUNK_MAXSIZE ?
+			ri.Hunk_Alloc( triangleBytes, h_low ) : R_GetSurfMemory( triangleBytes );
+		tri->surfaceType = SF_TRIANGLES;
+	tri->cod1PrecalcValid = qfalse;
+	memset(tri->cod1PrecalcRGBA, 0, sizeof(tri->cod1PrecalcRGBA));
+		tri->numVerts = numVerts;
+		tri->numIndexes = numIndexes;
+		tri->verts = ( drawVert_t * )( tri + 1 );
+		tri->indexes = ( int * )( tri->verts + tri->numVerts );
+		out->data = (surfaceType_t *)tri;
+
+		ClearBounds( tri->bounds[0], tri->bounds[1] );
+		for ( j = 0; j < numVerts; j++ ) {
+			const byte *vertex = verts + ( firstVert + j ) * COD1_BSP_DRAWVERT_STRIDE;
+			int bits;
+
+			for ( k = 0; k < 3; k++ ) {
+				bits = (int) ( (unsigned int)vertex[k * 4] |
+								   ( (unsigned int)vertex[k * 4 + 1] << 8 ) |
+								   ( (unsigned int)vertex[k * 4 + 2] << 16 ) |
+								   ( (unsigned int)vertex[k * 4 + 3] << 24 ) );
+				memcpy( &tri->verts[j].xyz[k], &bits, sizeof( float ) );
+			}
+			for ( k = 0; k < 2; k++ ) {
+				bits = (int) ( (unsigned int)vertex[12 + k * 4] |
+								   ( (unsigned int)vertex[13 + k * 4] << 8 ) |
+								   ( (unsigned int)vertex[14 + k * 4] << 16 ) |
+								   ( (unsigned int)vertex[15 + k * 4] << 24 ) );
+				memcpy( &tri->verts[j].st[k], &bits, sizeof( float ) );
+				bits = (int) ( (unsigned int)vertex[20 + k * 4] |
+								   ( (unsigned int)vertex[21 + k * 4] << 8 ) |
+								   ( (unsigned int)vertex[22 + k * 4] << 16 ) |
+								   ( (unsigned int)vertex[23 + k * 4] << 24 ) );
+				memcpy( &tri->verts[j].lightmap[k], &bits, sizeof( float ) );
+			}
+#if COD1_NATIVE_LIGHTMAP_PACK
+			if ( lightmapLayout && lightmap >= 0 ) {
+				const bsp59_lm_page_t *placement = &lightmapLayout->page[lightmap];
+				tri->verts[j].lightmap[0] = tri->verts[j].lightmap[0] *
+					placement->scale_u + placement->offset_u;
+				tri->verts[j].lightmap[1] = tri->verts[j].lightmap[1] *
+					placement->scale_v + placement->offset_v;
+			}
+#endif
+			for ( k = 0; k < 3; k++ ) {
+				bits = (int) ( (unsigned int)vertex[28 + k * 4] |
+								   ( (unsigned int)vertex[29 + k * 4] << 8 ) |
+								   ( (unsigned int)vertex[30 + k * 4] << 16 ) |
+								   ( (unsigned int)vertex[31 + k * 4] << 24 ) );
+				memcpy( &tri->verts[j].normal[k], &bits, sizeof( float ) );
+			}
+			memcpy( tri->verts[j].color, vertex + 40, sizeof( tri->verts[j].color ) );
+			AddPointToBounds( tri->verts[j].xyz, tri->bounds[0], tri->bounds[1] );
+			AddPointToBounds( tri->verts[j].xyz, bounds[0], bounds[1] );
+		}
+#if COD1_LIGHTMAP_NUMERIC_DIAGNOSTICS
+		if ( cod1LmTraceDam && ( i == 49 || i == 113 ) ) {
+			ri.Printf( PRINT_ALL,
+				"CoD1 LM soup=%d atlas=%d firstVertex=%d count=%d firstLmUV=%g,%g\n",
+				i, lightmap, firstVert, numVerts,
+				tri->verts[0].lightmap[0], tri->verts[0].lightmap[1] );
+		}
+#endif
+
+		for ( j = 0; j < numIndexes; j++ ) {
+			const byte *index = meshverts + ( firstIndex + j ) * COD1_BSP_MESHVERT_STRIDE;
+			tri->indexes[j] = index[0] | ( index[1] << 8 );
+			if ( tri->indexes[j] < 0 || tri->indexes[j] >= numVerts ) {
+				ri.Error( ERR_DROP, "CoD1 triangle index is out of range" );
+			}
+		}
+	}
+
+	ri.Printf( PRINT_ALL,
+		"CoD1 renderer: %d BSP surfaces (world and inline), %d flag/sky skipped, %d defaulted surfaces across %d materials\n",
+		info->soupCount, cod1SkippedSurfaces, cod1DefaultedSurfaces, cod1DefaultedMaterials );
+	if ( cod1DefaultedMaterials > 32 ) {
+		ri.Printf( PRINT_ALL, "CoD1 renderer: %d additional defaulted material names suppressed\n",
+			cod1DefaultedMaterials - 32 );
+	}
+	R_Cod1ReportMaterials( info );
+}
+
+/*
+================
+R_LoadCod1World
+
+Build the native BSP tree and PVS for world/static scenery. Inline models
+retain their own surface ranges and are rendered through game entities.
+================
+*/
+/* CoD1 lightmaps are 512-square RGB atlases, not RTCW's 128-square tiles.
+ * Keep this upload path separate so RTCW maps retain their original behavior. */
+#if COD1_NATIVE_LIGHTMAP_RGB
+/* The live CoDSP 0x4CFAB0 RGB arithmetic for effective bits 0/1; 0x4CFF30
+ * overrides alpha to 255. Unsupported values are rejected before upload. */
+static void R_Cod1NativeLightmapRGB( const byte in[3], byte out[4], int effectiveBits ) {
+	int r, g, b, max;
+	r = in[0] << ( 1 - effectiveBits );
+	g = in[1] << ( 1 - effectiveBits );
+	b = in[2] << ( 1 - effectiveBits );
+	if ( ( r | g | b ) > 255 ) {
+		max = r > g ? r : g;
+		max = max > b ? max : b;
+		r = r * 255 / max;
+		g = g * 255 / max;
+		b = b * 255 / max;
+	}
+	out[0] = r; out[1] = g; out[2] = b; out[3] = 255;
+}
+#endif
+static void R_LoadCod1Lightmaps( const cod1Bsp_t *bsp ) {
+	static byte rgba[COD1_BSP_LIGHTMAP_SIZE * COD1_BSP_LIGHTMAP_SIZE * 4];
+	const byte *data, *pixel;
+	int length, count, i, j;
+	data = COD1_BSP_LumpData( bsp, COD1_BSP_LUMP_LIGHTMAPS, &length );
+	count = length / COD1_BSP_LIGHTMAP_TILE_BYTES;
+	if ( length % COD1_BSP_LIGHTMAP_TILE_BYTES || count > MAX_LIGHTMAPS ) {
+		ri.Error( ERR_DROP, "CoD1: invalid lightmap atlas count/size" );
+		return;
+	}
+	tr.numLightmaps = count;
+	if ( !count || r_vertexLight->integer || glConfig.hardwareType == GLHW_PERMEDIA2 ) {
+#if COD1_LIGHTMAP_NUMERIC_DIAGNOSTICS
+		if ( cod1LmTraceDam ) ri.Printf( PRINT_ALL,
+			"CoD1 LM skipped count=%d r_vertexLight=%d hardwareType=%d mapOver=%d effectiveOver=%d\n",
+			count, r_vertexLight->integer, glConfig.hardwareType,
+			r_mapOverBrightBits->integer, tr.overbrightBits );
+#endif
+		return;
+	}
+	R_SyncRenderThread();
+#if COD1_NATIVE_LIGHTMAP_RGB
+	if ( tr.overbrightBits != 0 && tr.overbrightBits != 1 ) {
+		ri.Error( ERR_DROP,
+			"CoD1 LM: native RGB conversion unsupported effectiveOver=%d",
+			tr.overbrightBits );
+		return;
+	}
+#endif
+#if COD1_LIGHTMAP_NUMERIC_DIAGNOSTICS
+	if ( cod1LmTraceDam ) ri.Printf( PRINT_ALL,
+		"CoD1 LM cvars mapOver=%d requestedOver=%d ignoreHWGamma=%d gamma=%g effectiveOver=%d fullscreen=%d deviceGamma=%d r_lightmap=%d r_vertexLight=%d\n",
+		r_mapOverBrightBits->integer, r_overBrightBits->integer,
+		r_ignorehwgamma->integer, r_gamma->value, tr.overbrightBits,
+		glConfig.isFullscreen, glConfig.deviceSupportsGamma,
+		r_lightmap->integer, r_vertexLight->integer );
+#endif
+	for ( i = 0; i < count; i++ ) {
+		pixel = data + i * COD1_BSP_LIGHTMAP_TILE_BYTES;
+		for ( j = 0; j < COD1_BSP_LIGHTMAP_SIZE * COD1_BSP_LIGHTMAP_SIZE; j++ ) {
+#if COD1_NATIVE_LIGHTMAP_RGB
+			R_Cod1NativeLightmapRGB( pixel + j * 3, rgba + j * 4, tr.overbrightBits );
+#else
+			byte source[4];
+			/* Same brightness transform as the existing renderer, with opaque alpha. */
+			memcpy( source, pixel + j * 3, 3 );
+			source[3] = 255;
+			R_ColorShiftLightingBytes( source, rgba + j * 4 );
+			rgba[j * 4 + 3] = 255;
+#endif
+		}
+		#if COD1_NATIVE_LIGHTMAP_GL
+		tr.lightmaps[i] = R_CreateCod1LightmapImage( va("*lightmap%d", i), rgba,
+			COD1_BSP_LIGHTMAP_SIZE, COD1_BSP_LIGHTMAP_SIZE );
+		#else
+		tr.lightmaps[i] = R_CreateImage( va("*lightmap%d", i), rgba,
+			COD1_BSP_LIGHTMAP_SIZE, COD1_BSP_LIGHTMAP_SIZE, qfalse, qfalse, GL_CLAMP );
+		#endif
+#if COD1_LIGHTMAP_NUMERIC_DIAGNOSTICS
+		if ( cod1LmTraceDam && ( i == 0 || i == 12 ) ) {
+			const image_t *image = tr.lightmaps[i];
+			static const int points[3][2] = { { 256, 256 }, { 301, 217 }, { 128, 128 } };
+			int sample;
+			for ( sample = 0; sample < 3; sample++ ) {
+				int x = points[sample][0], y = points[sample][1];
+				const byte *source = pixel + ( y * COD1_BSP_LIGHTMAP_SIZE + x ) * 3;
+				const byte *out = rgba + ( y * COD1_BSP_LIGHTMAP_SIZE + x ) * 4;
+#if COD1_NATIVE_LIGHTMAP_RGB
+				ri.Printf( PRINT_ALL,
+					"CoD1 LM atlas=%d xy=%d,%d raw=%u,%u,%u native=%u,%u,%u,%u effectiveOver=%d mode=%s\n",
+					i, x, y, source[0], source[1], source[2],
+					out[0], out[1], out[2], out[3], tr.overbrightBits,
+					"live RGB arithmetic" );
+#else
+				ri.Printf( PRINT_ALL,
+					"CoD1 LM atlas=%d xy=%d,%d raw=%u,%u,%u shifted=%u,%u,%u,%u mapOver=%d effectiveOver=%d shift=%d\n",
+					i, x, y, source[0], source[1], source[2],
+					out[0], out[1], out[2], out[3],
+					r_mapOverBrightBits->integer, tr.overbrightBits,
+					r_mapOverBrightBits->integer - tr.overbrightBits );
+#endif
+			}
+			ri.Printf( PRINT_ALL,
+				"CoD1 LM image atlas=%d name=%s request=%dx%d rgbaBytes=%d mipmap=0 picmip=0 wrap=%d stored=%dx%d upload=%dx%d internalFormat=%d tmu=%d\n",
+				i, image ? image->imgName : "(none)", COD1_BSP_LIGHTMAP_SIZE,
+				COD1_BSP_LIGHTMAP_SIZE, COD1_BSP_LIGHTMAP_SIZE * COD1_BSP_LIGHTMAP_SIZE * 4,
+				GL_CLAMP, image ? image->width : 0, image ? image->height : 0,
+				image ? image->uploadWidth : 0, image ? image->uploadHeight : 0,
+				image ? image->internalFormat : 0, image ? image->TMU : -1 );
+		}
+#endif
+	}
+	ri.Printf( PRINT_ALL, "CoD1: uploaded %d lightmap atlases, 512 x 512 RGB\n", count );
+}
+
+#if COD1_NATIVE_LIGHTMAP_PACK
+/* Plan from every BSP soup, including inline models. The source page selects
+ * a placement; the RTCW shader key selects the resulting packed group. */
+static void R_LoadCod1PackedLightmaps( const cod1Bsp_t *bsp,
+		const cod1BspWorldInfo_t *info, bsp59_lm_layout_t *layout ) {
+	const byte *soups, *data;
+	bsp59_lm_soup_t *records;
+	byte *rgba;
+	unsigned maxBytes = 0;
+	char error[192];
+	int soupLength, length, i, j, y, x;
+
+	memset( layout, 0, sizeof( *layout ) );
+	soups = COD1_BSP_LumpData( bsp, COD1_BSP_LUMP_TRIANGLE_SOUPS, &soupLength );
+	data = COD1_BSP_LumpData( bsp, COD1_BSP_LUMP_LIGHTMAPS, &length );
+	if ( !soups || ( !data && info->lightmapTiles ) || info->soupCount < 0 ||
+		info->soupCount > INT_MAX / COD1_BSP_TRIANGLE_SOUP_STRIDE ||
+		soupLength != info->soupCount * COD1_BSP_TRIANGLE_SOUP_STRIDE ||
+		length != info->lightmapTiles * COD1_BSP_LIGHTMAP_TILE_BYTES ||
+		info->soupCount > INT_MAX / (int)sizeof( *records ) ) {
+		ri.Error( ERR_DROP, "CoD1: malformed soup/lightmap lumps for packed upload" );
+		return;
+	}
+	records = ri.Hunk_AllocateTempMemory( info->soupCount * sizeof( *records ) );
+	if ( !records ) {
+		ri.Error( ERR_DROP, "CoD1: cannot allocate lightmap soup records" );
+		return;
+	}
+	for ( i = 0; i < info->soupCount; i++ ) {
+		const byte *soup = soups + i * COD1_BSP_TRIANGLE_SOUP_STRIDE;
+		records[i].material = (int)( soup[0] | ( soup[1] << 8 ) );
+		records[i].page = (int)(short)( soup[2] | ( soup[3] << 8 ) );
+		records[i].vertices = (int)( soup[8] | ( soup[9] << 8 ) );
+	}
+	if ( !bsp59_lm_plan( records, (size_t)info->soupCount,
+		(unsigned)info->materialCount, (unsigned)info->lightmapTiles,
+		glConfig.maxTextureSize, layout, error, sizeof( error ) ) ) {
+		ri.Hunk_FreeTempMemory( records );
+		ri.Error( ERR_DROP, "CoD1: cannot plan native lightmaps: %s", error );
+		return;
+	}
+	ri.Hunk_FreeTempMemory( records );
+	tr.numLightmaps = (int)layout->group_count;
+	if ( !tr.numLightmaps || r_vertexLight->integer || glConfig.hardwareType == GLHW_PERMEDIA2 ) {
+		return;
+	}
+	/* Preflight every group before creating the first GL image. The direct
+	 * upload path currently handles power-of-two groups only. */
+	if ( tr.overbrightBits != 0 && tr.overbrightBits != 1 ) {
+		ri.Error( ERR_DROP, "CoD1: unsupported effective overbright %d", tr.overbrightBits );
+		return;
+	}
+	if ( atof( glConfig.version_string ) < 1.2 &&
+		!strstr( glConfig.extensions_string, "GL_EXT_texture_edge_clamp" ) &&
+		!strstr( glConfig.extensions_string, "GL_SGIS_texture_edge_clamp" ) ) {
+		ri.Error( ERR_DROP, "CoD1: GL_CLAMP_TO_EDGE unavailable" );
+		return;
+	}
+	if ( layout->group_count > MAX_DRAWIMAGES - tr.numImages ) {
+		ri.Error( ERR_DROP, "CoD1: packed lightmaps exceed image registry" );
+		return;
+	}
+	for ( i = 0; i < (int)layout->group_count; i++ ) {
+		const bsp59_lm_group_t *group = &layout->groups[i];
+		if ( !group->pixel_width || !group->pixel_height ||
+			( group->pixel_width & ( group->pixel_width - 1 ) ) ||
+			( group->pixel_height & ( group->pixel_height - 1 ) ) ||
+			group->pixel_width > (unsigned)glConfig.maxTextureSize ||
+			group->pixel_height > (unsigned)glConfig.maxTextureSize ||
+			group->pixel_width > (unsigned)INT_MAX / 4u / group->pixel_height ) {
+			ri.Error( ERR_DROP, "CoD1: packed lightmap group %d has unsupported dimensions %u x %u",
+				i, group->pixel_width, group->pixel_height );
+			return;
+		}
+		if ( group->pixel_width * group->pixel_height * 4u > maxBytes ) {
+			maxBytes = group->pixel_width * group->pixel_height * 4u;
+		}
+		ri.Printf( PRINT_ALL, "CoD1 LM group=%d size=%ux%u pages=%u\n",
+			i, group->pixel_width, group->pixel_height, group->slot_count );
+	}
+	for ( i = 0; i < (int)layout->derived_pages; i++ ) {
+		const bsp59_lm_page_t *placement = &layout->page[i];
+		ri.Printf( PRINT_DEVELOPER, "CoD1 LM sourcePage=%d group=%u tile=%u,%u UV scale=%g,%g offset=%g,%g\n",
+			i, placement->group, placement->tile_x, placement->tile_y,
+			placement->scale_u, placement->scale_v,
+			placement->offset_u, placement->offset_v );
+	}
+	rgba = ri.Hunk_AllocateTempMemory( (int)maxBytes );
+	if ( !rgba ) {
+		ri.Error( ERR_DROP, "CoD1: cannot allocate packed lightmap pixels" );
+		return;
+	}
+	R_SyncRenderThread();
+	for ( i = 0; i < (int)layout->group_count; i++ ) {
+		const bsp59_lm_group_t *group = &layout->groups[i];
+		int width = (int)group->pixel_width;
+		int height = (int)group->pixel_height;
+		image_t *image;
+		for ( j = 0; j < (int)group->slot_count; j++ ) {
+			unsigned page = layout->page_order[group->first_slot + j];
+			const bsp59_lm_page_t *placement = &layout->page[page];
+			const byte *source = data + page * COD1_BSP_LIGHTMAP_TILE_BYTES;
+			byte *row = rgba + ( ( placement->tile_y * COD1_BSP_LIGHTMAP_SIZE * width +
+				placement->tile_x * COD1_BSP_LIGHTMAP_SIZE ) * 4 );
+			for ( y = 0; y < COD1_BSP_LIGHTMAP_SIZE; y++ ) {
+				for ( x = 0; x < COD1_BSP_LIGHTMAP_SIZE; x++ ) {
+					R_Cod1NativeLightmapRGB( source + x * 3, row + x * 4,
+						tr.overbrightBits );
+				}
+				source += COD1_BSP_LIGHTMAP_SIZE * 3;
+				row += width * 4;
+			}
+		}
+		image = R_CreateCod1LightmapImage( va( "*lightmap%d", i ), rgba, width, height );
+		if ( !image ) {
+			ri.Hunk_FreeTempMemory( rgba );
+			ri.Error( ERR_DROP, "CoD1: cannot create packed lightmap group %d", i );
+			return;
+		}
+		tr.lightmaps[i] = image;
+	}
+	ri.Hunk_FreeTempMemory( rgba );
+	ri.Printf( PRINT_ALL, "CoD1: packed %d source lightmap pages into %d images (GL limit %d)\n",
+		(int)layout->derived_pages, (int)layout->group_count, glConfig.maxTextureSize );
+}
+#endif
+
+#include "tr_cod1_static.h"
+#include "tr_cod1_spatial.h"
+
+#if (defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50) || \
+    (defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA)
+/* CoDSP 0x4d26a5..0x4d26d6 parses worldspawn sundirection with AngleVectors.
+ * 0x4d35d0..0x4d35fb establishes this default. This is a separate water input,
+ * NOT a change to static XModel light/cache/default/ambient calculations. */
+static void R_Cod1WorldSunDirection(const cod1Bsp_t *bsp,vec3_t direction,qboolean *valid) {
+    const byte *raw;char *copy,*text,*t,key[MAX_TOKEN_CHARS],extra;int len,k;
+    vec3_t angles;
+    VectorSet(direction,.45f,.3f,.9f);VectorNormalize(direction);
+    (*valid)=qtrue;
+    raw=COD1_BSP_LumpData(bsp,COD1_BSP_LUMP_ENTITIES,&len);
+    if(!raw||len<2||raw[len-1]){(*valid)=qfalse;return;}
+    copy=(char*)malloc(len);if(!copy){(*valid)=qfalse;return;}
+    memcpy(copy,raw,len);text=copy;t=COM_ParseExt(&text,qtrue);
+    if(strcmp(t,"{")){free(copy);(*valid)=qfalse;return;}
+    while(text){t=COM_ParseExt(&text,qtrue);if(!*t||!strcmp(t,"}"))break;
+        Q_strncpyz(key,t,sizeof(key));t=COM_ParseExt(&text,qtrue);
+        if(Q_stricmp(key,"sundirection"))continue;
+        if(sscanf(t,"%f %f %f %c",&angles[0],&angles[1],&angles[2],&extra)!=3){(*valid)=qfalse;break;}
+        for(k=0;k<3;k++)if(!(angles[k]>=-360000.0f&&angles[k]<=360000.0f))(*valid)=qfalse;
+        if(!(*valid))break;
+        AngleVectors(angles,direction,NULL,NULL);
+    }
+    free(copy);
+}
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+static void R_Cod1WaterWorldDirection(const cod1Bsp_t *bsp) {
+    R_Cod1WorldSunDirection(bsp,tr.cod1WaterSunDirection,&tr.cod1WaterSunValid);
+    ri.Printf(PRINT_ALL,"CoD1 R50 water sun input: valid=%d direction=(%.8g %.8g %.8g); model lighting unchanged\n",
+      tr.cod1WaterSunValid,tr.cod1WaterSunDirection[0],tr.cod1WaterSunDirection[1],tr.cod1WaterSunDirection[2]);
+}
+#endif
+#endif
+
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+#include <float.h>
+/* Native 4d196e stores every type-1 pointer; the last record wins. Its raw
+ * direction at offsets 28/32/36 drives flare projection, independently of
+ * worldspawn disk/angular direction. Do not normalize or borrow model light. */
+static void R_Cod1SunPrimary(const cod1Bsp_t *bsp) {
+    const byte *raw;
+    unsigned int bits;
+    int length,offset,k;
+    tr.cod1SunPrimaryValid=qfalse;
+    raw=COD1_BSP_LumpData(bsp,30,&length);
+    if(!raw || length%72)return;
+    for(offset=0;offset<length;offset+=72) {
+        memcpy(&bits,raw+offset,4);bits=(unsigned int)LittleLong((int)bits);
+        if(bits!=1u)continue;
+        tr.cod1SunPrimaryValid=qtrue;
+        for(k=0;k<3;k++) {
+            memcpy(&bits,raw+offset+28+k*4,4);bits=(unsigned int)LittleLong((int)bits);
+            memcpy(&tr.cod1SunPrimaryDirection[k],&bits,4);
+            if(!(tr.cod1SunPrimaryDirection[k]>=-FLT_MAX &&
+                 tr.cod1SunPrimaryDirection[k]<=FLT_MAX))tr.cod1SunPrimaryValid=qfalse;
+        }
+    }
+}
+#endif
+
+static void R_LoadCod1World( const char *name, const cod1Bsp_t *bsp, int fileLength ) {
+	cod1BspWorldInfo_t info;
+#if COD1_NATIVE_LIGHTMAP_PACK
+	bsp59_lm_layout_t lightmapLayout;
+#endif
+	cod1BspSpatial_t spatial;
+	cod1BspRenderCells_t renderCells;
+	lump_t lump;
+	const byte *entities;
+	int entitiesLength, i, staticFirst, staticCount;
+	const byte *models;
+	int modelLength;
+	vec3_t bounds[2];
+	model_t *model;
+
+	/* Mark the world before any render frame is emitted.  Patch 07 skips CoD
+	 * sky triangle soups until their native sky shader syntax is implemented;
+	 * the backend needs to know that uncovered pixels must be cleared. */
+	s_worldData.isCod1 = qtrue;
+#if COD1_LIGHTMAP_NUMERIC_DIAGNOSTICS
+	cod1LmTraceDam = R_Cod1LmTraceDamName( name );
+#endif
+
+	if ( !COD1_BSP_GetWorldInfo( bsp, &info ) || info.materialCount <= 0 ||
+		 !COD1_BSP_GetSpatial( bsp, &spatial ) ||
+		 !COD1_BSP_GetRenderCells( bsp, &info, &spatial, &renderCells ) ) {
+		ri.Error( ERR_DROP, "R_LoadCod1World: invalid CoD1 world data in %s", name );
+	}
+
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+    R_Cod1WaterWorldDirection(bsp);
+#endif
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    R_Cod1WorldSunDirection(bsp,tr.cod1SunWorldDirection,&tr.cod1SunWorldDirectionValid);
+    R_Cod1SunPrimary(bsp);
+#endif
+	lump.fileofs = bsp->lumps[COD1_BSP_LUMP_MATERIALS].fileofs;
+	lump.filelen = bsp->lumps[COD1_BSP_LUMP_MATERIALS].filelen;
+	R_LoadShaders( &lump );
+	for ( i = 0; i < s_worldData.numShaders; i++ ) {
+		if ( !memchr( s_worldData.shaders[i].shader, 0,
+				sizeof( s_worldData.shaders[i].shader ) ) ) {
+			ri.Error( ERR_DROP, "CoD1 BSP: unterminated material name at record %d", i );
+			return;
+		}
+	}
+#if COD1_NATIVE_LIGHTMAP_PACK
+	R_LoadCod1PackedLightmaps( bsp, &info, &lightmapLayout );
+#else
+	R_LoadCod1Lightmaps( bsp );
+#endif
+	/* Every inline model keeps its original soup range. Only *0 and misc_model
+	 * surfaces enter the world leaf, so movers are not also drawn at rest. */
+	models = COD1_BSP_LumpData( bsp, COD1_BSP_LUMP_MODELS, &modelLength );
+	if ( !models || info.modelCount > MAX_INLINE_MODELS ) {
+		ri.Error( ERR_DROP, "CoD1 renderer: unsupported inline model count %d", info.modelCount );
+		return;
+	}
+#if COD1_NATIVE_LIGHTMAP_PACK
+	cod1PackedWorldShaders = qtrue;
+#endif
+	R_LoadCod1Surfaces( bsp, &info,
+#if COD1_NATIVE_LIGHTMAP_PACK
+		&lightmapLayout,
+#endif
+		bounds );
+#if COD1_NATIVE_LIGHTMAP_PACK
+	cod1PackedWorldShaders = qfalse;
+#endif
+	if ( !COD1_BSP_GetModelBounds( bsp, 0, bounds[0], bounds[1] ) ) {
+		ri.Error( ERR_DROP, "CoD1 renderer: invalid world bounds" );
+		return;
+	}
+	staticFirst = s_worldData.numsurfaces;
+	R_LoadCod1StaticTrees( bsp, bounds );
+	staticCount = s_worldData.numsurfaces - staticFirst;
+	s_worldData.bmodels = ri.Hunk_Alloc( info.modelCount * sizeof( *s_worldData.bmodels ), h_low );
+	for ( i = 0; i < info.modelCount; i++ ) {
+		const byte *record = models + i * COD1_BSP_MODEL_STRIDE;
+		unsigned int first, count;
+		bmodel_t *bm = s_worldData.bmodels + i;
+		first = (unsigned int)record[24] | ((unsigned int)record[25] << 8) |
+			((unsigned int)record[26] << 16) | ((unsigned int)record[27] << 24);
+		count = (unsigned int)record[28] | ((unsigned int)record[29] << 8) |
+			((unsigned int)record[30] << 16) | ((unsigned int)record[31] << 24);
+		if ( first > (unsigned int)info.soupCount || count > (unsigned int)info.soupCount - first ||
+			!COD1_BSP_GetModelBounds( bsp, i, bm->bounds[0], bm->bounds[1] ) ) {
+			ri.Error( ERR_DROP, "CoD1 renderer: model *%d has invalid geometry range", i );
+			return;
+		}
+		bm->firstSurface = s_worldData.surfaces + first;
+		bm->numSurfaces = count;
+		model = R_AllocModel();
+		if ( !model ) {
+			ri.Error( ERR_DROP, "R_LoadCod1World: model table is full at *%d", i );
+			return;
+		}
+		model->type = MOD_BRUSH;
+		model->bmodel = bm;
+		Com_sprintf( model->name, sizeof( model->name ), "*%d", i );
+	}
+	VectorCopy( bounds[0], s_worldData.bmodels[0].bounds[0] );
+	VectorCopy( bounds[1], s_worldData.bmodels[0].bounds[1] );
+	ri.Printf( PRINT_ALL, "PATCH65 CoD1 renderer: %d brush models, %d world soups, %d static surfaces\n",
+		info.modelCount, info.worldSoupCount, staticCount );
+
+	R_LoadCod1SpatialWorld( &spatial, &renderCells, &info, staticFirst, staticCount );
+
+	s_worldData.numfogs = 1;
+	s_worldData.fogs = ri.Hunk_Alloc( sizeof( *s_worldData.fogs ), h_low );
+
+	entities = COD1_BSP_LumpData( bsp, COD1_BSP_LUMP_ENTITIES, &entitiesLength );
+	if ( !entities || entitiesLength < 2 || entities[entitiesLength - 1] != '\0' ) {
+		ri.Error( ERR_DROP, "R_LoadCod1World: entity lump is not terminated" );
+	}
+	lump.fileofs = (int)( entities - fileBase );
+	lump.filelen = entitiesLength;
+	R_LoadEntities( &lump );
+
+	/* CoD1 uses native visibility records, not RTCW RGB lightgrid bytes.
+     * Static XModels consume them in tr_cod1_lighting.h. Dynamic entities
+     * still use RTCW's no-grid fallback until their lighting path is ported. */
+    s_worldData.lightGridData = NULL;
+	s_worldData.dataSize = fileLength;
+}
+
+/*
 =================
 R_GetEntityToken
 =================
@@ -2146,15 +3029,24 @@ Called directly from cgame
 */
 void RE_LoadWorldMap( const char *name ) {
 	int i;
+	int fileLength;
 	dheader_t   *header;
 	byte        *buffer;
 	byte        *startMarker;
+	cod1Bsp_t cod1;
 
 	skyboxportal = 0;
 
 	if ( tr.worldMapLoaded ) {
 		ri.Error( ERR_DROP, "ERROR: attempted to redundantly load world map\n" );
 	}
+	R_SyncRenderThread();
+	R_Cod1ModelLightingReset();
+	/* Clear the previous map's format before FS or shader work can fail. */
+	cod1Bsp59MapActive = qfalse;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    R_Cod1SunWorldReset();
+#endif
 
 	// set default sun direction to be used if it isn't
 	// overridden by a shader
@@ -2182,7 +3074,7 @@ void RE_LoadWorldMap( const char *name ) {
 	tr.worldMapLoaded = qtrue;
 
 	// load it
-	ri.FS_ReadFile( name, (void **)&buffer );
+	fileLength = ri.FS_ReadFile( name, (void **)&buffer );
 	if ( !buffer ) {
 		ri.Error( ERR_DROP, "RE_LoadWorldMap: %s not found", name );
 	}
@@ -2190,6 +3082,9 @@ void RE_LoadWorldMap( const char *name ) {
 	// clear tr.world so if the level fails to load, the next
 	// try will not look at the partially loaded version
 	tr.world = NULL;
+#if COD1_NATIVE_LIGHTMAP_PACK
+	cod1PackedWorldShaders = qfalse;
+#endif
 
 	memset( &s_worldData, 0, sizeof( s_worldData ) );
 	Q_strncpyz( s_worldData.name, name, sizeof( s_worldData.name ) );
@@ -2202,6 +3097,23 @@ void RE_LoadWorldMap( const char *name ) {
 
 	header = (dheader_t *)buffer;
 	fileBase = (byte *)header;
+
+	/* CoD1 keeps the IBSP magic but uses version 59 and a 33-lump layout.
+	   Route it before the legacy Q3 header is interpreted as dheader_t. */
+	if ( COD1_BSP_Parse( buffer, fileLength, &cod1 ) ) {
+		/* Shader registration happens inside R_LoadCod1World, before tr.world
+		 * points at the loaded world. Keep the format selection for subsequent
+		 * non-world material registrations on this map as well. */
+		cod1Bsp59MapActive = qtrue;
+		R_LoadCod1World( name, &cod1, fileLength );
+		s_worldData.dataSize = fileLength;
+		tr.world = &s_worldData;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+        R_Cod1SunLoadWorld();
+#endif
+		ri.FS_FreeFile( buffer );
+		return;
+	}
 
 	i = LittleLong( header->version );
 #ifndef _SKIP_BSP_CHECK
@@ -2257,4 +3169,3 @@ void RE_LoadWorldMap( const char *name ) {
 //----(SA)	end
 	ri.FS_FreeFile( buffer );
 }
-

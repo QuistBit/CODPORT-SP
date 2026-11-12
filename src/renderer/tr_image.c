@@ -34,6 +34,18 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "tr_local.h"
+#include "tr_cod1_scope_image.h"
+#include "tr_cod1_image_trace.h"
+
+#ifndef COD1_NATIVE_LIGHTMAP_GL
+#define COD1_NATIVE_LIGHTMAP_GL 0
+#endif
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+#include <limits.h>
+#include "cod1_dlight_image.h"
+#include "cod1_image_multiply_r65.h"
+#include "cod1_dds_probe_r67.h"
+#endif
 
 /*
  * Include file for users of JPEG library.
@@ -50,6 +62,7 @@ If you have questions concerning this license or the applicable additional terms
 static void LoadBMP( const char *name, byte **pic, int *width, int *height );
 static void LoadTGA( const char *name, byte **pic, int *width, int *height );
 static void LoadJPG( const char *name, byte **pic, int *width, int *height );
+static void LoadDDS( const char *name, byte **pic, int *width, int *height );
 
 static byte s_intensitytable[256];
 static unsigned char s_gammatable[256];
@@ -76,27 +89,33 @@ typedef enum {
 int imageBufferSize[BUFFER_MAX_TYPES] = {0,0,0};
 void        *imageBufferPtr[BUFFER_MAX_TYPES] = {NULL,NULL,NULL};
 
+/* R48: allocate the shared scratch capacity on first use, not on its first
+ * reuse (the old small-buffer promotion lost the previous allocation). */
 void *R_GetImageBuffer( int size, bufferMemType_t bufferType ) {
-	if ( imageBufferSize[bufferType] < R_IMAGE_BUFFER_SIZE && size <= imageBufferSize[bufferType] ) {
-		imageBufferSize[bufferType] = R_IMAGE_BUFFER_SIZE;
-		imageBufferPtr[bufferType] = malloc( imageBufferSize[bufferType] );
-	}
-	if ( size > imageBufferSize[bufferType] ) {   // it needs to grow
-		if ( imageBufferPtr[bufferType] ) {
-			free( imageBufferPtr[bufferType] );
-		}
-		imageBufferSize[bufferType] = size;
-		imageBufferPtr[bufferType] = malloc( imageBufferSize[bufferType] );
-	}
-
-	return imageBufferPtr[bufferType];
+    int capacity;
+    void *next;
+    if ( size <= 0 || bufferType < 0 || bufferType >= BUFFER_MAX_TYPES ) {
+        ri.Error( ERR_DROP, "R_GetImageBuffer: invalid request" );
+        return NULL;
+    }
+    if ( size <= imageBufferSize[bufferType] ) return imageBufferPtr[bufferType];
+    capacity = size < R_IMAGE_BUFFER_SIZE ? R_IMAGE_BUFFER_SIZE : size;
+    next = malloc( capacity );
+    if ( !next ) {
+        ri.Error( ERR_DROP, "R_GetImageBuffer: allocation failed" );
+        return NULL;
+    }
+    free( imageBufferPtr[bufferType] );
+    imageBufferPtr[bufferType] = next;
+    imageBufferSize[bufferType] = capacity;
+    return next;
 }
 
 void R_FreeImageBuffer( void ) {
 	int bufferType;
 	for ( bufferType = 0; bufferType < BUFFER_MAX_TYPES; bufferType++ ) {
 		if ( !imageBufferPtr[bufferType] ) {
-			return;
+			continue;
 		}
 		free( imageBufferPtr[bufferType] );
 		imageBufferSize[bufferType] = 0;
@@ -608,7 +627,7 @@ static void Upload32(   unsigned *data,
 						qboolean lightMap,
 						int *format,
 						int *pUploadWidth, int *pUploadHeight,
-						qboolean noCompress ) {
+						qboolean noCompress, qboolean fontAtlas, const char *traceName, int traceLevel ) {
 	int samples;
 	int scaled_width, scaled_height;
 	unsigned    *scaledBuffer = NULL;
@@ -783,10 +802,15 @@ static void Upload32(   unsigned *data,
 	} else {
 		internalFormat = 3;
 	}
+	/* These pages arrive as compressed CoD DDS files.  After decoding, keep
+	 * their grayscale edge coverage at full precision instead of asking the
+	 * driver to compress the already small glyphs a second time. */
+	if ( fontAtlas ) internalFormat = GL_RGBA8;
 	// copy or resample data as appropriate for first MIP level
 	if ( ( scaled_width == width ) &&
 		 ( scaled_height == height ) ) {
 		if ( !mipmap ) {
+			if ( traceLevel ) R_Cod1ImageTracePixels( "upload-input", traceName, 0, (const byte *)data, scaled_width, scaled_height, internalFormat );
 			qglTexImage2D( GL_TEXTURE_2D, 0, internalFormat, scaled_width, scaled_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data );
 			*pUploadWidth = scaled_width;
 			*pUploadHeight = scaled_height;
@@ -818,6 +842,7 @@ static void Upload32(   unsigned *data,
 	*pUploadHeight = scaled_height;
 	*format = internalFormat;
 
+	if ( traceLevel ) R_Cod1ImageTracePixels( "upload-input", traceName, 0, (const byte *)scaledBuffer, scaled_width, scaled_height, internalFormat );
 	qglTexImage2D( GL_TEXTURE_2D, 0, internalFormat, scaled_width, scaled_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, scaledBuffer );
 
 	if ( mipmap ) {
@@ -841,6 +866,7 @@ static void Upload32(   unsigned *data,
 				R_BlendOverTexture( (byte *)scaledBuffer, scaled_width * scaled_height, mipBlendColors[miplevel] );
 			}
 
+			if ( traceLevel >= 2 ) R_Cod1ImageTracePixels( "upload-input", traceName, miplevel, (const byte *)scaledBuffer, scaled_width, scaled_height, internalFormat );
 			qglTexImage2D( GL_TEXTURE_2D, miplevel, internalFormat, scaled_width, scaled_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, scaledBuffer );
 		}
 	}
@@ -874,13 +900,53 @@ R_CreateImage
 This is the only way any image_t are created
 ================
 */
+#if COD1_NATIVE_LIGHTMAP_GL || (defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA)
+static image_t *R_CreateImageExtInternal( const char *name, const byte *pic, int width, int height,
+						   qboolean mipmap, qboolean allowPicmip, qboolean characterMip,
+						   int glWrapClampMode, int cod1NativeUpload ) {
+#else
 image_t *R_CreateImageExt( const char *name, const byte *pic, int width, int height,
 						   qboolean mipmap, qboolean allowPicmip, qboolean characterMip, int glWrapClampMode ) {
+#endif
 	image_t     *image;
 	qboolean isLightmap = qfalse;
 	long hash;
 	qboolean noCompress = qfalse;
+	qboolean fontAtlas = !Q_stricmpn( name, "fonts/fontImage_", 16 );
+	int traceLevel = R_Cod1ImageTraceLevel();
+	if ( traceLevel ) R_Cod1ImageTracePixels( "create-input", name, 0, pic, width, height, 0 );
 
+	glWrapClampMode = R_Cod1ScopeImageWrap( name, glWrapClampMode );
+#if COD1_NATIVE_LIGHTMAP_GL
+	if ( cod1NativeUpload == 1 ) {
+		if ( !name || strncmp( name, "*lightmap", 9 ) || !pic || mipmap || allowPicmip || characterMip ||
+			 width < 1 || height < 1 ||
+			 ( width & ( width - 1 ) ) || ( height & ( height - 1 ) ) ||
+			 glConfig.maxTextureSize < width || glConfig.maxTextureSize < height ) {
+			ri.Error( ERR_DROP, "CoD1: invalid packed lightmap upload" );
+			return NULL;
+		}
+		if ( atof( glConfig.version_string ) < 1.2 &&
+			 !strstr( glConfig.extensions_string, "GL_EXT_texture_edge_clamp" ) &&
+			 !strstr( glConfig.extensions_string, "GL_SGIS_texture_edge_clamp" ) ) {
+			ri.Error( ERR_DROP, "CoD1: GL_CLAMP_TO_EDGE unavailable" );
+			return NULL;
+		}
+		glWrapClampMode = GL_CLAMP_TO_EDGE;
+	}
+#endif
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	if ( cod1NativeUpload == 2 ) {
+		if ( !name || !pic || mipmap || allowPicmip || characterMip ||
+			 width != COD1_DLIGHT_IMAGE_SIZE || height != COD1_DLIGHT_IMAGE_SIZE ||
+			 glConfig.maxTextureSize < width || glConfig.maxTextureSize < height ) {
+			ri.Error( ERR_DROP, "CoD1: invalid native dlight image upload" );
+			return NULL;
+		}
+		glWrapClampMode = GL_CLAMP_TO_EDGE;
+		noCompress = qtrue;
+	}
+#endif
 	if ( strlen( name ) >= MAX_QPATH ) {
 		ri.Error( ERR_DROP, "R_CreateImage: \"%s\" is too long\n", name );
 	}
@@ -888,6 +954,7 @@ image_t *R_CreateImageExt( const char *name, const byte *pic, int width, int hei
 		isLightmap = qtrue;
 		noCompress = qtrue;
 	}
+	if ( fontAtlas ) noCompress = qtrue;
 	if ( !noCompress && strstr( name, "skies" ) ) {
 		noCompress = qtrue;
 	}
@@ -908,18 +975,28 @@ image_t *R_CreateImageExt( const char *name, const byte *pic, int width, int hei
 	// Ridah
 	image = tr.images[tr.numImages] = R_CacheImageAlloc( sizeof( image_t ) );
 
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+	/* R50A: EVERY color/lightmap image shares the procedural texture registry.
+	 * With caching off, 1024+numImages used to bypass that registry entirely:
+	 * waterMap overwrote an existing 2D texture and the cube reused a 2D name.
+	 * This is name ownership only; no material/pixel/lighting rule changes. */
+	R_FindFreeTexnum( image );
+#else
 	image->texnum = 1024 + tr.numImages;
-
-	// Ridah
 	if ( r_cacheShaders->integer ) {
 		R_FindFreeTexnum( image );
 	}
-	// done.
+#endif
 
 	tr.numImages++;
 
 	image->mipmap = mipmap;
 	image->allowPicmip = allowPicmip;
+    image->characterMIP = characterMip;
+    image->cod1TypeVariant = qfalse;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    image->cod1MultiplyIdentityShift = 0;
+#endif
 
 	strcpy( image->imgName, name );
 
@@ -940,6 +1017,38 @@ image_t *R_CreateImageExt( const char *name, const byte *pic, int width, int hei
 
 	GL_Bind( image );
 
+#if COD1_NATIVE_LIGHTMAP_GL
+	if ( cod1NativeUpload == 1 ) {
+		/* The CoD helper uses an RGBA8 level 0 for the already packed image.
+		 * Skip RTCW RMSE, low-memory resampling and intensity transforms. */
+		image->internalFormat = GL_RGBA8;
+		image->uploadWidth = width;
+		image->uploadHeight = height;
+		if ( traceLevel ) R_Cod1ImageTracePixels( "upload-native-input", name, 0, pic, width, height, GL_RGBA8 );
+		qglTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0,
+			GL_RGBA, GL_UNSIGNED_BYTE, pic );
+		qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+		qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+		GL_CheckErrors();
+	} else
+#endif
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	if ( cod1NativeUpload == 2 ) {
+		/* Native 0x4e1040 selects opaque RGB by r_texturebits. The generated
+		 * bytes receive neither RTCW intensity/gamma nor picmip/compression. */
+		image->internalFormat = r_texturebits->integer == 16 ? GL_RGB5 :
+			(r_texturebits->integer == 32 ? GL_RGB8 : 3);
+		image->uploadWidth = width;
+		image->uploadHeight = height;
+		if ( traceLevel ) R_Cod1ImageTracePixels( "upload-native-dlight", name, 0,
+			pic, width, height, image->internalFormat );
+		qglTexImage2D( GL_TEXTURE_2D, 0, image->internalFormat, width, height,
+			0, GL_RGBA, GL_UNSIGNED_BYTE, pic );
+		qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+		qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+		GL_CheckErrors();
+	} else
+#endif
 	Upload32( (unsigned *)pic,
 			  image->width, image->height,
 			  image->mipmap,
@@ -949,12 +1058,15 @@ image_t *R_CreateImageExt( const char *name, const byte *pic, int width, int hei
 			  &image->internalFormat,
 			  &image->uploadWidth,
 			  &image->uploadHeight,
-			  noCompress );
+			  noCompress, fontAtlas, name, traceLevel );
 
-	qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, glWrapClampMode );
-	qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, glWrapClampMode );
+	qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, R_Cod1ImageWrapS(glWrapClampMode) );
+	qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, R_Cod1ImageWrapT(glWrapClampMode) );
 
 	qglBindTexture( GL_TEXTURE_2D, 0 );
+    /* R52: creating an image leaves this target unbound. The cached bind must
+     * agree, otherwise its first draw can skip the bind and sample texture 0. */
+    glState.currenttextures[glState.currenttmu] = 0;
 
 	if ( image->TMU == 1 ) {
 		GL_SelectTexture( 0 );
@@ -969,6 +1081,21 @@ image_t *R_CreateImageExt( const char *name, const byte *pic, int width, int hei
 
 	return image;
 }
+
+#if COD1_NATIVE_LIGHTMAP_GL || (defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA)
+image_t *R_CreateImageExt( const char *name, const byte *pic, int width, int height,
+						qboolean mipmap, qboolean allowPicmip, qboolean characterMip, int glWrapClampMode ) {
+	return R_CreateImageExtInternal( name, pic, width, height, mipmap, allowPicmip,
+		characterMip, glWrapClampMode, 0 );
+}
+
+#if COD1_NATIVE_LIGHTMAP_GL
+image_t *R_CreateCod1LightmapImage( const char *name, const byte *rgba, int width, int height ) {
+	return R_CreateImageExtInternal( name, rgba, width, height,
+		qfalse, qfalse, qfalse, GL_CLAMP_TO_EDGE, 1 );
+}
+#endif
+#endif
 
 image_t *R_CreateImage( const char *name, const byte *pic, int width, int height,
 						qboolean mipmap, qboolean allowPicmip, int glWrapClampMode ) {
@@ -1300,22 +1427,35 @@ TARGA LOADING
 LoadTGA
 =============
 */
-void LoadTGA( const char *name, byte **pic, int *width, int *height ) {
+static void LoadTGAInternal( const char *name, byte **pic, int *width, int *height,
+    qboolean boundedRgba, qboolean *unsupported ) {
 	int columns, rows, numPixels;
 	byte    *pixbuf;
 	int row, column;
 	byte    *buf_p;
 	byte    *buffer;
 	TargaHeader targa_header;
+	short headerWord;
 	byte        *targa_rgba;
+	int fileBytes, pixelBytes;
+	size_t dataOffset, remaining, available, packetPixels;
+	const byte *scan;
 
+	(void)boundedRgba; /* File and allocation bounds apply to both entry points. */
 	*pic = NULL;
 
 	//
 	// load the file
 	//
-	ri.FS_ReadFile( ( char * ) name, (void **)&buffer );
+	fileBytes = ri.FS_ReadFile( ( char * ) name, (void **)&buffer );
 	if ( !buffer ) {
+		return;
+	}
+	/* FS buffers contain only fileBytes bytes plus a text terminator. Validate
+	 * the complete source span before the historical pixel loop reads it. */
+	if ( fileBytes < 18 ) {
+		if ( unsupported ) *unsupported = qtrue;
+		ri.FS_FreeFile( buffer );
 		return;
 	}
 
@@ -1325,18 +1465,24 @@ void LoadTGA( const char *name, byte **pic, int *width, int *height ) {
 	targa_header.colormap_type = *buf_p++;
 	targa_header.image_type = *buf_p++;
 
-	targa_header.colormap_index = LittleShort( *(short *)buf_p );
+	memcpy( &headerWord, buf_p, sizeof(headerWord) );
+	targa_header.colormap_index = LittleShort( headerWord );
 	buf_p += 2;
-	targa_header.colormap_length = LittleShort( *(short *)buf_p );
+	memcpy( &headerWord, buf_p, sizeof(headerWord) );
+	targa_header.colormap_length = LittleShort( headerWord );
 	buf_p += 2;
 	targa_header.colormap_size = *buf_p++;
-	targa_header.x_origin = LittleShort( *(short *)buf_p );
+	memcpy( &headerWord, buf_p, sizeof(headerWord) );
+	targa_header.x_origin = LittleShort( headerWord );
 	buf_p += 2;
-	targa_header.y_origin = LittleShort( *(short *)buf_p );
+	memcpy( &headerWord, buf_p, sizeof(headerWord) );
+	targa_header.y_origin = LittleShort( headerWord );
 	buf_p += 2;
-	targa_header.width = LittleShort( *(short *)buf_p );
+	memcpy( &headerWord, buf_p, sizeof(headerWord) );
+	targa_header.width = LittleShort( headerWord );
 	buf_p += 2;
-	targa_header.height = LittleShort( *(short *)buf_p );
+	memcpy( &headerWord, buf_p, sizeof(headerWord) );
+	targa_header.height = LittleShort( headerWord );
 	buf_p += 2;
 	targa_header.pixel_size = *buf_p++;
 	targa_header.attributes = *buf_p++;
@@ -1344,20 +1490,77 @@ void LoadTGA( const char *name, byte **pic, int *width, int *height ) {
 	if ( targa_header.image_type != 2
 		 && targa_header.image_type != 10
 		 && targa_header.image_type != 3 ) {
+		ri.FS_FreeFile( buffer );
 		ri.Error( ERR_DROP, "LoadTGA: Only type 2 (RGB), 3 (gray), and 10 (RGB) TGA images supported\n" );
+		return;
 	}
 
 	if ( targa_header.colormap_type != 0 ) {
+		ri.FS_FreeFile( buffer );
 		ri.Error( ERR_DROP, "LoadTGA: colormaps not supported\n" );
+		return;
 	}
 
 	if ( ( targa_header.pixel_size != 32 && targa_header.pixel_size != 24 ) && targa_header.image_type != 3 ) {
+		ri.FS_FreeFile( buffer );
 		ri.Error( ERR_DROP, "LoadTGA: Only 32 or 24 bit images supported (no colormaps)\n" );
+		return;
 	}
 
 	columns = targa_header.width;
 	rows = targa_header.height;
+	if ( columns <= 0 || rows <= 0 ||
+	     (size_t)columns > (size_t)INT_MAX / 4 / (size_t)rows ) {
+		if ( unsupported ) *unsupported = qtrue;
+		ri.FS_FreeFile( buffer );
+		return;
+	}
 	numPixels = columns * rows;
+	pixelBytes = targa_header.pixel_size / 8;
+	dataOffset = (size_t)18 + targa_header.id_length;
+	if ( dataOffset > (size_t)fileBytes ) {
+		if ( unsupported ) *unsupported = qtrue;
+		ri.FS_FreeFile( buffer );
+		return;
+	}
+	available = (size_t)fileBytes - dataOffset;
+	if ( targa_header.image_type == 2 || targa_header.image_type == 3 ) {
+		if ( targa_header.pixel_size != 8 && targa_header.pixel_size != 24 && targa_header.pixel_size != 32 ) {
+			ri.FS_FreeFile( buffer );
+			ri.Error( ERR_DROP, "LoadTGA: illegal pixel_size '%d' in file '%s'\n", targa_header.pixel_size, name );
+			return;
+		}
+		if ( (size_t)numPixels > available / (size_t)pixelBytes ) {
+			if ( unsupported ) *unsupported = qtrue;
+			ri.FS_FreeFile( buffer );
+			return;
+		}
+	} else {
+		/* RLE packets may cross rows. The decoder stops as soon as the final
+		 * output pixel is written, including when a final packet declares more
+		 * pixels than remain; require exactly the samples it will consume. */
+		scan = buffer + dataOffset;
+		remaining = (size_t)numPixels;
+		while ( remaining ) {
+			byte packetHeader;
+			size_t samples;
+			if ( !available ) break;
+			packetHeader = *scan++;
+			available--;
+			packetPixels = 1 + ( packetHeader & 0x7f );
+			if ( packetPixels > remaining ) packetPixels = remaining;
+			samples = ( packetHeader & 0x80 ) ? 1 : packetPixels;
+			if ( samples > available / (size_t)pixelBytes ) break;
+			scan += samples * (size_t)pixelBytes;
+			available -= samples * (size_t)pixelBytes;
+			remaining -= packetPixels;
+		}
+		if ( remaining ) {
+			if ( unsupported ) *unsupported = qtrue;
+			ri.FS_FreeFile( buffer );
+			return;
+		}
+	}
 
 	if ( width ) {
 		*width = columns;
@@ -1510,10 +1713,82 @@ breakOut:;
 		}
 	}
 
+    /* The decoder above writes bottom-origin input into top-first RGBA.
+     * TGA descriptor bit 5 instead declares top-origin input; bit 4
+     * declares right-origin columns. Honour both without changing the
+     * historical path for ordinary bottom-left images. */
+    if ( targa_header.attributes & 0x20 ) {
+        int y, x;
+        for ( y = 0; y < rows / 2; y++ ) {
+            byte *a = targa_rgba + y * columns * 4;
+            byte *b = targa_rgba + ( rows - 1 - y ) * columns * 4;
+            for ( x = 0; x < columns * 4; x++ ) {
+                byte tmp = a[x]; a[x] = b[x]; b[x] = tmp;
+            }
+        }
+    }
+    if ( targa_header.attributes & 0x10 ) {
+        int y, x, c;
+        for ( y = 0; y < rows; y++ ) {
+            for ( x = 0; x < columns / 2; x++ ) {
+                byte *a = targa_rgba + ( y * columns + x ) * 4;
+                byte *b = targa_rgba + ( y * columns + columns - 1 - x ) * 4;
+                for ( c = 0; c < 4; c++ ) {
+                    byte tmp = a[c]; a[c] = b[c]; b[c] = tmp;
+                }
+            }
+        }
+    }
+
 	ri.FS_FreeFile( buffer );
 }
 
-static void LoadJPG( const char *filename, unsigned char **pic, int *width, int *height ) {
+void LoadTGA( const char *name, byte **pic, int *width, int *height ) {
+    LoadTGAInternal(name, pic, width, height, qfalse, NULL);
+}
+
+/* The bundled legacy JPEG source reads fixed 4096-byte chunks from a pointer.
+ * Both decoder entry points own an exact-length source instead of assuming
+ * that a len+1 FS allocation is padded. The stack object lives through destroy. */
+typedef struct {
+    struct jpeg_source_mgr source;
+    JOCTET eoi[2];
+} cod1JpegSource_t;
+
+static void R_Cod1JpegSourceNoop( j_decompress_ptr cinfo ) {
+    (void)cinfo;
+}
+static boolean R_Cod1JpegSourceFill( j_decompress_ptr cinfo ) {
+    cod1JpegSource_t *input = (cod1JpegSource_t *)cinfo->src;
+    input->source.next_input_byte = input->eoi;
+    input->source.bytes_in_buffer = sizeof(input->eoi);
+    return TRUE;
+}
+static void R_Cod1JpegSourceSkip( j_decompress_ptr cinfo, long count ) {
+    if ( count <= 0 ) return;
+    if ( (size_t)count > cinfo->src->bytes_in_buffer ) {
+        R_Cod1JpegSourceFill(cinfo);
+        return;
+    }
+    cinfo->src->next_input_byte += (size_t)count;
+    cinfo->src->bytes_in_buffer -= (size_t)count;
+}
+static void R_Cod1JpegSource( j_decompress_ptr cinfo, cod1JpegSource_t *input,
+    const byte *buffer, size_t length ) {
+    memset(input, 0, sizeof(*input));
+    input->eoi[0] = 0xff; input->eoi[1] = JPEG_EOI;
+    input->source.init_source = R_Cod1JpegSourceNoop;
+    input->source.fill_input_buffer = R_Cod1JpegSourceFill;
+    input->source.skip_input_data = R_Cod1JpegSourceSkip;
+    input->source.resync_to_restart = jpeg_resync_to_restart;
+    input->source.term_source = R_Cod1JpegSourceNoop;
+    input->source.bytes_in_buffer = length;
+    input->source.next_input_byte = buffer;
+    cinfo->src = &input->source;
+}
+
+static void LoadJPGInternal( const char *filename, unsigned char **pic, int *width, int *height,
+    qboolean boundedRgba, qboolean *unsupported ) {
 	/* This struct contains the JPEG decompression parameters and pointers to
 	 * working space (which is allocated as needed by the JPEG library).
 	 */
@@ -1537,6 +1812,8 @@ static void LoadJPG( const char *filename, unsigned char **pic, int *width, int 
 	unsigned char *out;
 	byte  *fbuffer;
 	byte  *bbuf;
+	int fileBytes;
+	cod1JpegSource_t boundedSource;
 
 	/* In this example we want to open the input file before doing anything else,
 	 * so that the setjmp() error recovery below can assume the file is open.
@@ -1544,8 +1821,13 @@ static void LoadJPG( const char *filename, unsigned char **pic, int *width, int 
 	 * requires it in order to read binary files.
 	 */
 
-	ri.FS_ReadFile( ( char * ) filename, (void **)&fbuffer );
+	fileBytes = ri.FS_ReadFile( ( char * ) filename, (void **)&fbuffer );
 	if ( !fbuffer ) {
+		return;
+	}
+	if ( fileBytes <= 0 ) {
+		if ( unsupported ) *unsupported = qtrue;
+		ri.FS_FreeFile( fbuffer );
 		return;
 	}
 
@@ -1563,11 +1845,24 @@ static void LoadJPG( const char *filename, unsigned char **pic, int *width, int 
 
 	/* Step 2: specify data source (eg, a file) */
 
-	jpeg_stdio_src( &cinfo, fbuffer );
+	R_Cod1JpegSource( &cinfo, &boundedSource, fbuffer, (size_t)fileBytes );
 
 	/* Step 3: read file parameters with jpeg_read_header() */
 
 	(void) jpeg_read_header( &cinfo, TRUE );
+	/* The legacy decoder assumes four-byte RGB scanlines. For the new source
+	 * multiplier require that proven output shape before allocation/decoding;
+	 * grayscale and CMYK are not canonical RGBA from this decoder. */
+	if ( !cinfo.image_width || !cinfo.image_height ||
+	     (size_t)cinfo.image_width > (size_t)INT_MAX / 4 / (size_t)cinfo.image_height ||
+	     ( boundedRgba && ( cinfo.image_width > 32768 || cinfo.image_height > 32768 ||
+	       cinfo.out_color_space != JCS_RGB ||
+	       cinfo.jpeg_color_space != JCS_YCbCr ) ) ) {
+		if ( unsupported ) *unsupported = qtrue;
+		jpeg_destroy_decompress( &cinfo );
+		ri.FS_FreeFile( fbuffer );
+		return;
+	}
 	/* We can ignore the return value from jpeg_read_header since
 	 *   (a) suspension is not possible with the stdio data source, and
 	 *   (b) we passed TRUE to reject a tables-only JPEG file as an error.
@@ -1583,6 +1878,16 @@ static void LoadJPG( const char *filename, unsigned char **pic, int *width, int 
 	/* Step 5: Start decompressor */
 
 	(void) jpeg_start_decompress( &cinfo );
+	/* Every accepted output uses the historical four-byte pixel/alpha loop.
+	 * Other decoder component counts require a separate conversion contract. */
+	if ( cinfo.output_components != 4 || !cinfo.output_width || !cinfo.output_height ||
+	     ( boundedRgba && (cinfo.output_width > 32768 || cinfo.output_height > 32768) ) ||
+	     (size_t)cinfo.output_width > (size_t)INT_MAX / 4 / (size_t)cinfo.output_height ) {
+		if ( unsupported ) *unsupported = qtrue;
+		jpeg_destroy_decompress( &cinfo );
+		ri.FS_FreeFile( fbuffer );
+		return;
+	}
 	/* We can ignore the return value since suspension is not possible
 	 * with the stdio data source.
 	 */
@@ -1657,6 +1962,10 @@ static void LoadJPG( const char *filename, unsigned char **pic, int *width, int 
 	/* And we're done! */
 }
 
+
+static void LoadJPG( const char *filename, unsigned char **pic, int *width, int *height ) {
+    LoadJPGInternal(filename, pic, width, height, qfalse, NULL);
+}
 
 /* Expanded data destination object for stdio output */
 
@@ -1960,6 +2269,182 @@ void SaveJPG( char * filename, int quality, int image_width, int image_height, u
 
 //===================================================================
 
+
+#include "tr_cod1_stance_image.h"
+
+/* Minimal DDS/DXT1/DXT3/DXT5 decoder for original Call of Duty assets.
+ * Produces the same RGBA8 buffer expected by the legacy RTCW image path. */
+static unsigned int DDS_ReadLE32( const byte *p ) {
+	return (unsigned int)p[0] | ((unsigned int)p[1] << 8) | ((unsigned int)p[2] << 16) | ((unsigned int)p[3] << 24);
+}
+static unsigned short DDS_ReadLE16( const byte *p ) {
+	return (unsigned short)(p[0] | (p[1] << 8));
+}
+static void DDS_565( unsigned short v, byte *c ) {
+	c[0] = (byte)((((v >> 11) & 31) * 255 + 15) / 31);
+	c[1] = (byte)((((v >> 5) & 63) * 255 + 31) / 63);
+	c[2] = (byte)(((v & 31) * 255 + 15) / 31);
+}
+
+/* Expand a channel stored through a contiguous DDS bit mask to 0..255.
+ * This retains the existing port RGB/RGBA compatibility codec; native DDS
+ * source recognition separately accepts only DXT1/3/5. */
+static byte DDS_MaskComponent( unsigned int pixel, unsigned int mask, byte defaultValue ) {
+	unsigned int shift, raw, maxValue;
+
+	if ( !mask ) {
+		return defaultValue;
+	}
+	shift = 0;
+	while ( shift < 32 && !( mask & ( 1u << shift ) ) ) {
+		shift++;
+	}
+	raw = ( pixel & mask ) >> shift;
+	maxValue = mask >> shift;
+	if ( !maxValue ) {
+		return 0;
+	}
+	return (byte)( ( (unsigned long long)raw * 255u + maxValue / 2u ) / maxValue );
+}
+
+static qboolean DDS_ValidRGBMask( unsigned int mask, unsigned int rgbBits ) {
+	unsigned int shifted;
+	if ( !mask || ( rgbBits < 32U && ( mask >> rgbBits ) ) ) return qfalse;
+	shifted = mask;
+	while ( !( shifted & 1U ) ) shifted >>= 1;
+	return ( shifted & ( shifted + 1U ) ) == 0U;
+}
+
+static void LoadDDSFile( const char *name, const byte *file, int len,
+    byte **pic, int *width, int *height ) {
+	byte *out;
+	int w, h, bx, by, x, y, k;
+	unsigned int blockColumns, blockRows, blockBytes, payloadBytes;
+	unsigned int pfFlags, rgbBits, rMask, gMask, bMask, aMask, pitch;
+	int bytesPerPixel;
+	unsigned int fourcc;
+	const byte *src;
+	*pic = NULL; *width = *height = 0;
+	/* Decoder bounds are separate from native source-format recognition.
+	 * Validate a complete supported 2D base level before allocating scratch. */
+	if ( !file || len < 128 || memcmp( file, "DDS ", 4 ) ||
+	     DDS_ReadLE32( file + 4 ) != 124U || DDS_ReadLE32( file + 76 ) != 32U ) return;
+	if ( DDS_ReadLE32( file + 24 ) > 1U ||
+	     ( DDS_ReadLE32( file + 112 ) & 0x0020fe00U ) ) return;
+	h = (int)DDS_ReadLE32( file + 12 ); w = (int)DDS_ReadLE32( file + 16 );
+	fourcc = DDS_ReadLE32( file + 84 );
+	if ( w <= 0 || h <= 0 || w > 32768 || h > 32768 ||
+	     w > ( INT_MAX / 4 ) / h ) {
+		ri.Printf( PRINT_WARNING, "LoadDDS: invalid DDS size %s\n", name );
+		return;
+	}
+	payloadBytes = (unsigned int)( len - 128 );
+	if ( fourcc == 0x31545844U || fourcc == 0x33545844U || fourcc == 0x35545844U ) {
+		blockColumns = ( (unsigned int)w + 3U ) / 4U;
+		blockRows = ( (unsigned int)h + 3U ) / 4U;
+		blockBytes = fourcc == 0x31545844U ? 8U : 16U;
+		if ( blockColumns > ( payloadBytes / blockBytes ) / blockRows ) {
+			ri.Printf( PRINT_WARNING, "LoadDDS: truncated DXT base level %s\n", name );
+			return;
+		}
+	}
+
+	/* Preserve the port RGB/RGBA compatibility decoder. This does not
+	 * establish native recognition of uncompressed DDS source files. */
+	if ( fourcc != 0x31545844 && fourcc != 0x33545844 && fourcc != 0x35545844 ) {
+		pfFlags = DDS_ReadLE32( file + 80 );
+		rgbBits = DDS_ReadLE32( file + 88 );
+		rMask = DDS_ReadLE32( file + 92 );
+		gMask = DDS_ReadLE32( file + 96 );
+		bMask = DDS_ReadLE32( file + 100 );
+		aMask = DDS_ReadLE32( file + 104 );
+		if ( !( pfFlags & 0x40 ) || ( rgbBits != 24 && rgbBits != 32 ) ||
+			 !DDS_ValidRGBMask( rMask, rgbBits ) ||
+			 !DDS_ValidRGBMask( gMask, rgbBits ) ||
+			 !DDS_ValidRGBMask( bMask, rgbBits ) ||
+			 ( aMask && !DDS_ValidRGBMask( aMask, rgbBits ) ) ||
+			 ( rMask & ( gMask | bMask | aMask ) ) ||
+			 ( gMask & ( bMask | aMask ) ) || ( bMask & aMask ) ) {
+			ri.Printf( PRINT_WARNING, "LoadDDS: unsupported DDS %s\n", name );
+			return;
+		}
+
+		bytesPerPixel = (int)( rgbBits / 8 );
+		pitch = DDS_ReadLE32( file + 20 );
+		if ( pitch < (unsigned int)( w * bytesPerPixel ) ) {
+			pitch = (unsigned int)( w * bytesPerPixel );
+		}
+		if ( pitch > payloadBytes / (unsigned int)h ) {
+			ri.Printf( PRINT_WARNING, "LoadDDS: truncated RGB DDS %s\n", name );
+			return;
+		}
+
+		out = R_GetImageBuffer( w * h * 4, BUFFER_IMAGE );
+		for ( y = 0; y < h; y++ ) {
+			const byte *row = file + 128 + (unsigned int)y * pitch;
+			for ( x = 0; x < w; x++ ) {
+				unsigned int pixel = 0;
+				byte *d = out + ( y * w + x ) * 4;
+				for ( k = 0; k < bytesPerPixel; k++ ) {
+					pixel |= (unsigned int)row[x * bytesPerPixel + k] << ( 8 * k );
+				}
+				d[0] = DDS_MaskComponent( pixel, rMask, 0 );
+				d[1] = DDS_MaskComponent( pixel, gMask, 0 );
+				d[2] = DDS_MaskComponent( pixel, bMask, 0 );
+				d[3] = DDS_MaskComponent( pixel, aMask, 255 );
+			}
+		}
+
+		ri.Printf( PRINT_DEVELOPER, "CoD DDS RGB fallback: %s (%dx%d, %u-bit)\n", name, w, h, rgbBits );
+		*pic=out; *width=w; *height=h;
+		return;
+	}
+
+	out = R_GetImageBuffer( w * h * 4, BUFFER_IMAGE );
+	src = file + 128;
+	for ( by = 0; by < h; by += 4 ) for ( bx = 0; bx < w; bx += 4 ) {
+		int block = (fourcc == 0x31545844) ? 8 : 16;
+		byte col[4][4]; unsigned int bits; unsigned long long abits = 0; byte a0 = 255, a1 = 255, at[8];
+		const byte *cp;
+		/* The complete base-level grid was validated before decoding. */
+		cp = src + ((fourcc == 0x31545844) ? 0 : 8);
+		DDS_565( DDS_ReadLE16(cp), col[0] ); DDS_565( DDS_ReadLE16(cp+2), col[1] ); col[0][3]=col[1][3]=255;
+		if ( fourcc == 0x31545844 && DDS_ReadLE16(cp) <= DDS_ReadLE16(cp+2) ) {
+			for(k=0;k<3;k++) col[2][k]=(byte)((col[0][k]+col[1][k])/2); col[2][3]=255; memset(col[3],0,4);
+		} else {
+			for(k=0;k<3;k++){ col[2][k]=(byte)((2*col[0][k]+col[1][k])/3); col[3][k]=(byte)((col[0][k]+2*col[1][k])/3); } col[2][3]=col[3][3]=255;
+		}
+		bits = DDS_ReadLE32(cp+4);
+		if ( fourcc == 0x33545844 ) for(k=0;k<8;k++) abits |= ((unsigned long long)src[k]) << (8*k);
+		if ( fourcc == 0x35545844 ) {
+			a0=src[0]; a1=src[1]; at[0]=a0; at[1]=a1;
+			if(a0>a1) for(k=1;k<=6;k++) at[k+1]=(byte)(((7-k)*a0+k*a1)/7);
+			else { for(k=1;k<=4;k++) at[k+1]=(byte)(((5-k)*a0+k*a1)/5); at[6]=0; at[7]=255; }
+			for(k=0;k<6;k++) abits |= ((unsigned long long)src[2+k]) << (8*k);
+		}
+		for(k=0;k<16;k++){ int ci=(bits>>(2*k))&3; x=bx+(k&3); y=by+(k>>2); if(x<w&&y<h){ byte *d=out+(y*w+x)*4; byte a=255;
+			if(fourcc==0x31545844) a=col[ci][3]; else if(fourcc==0x33545844) a=(byte)(((abits>>(4*k))&15)*17); else a=at[(abits>>(3*k))&7];
+			d[0]=col[ci][0]; d[1]=col[ci][1]; d[2]=col[ci][2]; d[3]=a; }}
+		src += block;
+	}
+	/* Restrict the visual cleanup to the two original DXT5 stance icons;
+	 * the standing icon and transition flash preserve their source pixels. */
+	if ( fourcc == 0x35545844 ) {
+		R_Cod1NormalizeStancePixels( name, out, w, h );
+	}
+	*pic=out; *width=w; *height=h;
+}
+
+/* FS ownership stays with the caller; typed source recognition can decode
+ * the same DDS buffer without a second full read or a changed disposition. */
+static void LoadDDS( const char *name, byte **pic, int *width, int *height ) {
+	byte *file = NULL;
+	int len;
+	len = ri.FS_ReadFile( name, (void **)&file );
+	LoadDDSFile( name, file, len, pic, width, height );
+	if ( file ) ri.FS_FreeFile( file );
+}
+
 /*
 =================
 R_LoadImage
@@ -1970,6 +2455,8 @@ Loads any of the supported image types into a cannonical
 */
 void R_LoadImage( const char *name, byte **pic, int *width, int *height ) {
 	int len;
+	char resolved[MAX_QPATH];
+	Q_strncpyz( resolved, name, sizeof(resolved) );
 
 	*pic = NULL;
 	*width = 0;
@@ -1984,12 +2471,14 @@ void R_LoadImage( const char *name, byte **pic, int *width, int *height ) {
 		LoadTGA( name, pic, width, height );          // try tga first
 		if ( !*pic ) {                              //
 			char altname[MAX_QPATH];                    // try jpg in place of tga
-			strcpy( altname, name );
+	        if(strlen(name)<4)return; /* no extension bytes in an extensionless request */
+		strcpy( altname, name );
 			len = strlen( altname );
 			altname[len - 3] = 'j';
 			altname[len - 2] = 'p';
 			altname[len - 1] = 'g';
 			LoadJPG( altname, pic, width, height );
+			Q_strncpyz( resolved, altname, sizeof(resolved) );
 		}
 	} else if ( !Q_stricmp( name + len - 4, ".pcx" ) ) {
 		LoadPCX32( name, pic, width, height );
@@ -1997,9 +2486,119 @@ void R_LoadImage( const char *name, byte **pic, int *width, int *height ) {
 		LoadBMP( name, pic, width, height );
 	} else if ( !Q_stricmp( name + len - 4, ".jpg" ) ) {
 		LoadJPG( name, pic, width, height );
+	} else if ( !Q_stricmp( name + len - 4, ".dds" ) ) {
+		LoadDDS( name, pic, width, height );
+	}
+	if ( R_Cod1ImageTraceLevel() ) {
+		ri.Printf( PRINT_ALL, "CoD1 image resolve: request=%s attempted=%s status=%s; logical-VFS-path-only\n",
+			name, resolved, *pic ? "decoded" : "not-decoded" );
 	}
 }
 
+
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+/* Native 0x4e3170 constructs DDS/TGA/JPG storage candidates even when the
+ * authored name has a storage suffix. Its full name remains the cache key.
+ * Only a zero DDS format authorizes raster retry. Payload rejection below
+ * keeps that DDS claim and never changes source priority. */
+static void R_LoadCod1TypeSourceImage( const char *name, byte **pic,
+    int *width, int *height ) {
+    static const char *extensions[3] = { ".dds", ".tga", ".jpg" };
+    static const char *upperExtensions[3] = { ".DDS", ".TGA", ".JPG" };
+    char stem[MAX_QPATH], path[MAX_QPATH];
+    int len, stemLen, kind, spelling, fileBytes;
+    void *fileBuffer;
+    qboolean decodeUnsupported;
+    unsigned int ddsFormat;
+
+    *pic = NULL; *width = *height = 0;
+    len = (int)strlen(name);
+    if ( len < 5 || len >= MAX_QPATH ) return;
+    stemLen = len;
+    if ( name[len - 4] == '.' ) stemLen -= 4;
+    if ( stemLen + 4 >= MAX_QPATH ) return;
+    memcpy(stem, name, (size_t)stemLen);
+    stem[stemLen] = 0;
+
+    for ( kind = 0; kind < 3; ++kind ) {
+        for ( spelling = 0; spelling < 3; ++spelling ) {
+            strcpy(path, stem);
+            if ( !spelling ) {
+                strcpy(path + stemLen, extensions[kind]);
+            } else {
+#if defined(_WIN32)
+                break;
+#else
+                if ( spelling == 1 ) {
+                    strcpy(path + stemLen, upperExtensions[kind]);
+                } else {
+                    /* Retain an explicitly authored mixed spelling only
+                     * after both canonical spellings are absent. */
+                    if ( stemLen != len - 4 ||
+                         Q_stricmp(name + stemLen, extensions[kind]) ||
+                         !strcmp(name + stemLen, extensions[kind]) ||
+                         !strcmp(name + stemLen, upperExtensions[kind]) ) break;
+                    strcpy(path + stemLen, name + stemLen);
+                }
+#endif
+            }
+            if ( !kind ) {
+                fileBuffer = NULL;
+                fileBytes = ri.FS_ReadFile(path, &fileBuffer);
+                ddsFormat = Cod1DDSR67_ProbeFormat((const unsigned char *)fileBuffer, fileBytes);
+                if ( ddsFormat && DDS_ReadLE32((const byte *)fileBuffer + 4) == 124U )
+                    LoadDDSFile(path, (const byte *)fileBuffer, fileBytes, pic, width, height);
+                if ( fileBuffer ) ri.FS_FreeFile(fileBuffer);
+                if ( ddsFormat ) return;
+            } else {
+                /* The metadata probe distinguishes an absent spelling from
+                 * an existing but rejected decoder input. It owns no bytes. */
+                fileBytes = ri.FS_ReadFile(path, NULL);
+                if ( fileBytes >= 0 ) {
+                    decodeUnsupported = qfalse;
+                    if ( kind == 1 )
+                        LoadTGAInternal(path, pic, width, height, qtrue, &decodeUnsupported);
+                    else
+                        LoadJPGInternal(path, pic, width, height, qtrue, &decodeUnsupported);
+                    if ( *pic || decodeUnsupported ) return;
+                }
+            }
+            /* Existing format-zero data permits the next codec, not another
+             * filename spelling of the same codec. */
+            if ( fileBytes >= 0 ) break;
+        }
+    }
+}
+
+static void R_LoadCod1MultiplyRaster( const char *name, byte **pic,
+    int *width, int *height, qboolean *unsupported ) {
+    int len;
+    char alternate[MAX_QPATH];
+    *pic = NULL; *width = 0; *height = 0;
+    len = (int)strlen(name);
+    if ( len < 5 || len >= MAX_QPATH ) return;
+    if ( !Q_stricmp(name + len - 4, ".tga") ) {
+        LoadTGAInternal(name, pic, width, height, qtrue, unsupported);
+        if ( !*pic && !(unsupported && *unsupported) ) {
+            strcpy(alternate, name);
+            strcpy(alternate + len - 4, ".jpg");
+            LoadJPGInternal(alternate, pic, width, height, qtrue, unsupported);
+#if !defined(_WIN32)
+            /* Canonical DDS/JPG requests first select lower-case TGA/JPG.
+             * The Unix upper-case TGA retry must also find upper-only JPG,
+             * while retaining its prior lower-case JPG fallback. */
+            if ( !*pic && !(unsupported && *unsupported) &&
+                 !strcmp(name + len - 4, ".TGA") ) {
+                strcpy(alternate + len - 4, ".JPG");
+                LoadJPGInternal(alternate, pic, width, height, qtrue, unsupported);
+            }
+#endif
+        }
+    } else if ( !Q_stricmp(name + len - 4, ".jpg") ) {
+        LoadJPGInternal(name, pic, width, height, qtrue, unsupported);
+    }
+}
+#endif
 
 //----(SA)	modified
 /*
@@ -2012,16 +2611,15 @@ Returns NULL if it fails, not a default image.
 */
 
 
-image_t *R_FindImageFileExt( const char *name, qboolean mipmap, qboolean allowPicmip, qboolean characterMIP, int glWrapClampMode ) {
+static image_t *R_FindImageFileExtForType( const char *name, qboolean mipmap, qboolean allowPicmip, qboolean characterMIP, int glWrapClampMode, qboolean exactType ) {
 	image_t *image;
 	int width, height;
 	byte    *pic;
 	long hash;
 
-	if ( !name ) {
-		return NULL;
-	}
+    if(!name || !name[0] || strlen(name)>=MAX_QPATH)return NULL;
 
+	glWrapClampMode = R_Cod1ScopeImageWrap( name, glWrapClampMode );
 	hash = generateHashValue( name );
 
 	// Ridah, caching
@@ -2033,7 +2631,13 @@ image_t *R_FindImageFileExt( const char *name, qboolean mipmap, qboolean allowPi
 	// see if the image is already loaded
 	//
 	for ( image = hashTable[hash]; image; image = image->next ) {
+        if(image->cod1TypeVariant!=exactType)continue;
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+        if(image->cod1MultiplyIdentityShift)continue;
+#endif
 		if ( !Q_stricmp( name, image->imgName ) ) {
+            if(exactType && (image->mipmap!=mipmap || image->allowPicmip!=allowPicmip ||
+                image->characterMIP!=characterMIP || image->wrapClampMode!=glWrapClampMode))continue;
 			// the white image can be used with any set of parms, but other mismatches are errors
 			if ( strcmp( name, "*white" ) ) {
 				if ( image->mipmap != mipmap ) {
@@ -2049,13 +2653,19 @@ image_t *R_FindImageFileExt( const char *name, qboolean mipmap, qboolean allowPi
 					ri.Printf( PRINT_ALL, "WARNING: reused image %s with mixed glWrapClampMode parm\n", name );
 				}
 			}
+			if ( R_Cod1ImageTraceLevel() ) ri.Printf( PRINT_ALL,
+                "CoD1 image reuse: kind=live request=%s image=%s texnum=%u upload=%dx%d format=%x; pixels-not-resampled\n",
+                name, image->imgName, (unsigned)image->texnum, image->uploadWidth, image->uploadHeight, image->internalFormat );
 			return image;
 		}
 	}
 
 	// Ridah, check the cache
 	// TTimo: suggests () around assignment used as truth value
-	if ( ( image = R_FindCachedImage( name, hash ) ) ) {
+	if ( !exactType && ( image = R_FindCachedImage( name, hash ) ) ) {
+        if ( R_Cod1ImageTraceLevel() ) ri.Printf( PRINT_ALL,
+            "CoD1 image reuse: kind=backup request=%s image=%s texnum=%u upload=%dx%d format=%x; pixels-not-resampled\n",
+            name, image->imgName, (unsigned)image->texnum, image->uploadWidth, image->uploadHeight, image->internalFormat );
 		return image;
 	}
 	// done.
@@ -2063,6 +2673,12 @@ image_t *R_FindImageFileExt( const char *name, qboolean mipmap, qboolean allowPi
 	//
 	// load the pic from disk
 	//
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+    if ( exactType ) {
+        R_LoadCod1TypeSourceImage(name, &pic, &width, &height);
+        if ( !pic ) return NULL;
+    } else
+#endif
 	R_LoadImage( name, &pic, &width, &height );
 	if ( pic == NULL ) {                                    // if we dont get a successful load
 // RF, no need to check uppercase on win32 systems
@@ -2075,6 +2691,7 @@ image_t *R_FindImageFileExt( const char *name, qboolean mipmap, qboolean allowPi
 		int len;                                          //
 		strcpy( altname, name );                          //
 		len = strlen( altname );                          //
+        if ( len < 4 ) return NULL;
 		altname[len - 3] = toupper( altname[len - 3] );   // and try upper case extension for unix systems
 		altname[len - 2] = toupper( altname[len - 2] );   //
 		altname[len - 1] = toupper( altname[len - 1] );   //
@@ -2091,10 +2708,153 @@ image_t *R_FindImageFileExt( const char *name, qboolean mipmap, qboolean allowPi
 	}
 
 	image = R_CreateImageExt( ( char * ) name, pic, width, height, mipmap, allowPicmip, characterMIP, glWrapClampMode );
-	//ri.Free( pic );
+    image->cod1TypeVariant=exactType;
+    /* R_LoadImage returns the shared R_GetImageBuffer scratch allocation.
+     * R_FreeImageBuffer owns its lifetime; an individual image must not free it. */
 	return image;
 }
+image_t *R_FindImageFileExt( const char *name,qboolean mipmap,qboolean allowPicmip,qboolean characterMIP,int wrap ) {
+    return R_FindImageFileExtForType(name,mipmap,allowPicmip,characterMIP,wrap,qfalse);
+}
+image_t *R_FindCod1TypeImage( const char *name,qboolean mipmap,qboolean allowPicmip,qboolean characterMIP,int wrap ) {
+    /* Original 0x4e18e5..0x4e1925 maps axis flags to 0x812f, not 0x2900. */
+    if ( wrap == GL_CLAMP ) wrap = GL_CLAMP_TO_EDGE;
+    return R_FindImageFileExtForType(name,mipmap,allowPicmip,characterMIP,wrap,qtrue);
+}
 
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+image_t *R_FindCod1MultiplyIdentityImage( const char *name, qboolean mipmap,
+    qboolean allowPicmip, qboolean characterMIP, int wrap, float identityLight,
+    qboolean *unsupported ) {
+    image_t *image;
+    byte *pic;
+    void *fileBuffer;
+    char ddsName[MAX_QPATH], rasterName[MAX_QPATH];
+    size_t pixels;
+    int shift, width, height, len, fileBytes, ddsFormat;
+    long hash;
+    qboolean decodeUnsupported = qfalse;
+
+    if ( unsupported ) *unsupported = qfalse;
+    if ( !name || !name[0] || strlen(name) >= MAX_QPATH ||
+         !Cod1IM_IdentityShift(identityLight, &shift) ) return NULL;
+    /* Native identity 1 is the ordinary exact-type namespace (0x4e2bc0).
+     * Nonidentity multiplies decoded source RGB before the upload pipeline. */
+    if ( !shift ) return R_FindCod1TypeImage(name, mipmap, allowPicmip, characterMIP, wrap);
+    if ( wrap == GL_CLAMP ) wrap = GL_CLAMP_TO_EDGE;
+    wrap = R_Cod1ScopeImageWrap(name, wrap);
+    hash = generateHashValue(name);
+    for ( image = hashTable[hash]; image; image = image->next ) {
+        if ( image->cod1TypeVariant && image->cod1MultiplyIdentityShift == shift &&
+             !Q_stricmp(name, image->imgName) && image->mipmap == mipmap &&
+             image->allowPicmip == allowPicmip && image->characterMIP == characterMIP &&
+             image->wrapClampMode == wrap ) return image;
+    }
+
+    len = (int)strlen(name);
+    strcpy(rasterName, name);
+    if ( len >= 4 && (!Q_stricmp(name + len - 4, ".dds") ||
+         !Q_stricmp(name + len - 4, ".tga") || !Q_stricmp(name + len - 4, ".jpg")) ) {
+        /* Native 0x4e3170 retries the same-stem TGA/JPG only when DDS
+         * recognition leaves its format zero. A DXT format can remain claimed
+         * even when later header validation fails (0x4e1d1a..0x4e1e26).
+         * Native compressed multiply is not established: every such claim
+         * retains the bounded compiler fallback, before raster decoding. */
+        strcpy(ddsName, name);
+        /* Native storage construction always starts with lower-case DDS.
+         * On Unix, retain missing-file retries for upper/mixed authored case. */
+        strcpy(ddsName + len - 4, ".dds");
+        fileBuffer = NULL;
+        fileBytes = ri.FS_ReadFile(ddsName, &fileBuffer);
+        ddsFormat = Cod1DDSR67_ProbeFormat((const unsigned char *)fileBuffer, fileBytes);
+        if ( fileBuffer ) ri.FS_FreeFile(fileBuffer);
+#if !defined(_WIN32)
+        if ( fileBytes < 0 && strcmp(ddsName + len - 4, ".DDS") ) {
+            strcpy(ddsName + len - 4, ".DDS");
+            fileBuffer = NULL;
+            fileBytes = ri.FS_ReadFile(ddsName, &fileBuffer);
+            ddsFormat = Cod1DDSR67_ProbeFormat((const unsigned char *)fileBuffer, fileBytes);
+            if ( fileBuffer ) ri.FS_FreeFile(fileBuffer);
+        }
+        if ( fileBytes < 0 && !Q_stricmp(name + len - 4, ".dds") &&
+             strcmp(name + len - 4, ".dds") && strcmp(name + len - 4, ".DDS") ) {
+            strcpy(ddsName, name);
+            fileBuffer = NULL;
+            fileBytes = ri.FS_ReadFile(ddsName, &fileBuffer);
+            ddsFormat = Cod1DDSR67_ProbeFormat((const unsigned char *)fileBuffer, fileBytes);
+            if ( fileBuffer ) ri.FS_FreeFile(fileBuffer);
+        }
+#endif
+        if ( ddsFormat ) {
+            if ( unsupported ) *unsupported = qtrue;
+            return NULL;
+        }
+        /* Storage suffixes do not override native source priority. The
+         * recovered dispatcher tries TGA then JPG after DDS format zero,
+         * including an authored DDS/JPG request. Keep explicit TGA casing. */
+        if ( Q_stricmp(name + len - 4, ".tga") )
+            strcpy(rasterName + len - 4, ".tga");
+    }
+    if ( len < 4 || (Q_stricmp(rasterName + len - 4, ".tga") &&
+         Q_stricmp(rasterName + len - 4, ".jpg")) ) {
+        /* The recovered decoder branch establishes TGA/JPG raster sources.
+         * Do not widen it to RTCW's PCX/BMP codecs. Logical basenames remain
+         * misses so the stage resolver can try its storage extensions. */
+        if ( len >= 4 && (!Q_stricmp(name + len - 4, ".bmp") ||
+             !Q_stricmp(name + len - 4, ".pcx")) ) {
+            fileBuffer = NULL;
+            if ( ri.FS_ReadFile(name, &fileBuffer) >= 0 && unsupported )
+                *unsupported = qtrue;
+            if ( fileBuffer ) ri.FS_FreeFile(fileBuffer);
+        }
+        return NULL;
+    }
+    R_LoadCod1MultiplyRaster(rasterName, &pic, &width, &height, &decodeUnsupported);
+    if ( decodeUnsupported ) {
+        if ( unsupported ) *unsupported = qtrue;
+        return NULL;
+    }
+#if !defined(_WIN32)
+    if ( !pic && len >= 4 ) {
+        char altname[MAX_QPATH];
+        strcpy(altname, rasterName);
+        altname[len - 3] = toupper(altname[len - 3]);
+        altname[len - 2] = toupper(altname[len - 2]);
+        altname[len - 1] = toupper(altname[len - 1]);
+        R_LoadCod1MultiplyRaster(altname, &pic, &width, &height, &decodeUnsupported);
+    }
+#endif
+    if ( decodeUnsupported ) {
+        if ( unsupported ) *unsupported = qtrue;
+        return NULL;
+    }
+#if !defined(_WIN32)
+    /* Preserve a case-sensitive authored mixed JPG spelling only after the
+     * native TGA/JPG family and upper-case retries all miss. No unsupported
+     * candidate may be bypassed by this final platform spelling retry. */
+    if ( !pic && len >= 4 && !Q_stricmp(name + len - 4, ".jpg") &&
+         strcmp(name + len - 4, ".jpg") && strcmp(name + len - 4, ".JPG") ) {
+        R_LoadCod1MultiplyRaster(name, &pic, &width, &height, &decodeUnsupported);
+    }
+#endif
+    if ( decodeUnsupported ) {
+        if ( unsupported ) *unsupported = qtrue;
+        return NULL;
+    }
+    if ( !pic || width <= 0 || height <= 0 ||
+         (size_t)width > (size_t)-1 / (size_t)height ) return NULL;
+    pixels = (size_t)width * (size_t)height;
+    /* Decoder scratch and ordinary upload sizes use signed int bytes. */
+    if ( pixels > (size_t)INT_MAX / 4 ) return NULL;
+    if ( !Cod1IM_MultiplyIdentity(pic, pixels, identityLight) ) return NULL;
+    image = R_CreateImageExt(name, pic, width, height, mipmap, allowPicmip, characterMIP, wrap);
+    if ( !image ) return NULL;
+    image->cod1TypeVariant = qtrue;
+    image->cod1MultiplyIdentityShift = shift;
+    /* Shared R_GetImageBuffer scratch is owned by R_FreeImageBuffer. */
+    return image;
+}
+#endif
 
 image_t *R_FindImageFile( const char *name, qboolean mipmap, qboolean allowPicmip, int glWrapClampMode ) {
 	return R_FindImageFileExt( name, mipmap, allowPicmip, qfalse, glWrapClampMode );
@@ -2134,6 +2894,33 @@ static void R_CreateDlightImage( void ) {
 	}
 	tr.dlightImage = R_CreateImage( "*dlight", (byte *)data, DLIGHT_SIZE, DLIGHT_SIZE, qfalse, qfalse, GL_CLAMP );
 }
+
+
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+static void R_CreateCod1DlightImage( void ) {
+	byte data[COD1_DLIGHT_IMAGE_BYTES];
+	cvar_t *radius, *shift;
+
+	tr.cod1DlightImage = NULL;
+	radius = ri.Cvar_Get( "r_dlightRadius", "0.1124278", 0 );
+	shift = ri.Cvar_Get( "r_dlightShift", "0.3162278", 0 );
+	if ( !radius || !shift || !Cod1DL_BuildImage( data, radius->value, shift->value ) ) {
+		ri.Printf( PRINT_WARNING, "CoD1: invalid r_dlightRadius/r_dlightShift; native perLight attenuation unavailable\n" );
+		return;
+	}
+	if ( glConfig.maxTextureSize < COD1_DLIGHT_IMAGE_SIZE ||
+		 (atof( glConfig.version_string ) < 1.2 &&
+		  !strstr( glConfig.extensions_string, "GL_EXT_texture_edge_clamp" ) &&
+		  !strstr( glConfig.extensions_string, "GL_SGIS_texture_edge_clamp" )) ) {
+		ri.Printf( PRINT_WARNING, "CoD1: native perLight attenuation requires 64x64 GL_CLAMP_TO_EDGE\n" );
+		return;
+	}
+	/* A separate renderer-owned name keeps the legacy RTCW image intact. */
+	tr.cod1DlightImage = R_CreateImageExtInternal( "*cod1Dlight", data,
+		COD1_DLIGHT_IMAGE_SIZE, COD1_DLIGHT_IMAGE_SIZE,
+		qfalse, qfalse, qfalse, GL_CLAMP_TO_EDGE, 2 );
+}
+#endif
 
 
 /*
@@ -2304,6 +3091,9 @@ void R_CreateBuiltinImages( void ) {
 	}
 
 	R_CreateDlightImage();
+#if defined(COD1_STAGE_BACKEND_INFRA) && COD1_STAGE_BACKEND_INFRA
+	R_CreateCod1DlightImage();
+#endif
 	R_CreateFogImage();
 }
 
@@ -3614,7 +4404,7 @@ image_t *R_FindCachedImage( const char *name, int hash ) {
 	bImagePrev = NULL;
 	while ( bImage ) {
 
-		if ( !Q_stricmp( name, bImage->imgName ) ) {
+		if ( !bImage->cod1TypeVariant && !Q_stricmp( name, bImage->imgName ) ) {
 			// add it to the current images
 			if ( tr.numImages == MAX_DRAWIMAGES ) {
 				ri.Error( ERR_DROP, "R_CreateImage: MAX_DRAWIMAGES hit\n" );
@@ -3641,6 +4431,9 @@ void R_InitTexnumImages( qboolean force ) {
 	if ( force || !numBackupImages ) {
 		memset( texnumImages, 0, sizeof( texnumImages ) );
 		last_i = 0;
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+		ri.Printf( PRINT_ALL, "CoD1 R50A texture IDs: unified ordinary/procedural registry; cacheShaders=%d\n", r_cacheShaders->integer );
+#endif
 	}
 }
 
@@ -3716,3 +4509,12 @@ void R_LoadCacheImages( void ) {
 }
 // done.
 //==========================================================================================
+
+#if defined(COD1_WATER_RUNTIME_R50) && COD1_WATER_RUNTIME_R50
+/* Resource metadata is backend-owned, not a cached/Hunk image allocation. */
+void R_ReleaseCod1WaterTexnum(image_t *image) {
+    unsigned index;if(!image||image->texnum<1024)return;
+    index=image->texnum-1024;
+    if(index<MAX_DRAWIMAGES*2 && texnumImages[index]==image)texnumImages[index]=NULL;
+}
+#endif

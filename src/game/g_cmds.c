@@ -27,6 +27,12 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "g_local.h"
+#include "bg_cod1_inventory.h"
+#include "bg_cod1_actor_runtime.h"
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+#include "g_cod1_entity_host.h"
+#include "g_cod1_gsc_test.h"
+#endif
 
 /*
 ==================
@@ -231,6 +237,13 @@ Cmd_Fogswitch_f
 ==============
 */
 void Cmd_Fogswitch_f( void ) {
+#if defined(COD1_DIRECT_FOG_WIP) && COD1_DIRECT_FOG_WIP
+	/* A first-snapshot RTCW command may arrive after a runtime CoD `fog`.
+	 * Keep the last tagged target authoritative on verified BSP59 maps. */
+	if ( G_Cod1DirectFogRetainedActive() ) {
+		return;
+	}
+#endif
 	G_setfog( ConcatArgs( 1 ) );
 }
 
@@ -267,6 +280,20 @@ void Cmd_Give_f( gentity_t *ent ) {
 		return;
 	}
 
+    /* One command supplies exactly the restored CoD families. */
+    if(!ent->client->ps.aiChar) {
+        int def=CW_Find(name),all=!Q_stricmp(name,"codweapons");
+        for(i=1;i<WP_NUM_WEAPONS;i++) {
+            int root=CW_WeaponRoot(i);
+            if(root<0 || (!all && (def<0 || CW_FamilyRoot(def)!=root)))continue;
+            COM_BitSet(ent->client->ps.weapons,i);
+            ent->client->ps.ammoclip[BG_FindClipForWeapon(i)]=CW_MaxClip(&ent->client->ps,i);
+            ent->client->ps.ammo[BG_PlayerAmmoIndex(&ent->client->ps,i)]=CW_Number(CW_WeaponDef(i),"clipOnly")?0:CW_MaxAmmo(&ent->client->ps,i);
+            if(!all)CW_SetMode(&ent->client->ps,i,def);
+        }
+        if(all || def>=0)return;
+    }
+
 	if ( Q_stricmp( name, "all" ) == 0 ) {
 		give_all = qtrue;
 	} else {
@@ -292,6 +319,7 @@ void Cmd_Give_f( gentity_t *ent ) {
 		//(SA) we really don't want to give anything beyond WP_DYNAMITE
 		for ( i = 0; i <= WP_DYNAMITE; i++ )
 			COM_BitSet( ent->client->ps.weapons, i );
+        for(i=WP_MP44;i<WP_NUM_WEAPONS;i++)if(CW_WeaponDef(i))COM_BitSet(ent->client->ps.weapons,i);
 
 //		for (i=0; i<WP_NUM_WEAPONS; i++) {
 //			switch (i) {
@@ -326,7 +354,8 @@ void Cmd_Give_f( gentity_t *ent ) {
 				Add_Ammo( ent, ent->client->ps.weapon, amount, qtrue );
 			}
 		} else {
-			for ( i = 1 ; i < WP_MONSTER_ATTACK1 ; i++ )
+			for ( i = 1 ; i < WP_NUM_WEAPONS ; i++ )
+                if(i<WP_MONSTER_ATTACK1 || CW_WeaponDef(i))
 				Add_Ammo( ent, i, 999, qtrue );
 		}
 
@@ -338,7 +367,8 @@ void Cmd_Give_f( gentity_t *ent ) {
 	//	"give allammo <n>" allows you to give a specific amount of ammo to /all/ weapons while
 	//	allowing "give ammo <n>" to only give to the selected weap.
 	if ( Q_stricmpn( name, "allammo", 7 ) == 0 && amount ) {
-		for ( i = 1 ; i < WP_MONSTER_ATTACK1 ; i++ )
+		for ( i = 1 ; i < WP_NUM_WEAPONS ; i++ )
+                if(i<WP_MONSTER_ATTACK1 || CW_WeaponDef(i))
 			Add_Ammo( ent, i, amount, qtrue );
 
 		if ( !give_all ) {
@@ -1177,8 +1207,8 @@ qboolean G_canPickupMelee( gentity_t *ent ) {
 		return qfalse;
 	}
 
-//	if( WEAPS_ONE_HANDED & (1<<(ent->s.weapon)) )
-	if ( WEAPS_ONE_HANDED & ( 1 << ( ent->client->pers.cmd.weapon ) ) ) {
+//	if( BG_IsOneHandedWeapon(ent->s.weapon) )
+	if ( BG_IsOneHandedWeapon(ent->client->pers.cmd.weapon) ) {
 		return qtrue;
 	}
 
@@ -1224,6 +1254,10 @@ void Cmd_SetViewpos_f( gentity_t *ent ) {
 Cmd_StartCamera_f
 =================
 */
+/* One transient, visual-only server entity. Its origin is the floor contact
+ * point; cgame adjusts it by the composite model's lower bound. */
+#include "g_cod1_actor_scene.inc"
+
 void Cmd_StartCamera_f( gentity_t *ent ) {
 	g_camEnt->r.svFlags |= SVF_PORTAL;
 	g_camEnt->r.svFlags &= ~SVF_NOCLIENT;
@@ -1365,6 +1399,70 @@ qboolean G_ThrowChair( gentity_t *ent, vec3_t dir, qboolean force ) {
 Cmd_Activate_f
 ==================
 */
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+/* R87 takes an allocation snapshot before any selector or trace callback.
+ * Trace entityNum alone cannot distinguish the hit from a reused slot. This
+ * bounded scan runs on an activation command, never on every render frame. */
+static int G_Cod1UseBegin( gentity_t *player, GscEntityRef refs[MAX_GENTITIES],
+                          GscEntityRef *playerRef ) {
+    int i, captured, selected;
+    if (!G_Cod1MapEntities() || g_gametype.integer != GT_SINGLE_PLAYER) return 0;
+    memset(refs, 0, MAX_GENTITIES * sizeof(*refs));
+    captured = G_Cod1EntityCapture(player, playerRef);
+    for (i = 0; i < level.num_entities && i < MAX_GENTITIES; ++i)
+        G_Cod1EntityCapture(&g_entities[i], &refs[i]);
+    selected = G_Cod1GscTestEntityEventsEnabled();
+    if ((captured && !G_Cod1EntitySameAllocation(playerRef)) ||
+        (selected && (!captured || !player->client))) return -1;
+    return selected ? 1 : 0;
+}
+
+static int G_Cod1UseTraceCurrent( const trace_t *trace,
+    const GscEntityRef refs[MAX_GENTITIES], const GscEntityRef *playerRef ) {
+    if (!G_Cod1EntitySameAllocation(playerRef) ||
+        !g_entities[playerRef->slot].client || !trace ||
+        !(trace->fraction >= 0.0f && trace->fraction <= 1.0f) ||
+        trace->entityNum < 0 || trace->entityNum >= MAX_GENTITIES) return 0;
+    if (trace->entityNum == ENTITYNUM_WORLD || trace->entityNum == ENTITYNUM_NONE) return 1;
+    return G_Cod1EntitySameAllocation(&refs[trace->entityNum]);
+}
+#endif
+
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+#include "g_cod1_use_select.inc"
+#endif
+
+/* Public wrappers remain visible to the legacy save-function extractor. */
+int G_Cod1UseSelect( gentity_t *player, qboolean hint ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    return G_Cod1UseSelectRun(player, hint);
+#else
+    (void)player; (void)hint; return 0;
+#endif
+}
+
+int G_Cod1UseSelectionStable( gentity_t *player ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    return G_Cod1UseSelectionStableRun(player);
+#else
+    (void)player; return 1;
+#endif
+}
+
+int G_Cod1UseSelectionReady( gentity_t *player ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    return G_Cod1UseSelectionReadyRun(player);
+#else
+    (void)player; return 1;
+#endif
+}
+
+void G_Cod1UseSelectionReject( void ) {
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    G_Cod1UseSelectionRejectRun();
+#endif
+}
+
 void Cmd_Activate_f( gentity_t *ent ) {
 	trace_t tr;
 	vec3_t end;
@@ -1373,6 +1471,13 @@ void Cmd_Activate_f( gentity_t *ent ) {
 	static int oldactivatetime = 0;
 	int activatetime = level.time;
 	qboolean walking = qfalse;
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    GscEntityRef cod1UseRefs[MAX_GENTITIES], cod1UsePlayer;
+    int cod1UseMode;
+    if (G_Cod1UseSelect(ent, qfalse)) return;
+    cod1UseMode = G_Cod1UseBegin(ent, cod1UseRefs, &cod1UsePlayer);
+    if (cod1UseMode < 0) return;
+#endif
 
 	if ( ent->client->pers.cmd.buttons & BUTTON_WALKING ) {
 		walking = qtrue;
@@ -1385,6 +1490,16 @@ void Cmd_Activate_f( gentity_t *ent ) {
 	VectorMA( offset, 96, forward, end );
 
 	trap_Trace( &tr, offset, NULL, NULL, end, ent->s.number, ( CONTENTS_SOLID | CONTENTS_BODY | CONTENTS_CORPSE | CONTENTS_TRIGGER ) );
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if (cod1UseMode && !G_Cod1UseTraceCurrent(&tr, cod1UseRefs, &cod1UsePlayer)) return;
+#endif
+	/* CoD weapons and health use the same aimed candidate as their cursor hint. */
+	if ( G_Cod1TryAimedPickupUse( ent, &tr ) ) {
+		return;
+	}
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if (cod1UseMode && !G_Cod1UseTraceCurrent(&tr, cod1UseRefs, &cod1UsePlayer)) return;
+#endif
 
 	//----(SA)	removed erroneous code
 
@@ -1393,6 +1508,22 @@ void Cmd_Activate_f( gentity_t *ent ) {
 	}
 
 	traceEnt = &g_entities[ tr.entityNum ];
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    /* First-hit restoration policy: actual existing 96-unit eye/lean trace,
+     * no passive-trigger bypass, inside-volume fallback or guessed hold time.
+     * Mounted/carried states retain the existing dismount/throw tail. */
+    if (cod1UseMode && traceEnt->classname &&
+        !strcmp(traceEnt->classname, "trigger_use") &&
+        !ent->active && !ent->melee &&
+        !ent->client->ps.persistant[PERS_HWEAPON_USE]) {
+        if (tr.fraction < 1.0f && !tr.startsolid && !tr.allsolid &&
+            tr.entityNum != ENTITYNUM_WORLD && tr.entityNum != ENTITYNUM_NONE &&
+            G_Cod1TriggerUseEligible(traceEnt)) {
+            traceEnt->use(traceEnt, ent, ent);
+        }
+        return;
+    }
+#endif
 
 	// G_Printf( "%s activate %s\n", ent->classname, traceEnt->classname);
 
@@ -1445,15 +1576,23 @@ void Cmd_Activate_f( gentity_t *ent ) {
 			if ( ent->client->sess.sessionTeam == TEAM_SPECTATOR ) {
 				return;
 			}
+			/* A CoD pickup is only usable when the retail cone and
+			 * visibility selector above chose it. */
+			if ( g_gametype.integer == GT_SINGLE_PLAYER && !ent->client->ps.aiChar &&
+				 traceEnt->item && ( G_Cod1NativeHealthItem( traceEnt->item ) ||
+				 ( traceEnt->item->giType == IT_WEAPON &&
+				   CW_WeaponDef( traceEnt->item->giTag ) ) ) ) {
+				return;
+			}
 
 			memset( &trace, 0, sizeof( trace ) );
 
 			if ( traceEnt->touch ) {
-				if ( ent->client->pers.autoActivate == PICKUP_ACTIVATE ) {
-					ent->client->pers.autoActivate = PICKUP_FORCE;      //----(SA) force the pickup of a normally autoactivate only item
-				}
+                int pickupPreference=ent->client->pers.autoActivate;
+                ent->client->pers.autoActivate=PICKUP_FORCE;
 				traceEnt->active = qtrue;
 				traceEnt->touch( traceEnt, ent, &trace );
+                ent->client->pers.autoActivate=pickupPreference;
 			}
 
 		} else if ( ( Q_stricmp( traceEnt->classname, "misc_mg42" ) == 0 ) /*&& activatetime > oldactivatetime + 1000*/ && traceEnt->active == qfalse )         {
@@ -2043,6 +2182,10 @@ void ClientCommand( int clientNum ) {
 
 
 	trap_Argv( 0, cmd, sizeof( cmd ) );
+    if(!strcmp(cmd,"c1p")){G_Cod1GscLoopSoundReply(clientNum);return;}
+    if(!strcmp(cmd,"c1q")){G_Cod1GscLoopSoundResync(clientNum);return;}
+    if(!strcmp(cmd,"c1d")){G_Cod1GscSoundDurationReply(clientNum);return;}
+    if(!strcmp(cmd,"c1f")){G_Cod1GscVoiceReply(clientNum);return;}
 
 	// Ridah, AI Cast debugging
 	if ( Q_stricmp( cmd, "aicast" ) == 0 ) {
@@ -2080,6 +2223,10 @@ void ClientCommand( int clientNum ) {
 	}
 	if ( Q_stricmp( cmd, "score" ) == 0 ) {
 		Cmd_Score_f( ent );
+		return;
+	}
+	if ( Q_stricmp( cmd, "cod1_actor_server" ) == 0 ) {
+		Cmd_Cod1ActorServer_f( ent );
 		return;
 	}
 

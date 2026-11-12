@@ -28,12 +28,21 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include "qfiles.h"
+#include "../game/cod1_navigation_resource.h"
+/* Resident ENGINE observer; never a retained GAME function pointer. */
+void CM_Cod1NavigationSetObserver(void (*observer)(uint64_t));
+int CM_Cod1NavigationResource(const cod1NavigationRequest_t *,cod1NavigationResource_t *,void *,uint32_t);
 
 #include "../cgame/tr_types.h"
 
+void        CM_ClearMap(void);
 void        CM_LoadMap( const char *name, qboolean clientload, int *checksum );
 clipHandle_t CM_InlineModel( int index );       // 0 = world, 1 + are bmodels
 clipHandle_t CM_TempBoxModel( const vec3_t mins, const vec3_t maxs, int capsule );
+/* R103 native query hull. No conversion of CoD contents to RTCW BODY. */
+clipHandle_t CM_TempBoxModelContents( const vec3_t mins, const vec3_t maxs, int capsule, int contents );
+int CM_TempModelContents( void );
+qboolean CM_TempModelHasNativeContents( void );
 
 void        CM_ModelBounds( clipHandle_t model, vec3_t mins, vec3_t maxs );
 
@@ -48,10 +57,23 @@ int         CM_TransformedPointContents( const vec3_t p, clipHandle_t model, con
 void        CM_BoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
 						 const vec3_t mins, const vec3_t maxs,
 						 clipHandle_t model, int brushmask, int capsule );
+/* R56 renderer bake queries: native BSP59 geometry only, mask 0x2001.
+ * Return false when no native world is loaded; no legacy triangle substitution. */
+qboolean CM_Cod1LightTrace(trace_t *out,const vec3_t start,const vec3_t end);
+/* R103 authored CoD collision only; raw mask, no player-clip diagnostic
+ * override and no render-triangle substitution. Unsupported shapes fail. */
+qboolean CM_HasV59(void);
+qboolean CM_Cod1PathBrushSight(const vec3_t,const vec3_t,const vec3_t,const vec3_t,const vec3_t,int,unsigned,int*);
+qboolean CM_Cod1NativeWorldTrace(trace_t *out, const vec3_t start, const vec3_t end,
+    const vec3_t mins, const vec3_t maxs, int mask, int capsule);
+qboolean CM_PointContentsV59(const vec3_t point,int model,int *out);
 void        CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
 									const vec3_t mins, const vec3_t maxs,
 									clipHandle_t model, int brushmask,
 									const vec3_t origin, const vec3_t angles, int capsule );
+void CM_Cod1NativeTransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
+    const vec3_t mins, const vec3_t maxs, clipHandle_t model, int mask,
+    const vec3_t origin, const vec3_t angles, int capsule );
 
 byte        *CM_ClusterPVS( int cluster );
 

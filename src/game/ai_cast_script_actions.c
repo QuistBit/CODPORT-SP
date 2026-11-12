@@ -35,6 +35,7 @@ If you have questions concerning this license or the applicable additional terms
 //===========================================================================
 
 #include "../game/g_local.h"
+#include "bg_cod1_inventory.h"
 #include "../game/q_shared.h"
 #include "../game/botlib.h"      //bot lib interface
 #include "../game/be_aas.h"
@@ -1054,13 +1055,13 @@ qboolean AICast_ScriptAction_SetAmmo( cast_state_t *cs, char *params ) {
 		if ( atoi( token ) ) {
 			int amt;
 			amt = atoi( token );
-			if ( amt > 50 + ammoTable[BG_FindAmmoForWeapon( weapon )].maxammo ) {
+			if ( amt > 50 + ammoTable[BG_PlayerAmmoIndex(&g_entities[cs->entityNum].client->ps, weapon )].maxammo ) {
 				amt = 999;  // unlimited
 			}
 			Add_Ammo( &g_entities[cs->entityNum], weapon, amt, qtrue );
 		} else {
 			// remove ammo for this weapon
-			g_entities[cs->entityNum].client->ps.ammo[BG_FindAmmoForWeapon( weapon )] = 0;
+			g_entities[cs->entityNum].client->ps.ammo[BG_PlayerAmmoIndex(&g_entities[cs->entityNum].client->ps, weapon )] = 0;
 			g_entities[cs->entityNum].client->ps.ammoclip[BG_FindClipForWeapon( weapon )] = 0;
 		}
 
@@ -1119,12 +1120,12 @@ qboolean AICast_ScriptAction_SetClip( cast_state_t *cs, char *params ) {
 
 	if ( weapon != WP_NONE ) {
 
-		int spillover = atoi( token ) - ammoTable[weapon].maxclip;
+		int spillover = atoi( token ) - CW_MaxClip(&g_entities[cs->entityNum].client->ps,weapon);
 
 		if ( spillover > 0 ) {
 			// there was excess, put it in storage and fill the clip
-			g_entities[cs->entityNum].client->ps.ammo[BG_FindAmmoForWeapon( weapon )] += spillover;
-			g_entities[cs->entityNum].client->ps.ammoclip[BG_FindClipForWeapon( weapon )] = ammoTable[weapon].maxclip;
+			g_entities[cs->entityNum].client->ps.ammo[BG_PlayerAmmoIndex(&g_entities[cs->entityNum].client->ps, weapon )] += spillover;
+			g_entities[cs->entityNum].client->ps.ammoclip[BG_FindClipForWeapon( weapon )] = CW_MaxClip(&g_entities[cs->entityNum].client->ps,weapon);
 		} else {
 			// set the clip amount to the exact specified value
 			g_entities[cs->entityNum].client->ps.ammoclip[weapon] = atoi( token );
@@ -1349,7 +1350,7 @@ qboolean AICast_ScriptAction_GiveWeapon( cast_state_t *cs, char *params ) {
 		// monsters have full ammo for their attacks
 		// knife gets infinite ammo too
 		if ( !Q_strncasecmp( params, "monsterattack", 13 ) || weapon == WP_KNIFE ) {
-			g_entities[cs->entityNum].client->ps.ammo[BG_FindAmmoForWeapon( weapon )] = 999;
+			g_entities[cs->entityNum].client->ps.ammo[BG_PlayerAmmoIndex(&g_entities[cs->entityNum].client->ps, weapon )] = 999;
 			Fill_Clip( &g_entities[cs->entityNum].client->ps, weapon );      //----(SA)	added
 		}
 		// conditional flags
@@ -1423,7 +1424,7 @@ qboolean AICast_ScriptAction_TakeWeapon( cast_state_t *cs, char *params ) {
 			// but first make sure we dont have any other weapons that use the same ammo
 			clear = qtrue;
 			for ( i = 0; i < WP_NUM_WEAPONS; i++ ) {
-				if ( BG_FindAmmoForWeapon( weapon ) != BG_FindAmmoForWeapon( i ) ) {
+				if ( BG_PlayerAmmoIndex(&g_entities[cs->entityNum].client->ps, weapon ) != BG_PlayerAmmoIndex(&g_entities[cs->entityNum].client->ps, i ) ) {
 					continue;
 				}
 				if ( COM_BitCheck( g_entities[cs->entityNum].client->ps.weapons, i ) ) {
@@ -1432,7 +1433,7 @@ qboolean AICast_ScriptAction_TakeWeapon( cast_state_t *cs, char *params ) {
 			}
 			if ( clear ) {
 // (SA) temp only.  commented out for pistol guys in escape1
-//				g_entities[cs->entityNum].client->ps.ammo[BG_FindAmmoForWeapon(weapon)] = 0;
+//				g_entities[cs->entityNum].client->ps.ammo[BG_PlayerAmmoIndex(&g_entities[cs->entityNum].client->ps,weapon)] = 0;
 			}
 		} else {
 			G_Error( "AI Scripting: takeweapon %s, unknown weapon", params );
@@ -2013,6 +2014,9 @@ qboolean AICast_ScriptAction_ObjectiveMet( cast_state_t *cs, char *params ) {
 		}
 	} else {    // show on-screen information
 		trap_Cvar_Set( "cg_youGotMail", "2" ); // set flag to draw icon
+		/* The native UI receives the same completion on its own status channel.
+		 * Keep the RTCW notebook cvar for maps that still use it. */
+		trap_SendServerCommand( player->s.number, "obj_complete \"GAME_OBJECTIVECOMPLETED\"" );
 	}
 
 	return qtrue;

@@ -31,6 +31,8 @@ If you have questions concerning this license or the applicable additional terms
 #include "q_shared.h"
 #include "bg_public.h"
 #include "bg_local.h"
+#include "bg_cod1_step.h"
+#include "bg_cod1_stance.h"
 
 /*
 
@@ -243,8 +245,20 @@ void PM_StepSlideMove( qboolean gravity ) {
 //	float		down_dist, up_dist;
 //	vec3_t		delta, delta2;
 	vec3_t up, down;
+    qboolean cod1;
+    float downDistance, stepDistance;
 
-	VectorCopy( pm->ps->origin, start_o );
+	cod1 = (pm->cmd.wbuttons & WBUTTON_COD1_STANCE) &&
+        pm->ps->pm_type == PM_NORMAL && !pm->ps->aiChar &&
+        pm->waterlevel <= 1;
+    /* PATCH55 includes the native ladder branch and its flag mapping.
+     * PATCH40: authoritative jump apex is now part of the snapshot state.
+     * The same native Step/Slide handles supported and airborne movement. */
+    if (cod1) {
+        PM_Cod1NativeStep(gravity);
+        return;
+    }
+    VectorCopy( pm->ps->origin, start_o );
 	VectorCopy( pm->ps->velocity, start_v );
 
 	if ( PM_SlideMove( gravity ) == 0 ) {
@@ -256,7 +270,8 @@ void PM_StepSlideMove( qboolean gravity ) {
 	pm->trace( &trace, start_o, pm->mins, pm->maxs, down, pm->ps->clientNum, pm->tracemask );
 	VectorSet( up, 0, 0, 1 );
 	// never step up when you still have up velocity
-	if ( pm->ps->velocity[2] > 0 && ( trace.fraction == 1.0 ||
+	if ( !(cod1 && pml.walking && !gravity) &&
+         pm->ps->velocity[2] > 0 && ( trace.fraction == 1.0 ||
 									  DotProduct( trace.plane.normal, up ) < 0.7 ) ) {
 		return;
 	}
@@ -286,12 +301,43 @@ void PM_StepSlideMove( qboolean gravity ) {
 	VectorCopy( pm->ps->origin, down );
 	down[2] -= STEPSIZE;
 	pm->trace( &trace, pm->ps->origin, pm->mins, pm->maxs, down, pm->ps->clientNum, pm->tracemask );
+    /* PATCH36: a near-vertical wall hit on the downward probe is not a step landing.
+     * A capsule contacting a real stair edge can have z < MIN_WALK_NORMAL;
+     * retain those rounded-edge contacts so 16-unit steps remain climbable.
+     * Preserve the successful lower slide instead of leaving the capsule
+     * suspended one STEPSIZE above it. This can otherwise repeat each frame. */
+    if (cod1 && (trace.allsolid || trace.startsolid ||
+        (trace.fraction < 1.0f && trace.plane.normal[2] < 0.1f))) {
+        VectorCopy(down_o, pm->ps->origin);
+        VectorCopy(down_v, pm->ps->velocity);
+        return;
+    }
 	if ( !trace.allsolid ) {
 		VectorCopy( trace.endpos, pm->ps->origin );
 	}
-	if ( trace.fraction < 1.0 ) {
-		PM_ClipVelocity( pm->ps->velocity, trace.plane.normal, pm->ps->velocity, OVERCLIP );
-	}
+    if (cod1) {
+        downDistance = (down_o[0]-start_o[0])*(down_o[0]-start_o[0]) +
+            (down_o[1]-start_o[1])*(down_o[1]-start_o[1]);
+        stepDistance = (pm->ps->origin[0]-start_o[0])*(pm->ps->origin[0]-start_o[0]) +
+            (pm->ps->origin[1]-start_o[1])*(pm->ps->origin[1]-start_o[1]);
+        if (stepDistance <= downDistance) {
+            VectorCopy(down_o, pm->ps->origin);
+            VectorCopy(down_v, pm->ps->velocity);
+            return;
+        }
+    }
+    if (trace.fraction < 1.0) {
+        /* PATCH38: downward capsule contact with a rounded stair edge is
+         * support, not a second horizontal obstacle. The elevated slide has
+         * already clipped horizontal movement against actual obstructions.
+         * Re-clipping against this edge used to bleed speed every frame. */
+        if (cod1 && pml.walking && !gravity &&
+            pm->ps->origin[2] > start_o[2] + 0.001f) {
+            pm->ps->velocity[2] = 0;
+        } else {
+            PM_ClipVelocity(pm->ps->velocity,trace.plane.normal,pm->ps->velocity,OVERCLIP);
+        }
+    }
 
 #if 0
 	// if the down trace can trace back to the original position directly, don't step

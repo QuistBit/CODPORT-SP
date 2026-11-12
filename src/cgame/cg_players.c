@@ -316,77 +316,6 @@ void CG_CalcMoveSpeeds( clientInfo_t *ci ) {
 }
 
 /*
-======================
-CG_ParseAnimationFiles
-
-  Read in all the configuration and script files for this model.
-======================
-*/
-
-#if 0   // RF, this entire function not used anymore, since we now grab all this stuff from the server
-
-static qboolean CG_ParseAnimationFiles( const char *modelname, clientInfo_t *ci, int client ) {
-	char text[100000];
-	char filename[MAX_QPATH];
-	fileHandle_t f;
-	int len;
-
-	// set the name of the model in the modelinfo structure
-	Q_strncpyz( ci->modelInfo->modelname, modelname, sizeof( ci->modelInfo->modelname ) );
-
-	// load the cfg file
-	Com_sprintf( filename, sizeof( filename ), "models/players/%s/wolfanim.cfg", modelname );
-	len = trap_FS_FOpenFile( filename, &f, FS_READ );
-	if ( len <= 0 ) {
-		return qfalse;
-	}
-	if ( len >= sizeof( text ) - 1 ) {
-		CG_Printf( "File %s too long\n", filename );
-		return qfalse;
-	}
-	trap_FS_Read( text, len, f );
-	text[len] = 0;
-	trap_FS_FCloseFile( f );
-
-	// parse the text
-	BG_AnimParseAnimConfig( ci->modelInfo, filename, text );
-
-	if ( ci->isSkeletal != ci->modelInfo->isSkeletal ) {
-		CG_Error( "Mis-match in %s, loaded skeletal model, but file does not specify SKELETAL\n", filename );
-	}
-
-	// calc movespeed values if required
-	CG_CalcMoveSpeeds( ci );
-
-	// load the script file
-	Com_sprintf( filename, sizeof( filename ), "models/players/%s/wolfanim.script", modelname );
-	len = trap_FS_FOpenFile( filename, &f, FS_READ );
-	if ( len <= 0 ) {
-		if ( ci->modelInfo->version > 1 ) {
-			return qfalse;
-		}
-		// try loading the default script for old legacy models
-		Com_sprintf( filename, sizeof( filename ), "models/players/default.script", modelname );
-		len = trap_FS_FOpenFile( filename, &f, FS_READ );
-		if ( len <= 0 ) {
-			return qfalse;
-		}
-	}
-	if ( len >= sizeof( text ) - 1 ) {
-		CG_Printf( "File %s too long\n", filename );
-		return qfalse;
-	}
-	trap_FS_Read( text, len, f );
-	text[len] = 0;
-	trap_FS_FCloseFile( f );
-
-	// parse the text
-	BG_AnimParseAnimScript( ci->modelInfo, &cgs.animScriptData, ci->clientNum, filename, text );
-	return qtrue;
-}
-#endif
-
-/*
 ==========================
 CG_RegisterClientSkin
 ==========================
@@ -1202,6 +1131,36 @@ static void CG_ColorFromString( const char *v, vec3_t color ) {
 
 /*
 ===================
+CG_CoD1DataPresent
+
+CoD1 character assets are XModel/XAnim, not RTCW models/players/*.md3|mds.
+Until the XModel renderer is wired in, allow the local client to exist without
+forcing the absent RTCW bj2 model. This keeps map bring-up independent from
+third-person character rendering.
+===================
+*/
+static qboolean CG_CoD1DataPresent( void ) {
+	static int cached = -1;
+	fileHandle_t f;
+	int len;
+
+	if ( cached >= 0 ) {
+		return cached ? qtrue : qfalse;
+	}
+
+	len = trap_FS_FOpenFile( "xmodel/playerbody_default", &f, FS_READ );
+	if ( len > 0 ) {
+		trap_FS_FCloseFile( f );
+		cached = 1;
+		return qtrue;
+	}
+
+	cached = 0;
+	return qfalse;
+}
+
+/*
+===================
 CG_LoadClientInfo
 
 Load it now, taking the disk hits.
@@ -1215,6 +1174,26 @@ void CG_LoadClientInfo( clientInfo_t *ci ) {
 	int clientNum;
 	int headfail = 0;
 	char filename[MAX_QPATH];
+
+	/* CoD1 bootstrap: the server supplies a synthetic RTCW animation table,
+	   but retail CoD1 has no RTCW MD3/MDS player media. Do not turn that
+	   expected format mismatch into a fatal error while bringing up the BSP. */
+	if ( CG_CoD1DataPresent() ) {
+		CG_CheckForExistingModelInfo( ci, ci->modelName, &ci->modelInfo );
+		ci->legsModel = 0;
+		ci->torsoModel = 0;
+		ci->headModel = 0;
+		ci->deferred = qfalse;
+		clientNum = ci - cgs.clientinfo;
+		for ( i = 0; i < MAX_GENTITIES; i++ ) {
+			if ( cg_entities[i].currentState.clientNum == clientNum &&
+				cg_entities[i].currentState.eType == ET_PLAYER ) {
+				CG_ResetPlayerEntity( &cg_entities[i] );
+			}
+		}
+		CG_Printf( "CoD1 compatibility: skipping RTCW player model media for '%s' (XModel support pending)\n", ci->modelName );
+		return;
+	}
 
 //----(SA) modified this for head separation
 
