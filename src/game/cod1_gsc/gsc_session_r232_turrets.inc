@@ -38,7 +38,7 @@ static int session_turret_invoke(void *user,const GscTurretRequest *input,
     memset(&l,0,sizeof(l));l.session=s;l.id=s->view.session_id;
     l.logical_ms=s->view.logical_ms;l.runtime=s->runtime;l.host=s->turrets;
     l.current=current;l.context=context;copy=original=*input;
-    if(copy.now_ms!=l.logical_ms||copy.kind<GSC_TURRET_SET_MODE||copy.kind>GSC_TURRET_SHOOT||
+    if(copy.now_ms!=l.logical_ms||copy.kind<GSC_TURRET_SET_MODE||copy.kind>GSC_TURRET_STOP_USE||
        !session_turret_current(&l))return 0;
     memset(&reply,0,sizeof(reply));reply.kind=-1;
     ok=l.host.invoke(l.host.user,&copy,&reply,error,size,session_turret_current,&l);

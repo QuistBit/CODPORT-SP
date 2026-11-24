@@ -164,6 +164,29 @@ bad:
     return 0;
 }
 
+#if defined(_MSC_VER) && (defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2))
+#include <emmintrin.h>
+/* Same component operations as CV14_Rotate, with three independent lanes.
+ * The source contains exactly three floats: do not read a fourth component.
+ * Skin callers write a distinct frame/stack vertex, never the source mesh. */
+static void CN_SourceRotate3(const float *q,const float *v,float *out) {
+    __m128 quat=_mm_loadu_ps(q),vertex=_mm_set_ps(0,v[2],v[1],v[0]);
+    __m128 qyzx=_mm_shuffle_ps(quat,quat,_MM_SHUFFLE(3,0,2,1));
+    __m128 qzxy=_mm_shuffle_ps(quat,quat,_MM_SHUFFLE(3,1,0,2));
+    __m128 vyzx=_mm_shuffle_ps(vertex,vertex,_MM_SHUFFLE(3,0,2,1));
+    __m128 vzxy=_mm_shuffle_ps(vertex,vertex,_MM_SHUFFLE(3,1,0,2));
+    __m128 t=_mm_mul_ps(_mm_set1_ps(2),_mm_sub_ps(_mm_mul_ps(qyzx,vzxy),_mm_mul_ps(qzxy,vyzx)));
+    __m128 tyzx=_mm_shuffle_ps(t,t,_MM_SHUFFLE(3,0,2,1));
+    __m128 tzxy=_mm_shuffle_ps(t,t,_MM_SHUFFLE(3,1,0,2));
+    __m128 cross=_mm_sub_ps(_mm_mul_ps(qyzx,tzxy),_mm_mul_ps(qzxy,tyzx));
+    __m128 qw=_mm_shuffle_ps(quat,quat,_MM_SHUFFLE(3,3,3,3));
+    float result[4];
+    _mm_storeu_ps(result,_mm_add_ps(cross,_mm_add_ps(vertex,_mm_mul_ps(qw,t))));
+    out[0]=result[0];out[1]=result[1];out[2]=result[2];
+}
+#else
+#define CN_SourceRotate3 CV14_Rotate
+#endif
 /* Skin one retained vertex through the current local part skeleton. The
  * caller handles normal normalization after any additional pose blending. */
 static int CN_SourceSkinVertex(const cnSourceVertex_t *src,
@@ -176,12 +199,13 @@ static int CN_SourceSkinVertex(const cnSourceVertex_t *src,
         sk->n > CV14_BONES || !src->numWeights ||
         src->numWeights > CN_SOURCE_MAX_WEIGHTS || src->normalBone >= sk->n)
         return 0;
-    CV14_Rotate(sk->world[src->normalBone].q, src->normal, normal);
+    CN_SourceRotate3(sk->world[src->normalBone].q, src->normal, normal);
     xyz[0] = xyz[1] = xyz[2] = 0;
     for (i = 0; i < src->numWeights; i++) {
         w = &src->weight[i];
         if (w->bone >= sk->n) return 0;
-        CV14_Point(&sk->world[w->bone], w->offset, p);
+        CN_SourceRotate3(sk->world[w->bone].q,w->offset,p);
+        for(k=0;k<3;k++)p[k]+=sk->world[w->bone].p[k];
         for (k = 0; k < 3; k++) xyz[k] += w->weight * p[k];
     }
     for (k = 0; k < 3; k++)

@@ -22,23 +22,133 @@ static void R_Cod1ViewFailureSet(const char *model,const char *clip,int sample,c
 }
 static void R_Cod1ViewWarningSet(const char *text) { ri.Cvar_Set("r_cod1ViewWarn",text?text:""); }
 
-static int R_CV14Pose(const char *path,cv14Pose *p,float sample) {
-    void *data=NULL;int n=ri.FS_ReadFile(path,&data),ok=0;
+/* A second hand selection may reuse a completed MD3 only when every input
+ * that could change it still resolves to exactly the same bytes. Receipts
+ * are optional, small, renderer-owned and disappear with the model registry. */
+#ifdef _MSC_VER
+#include <float.h>
+#include <xmmintrin.h>
+#endif
+typedef struct {
+    char path[MAX_QPATH];
+    byte *data;
+    int size;
+} cv709File;
+typedef struct {
+    cv709File files[CW_VIEW_CLIPS+9];
+    int count,bytes,refused,index;
+    unsigned fp,mxcsr;
+    char weapon[CW_VIEW_PATH],hands[MAX_QPATH];
+    cwViewProfile key;
+    const model_t *model;
+} cv709Receipt;
+
+static cv709Receipt cv709Saved[8];
+static int cv709Count;
+
+static void R_CV14ReleaseReceipt(cv709Receipt *r) {
+    int i;
+    for(i=0;i<r->count;i++)free(r->files[i].data);
+    memset(r,0,sizeof(*r));
+}
+static void R_CV14ForgetEquivalences(void) {
+    while(cv709Count)R_CV14ReleaseReceipt(&cv709Saved[--cv709Count]);
+}
+static void R_CV14CaptureFile(cv709Receipt *r,const char *path,int size,const void *data) {
+    int i;cv709File *f;
+    if(!r||r->refused)return;
+    if(!data||size<=0||strlen(path)>=MAX_QPATH){r->refused=1;return;}
+    for(i=0;i<r->count;i++)if(!strcmp(r->files[i].path,path)){
+        f=&r->files[i];
+        if(size!=f->size||memcmp(f->data,data,size))r->refused=1;
+        return;
+    }
+    /* Bound retained bytes across eight default weapons to two MiB. */
+    if(r->count==sizeof(r->files)/sizeof(r->files[0])||size>256*1024-r->bytes){r->refused=1;return;}
+    f=&r->files[r->count];f->data=malloc(size);
+    if(!f->data){r->refused=1;return;}
+    memcpy(f->data,data,size);strcpy(f->path,path);f->size=size;r->bytes+=size;r->count++;
+}
+static int R_CV14SourceKey(cv709Receipt *r,const cwViewProfile *p,const char *weapon) {
+#ifdef _MSC_VER
+#ifdef _M_IX86
+    unsigned x87=0;
+    if(!__control87_2(0,0,&x87,NULL))return 0;
+    r->fp=x87&(_MCW_PC|_MCW_RC|_MCW_EM|_MCW_DN|_MCW_IC);
+#else
+    r->fp=0;
+#endif
+    r->mxcsr=_mm_getcsr()&0xffc0u;
+    r->key=*p;memset(r->key.hands,0,sizeof(r->key.hands));r->key.selectedHands=0;
+    strcpy(r->weapon,weapon);
+    return CW_ViewPath(r->hands,p->hands,"xmodel/",0);
+#else
+    return 0;
+#endif
+}
+
+/* Raw geometry, parts and clips are immutable inputs to a single viewmodel
+ * bake. Release FS temporary memory immediately, including on allocation
+ * failure. The usual readers still decode the live pose for each frame. */
+typedef struct {
+    char path[MAX_QPATH];
+    byte *data;
+    int size;
+    cv709Receipt *receipt;
+} cv14BakeFile;
+
+static int R_CV14ReadInput(cv14BakeFile *files,unsigned index,const char *path,void **data) {
+    int size;
+    byte *copy;
+    cv14BakeFile *slot=files?&files[index]:NULL;
+    if(slot && slot->data && !strcmp(slot->path,path)){
+        *data=slot->data;
+        return slot->size;
+    }
+    size=ri.FS_ReadFile(path,data);
+    if(slot)R_CV14CaptureFile(slot->receipt,path,size,*data);
+    if(!slot || !*data || size<=0 || size>1024*1024 || strlen(path)>=sizeof(slot->path) || strstr(path,".cfg"))return size;
+    copy=malloc((size_t)size+1);
+    if(!copy)return size;
+    memcpy(copy,*data,size);
+    copy[size]=0;
+    ri.FS_FreeFile(*data);
+    free(slot->data);
+    strcpy(slot->path,path);
+    slot->data=copy;
+    slot->size=size;
+    *data=copy;
+    return size;
+}
+
+static void R_CV14ReleaseInput(const cv14BakeFile *files,unsigned index,void *data) {
+    if(data && (!files || data!=files[index].data))ri.FS_FreeFile(data);
+}
+
+static int R_CV14PoseInput(const char *path,cv14Pose *p,float sample,cv14BakeFile *file) {
+    void *data=NULL;int n=R_CV14ReadInput(file,0,path,&data),ok=0;
     if(n>0 && data)ok=CV14_SamplePose(data,(size_t)n,sample,p);
-    if(data)ri.FS_FreeFile(data);return ok;
+    R_CV14ReleaseInput(file,0,data);return ok;
+}
+static int R_CV14Pose(const char *path,cv14Pose *p,float sample) {
+    return R_CV14PoseInput(path,p,sample,NULL);
+}
+static int R_CV14PartInput(const char *name,const cv14Pose *pose,const cv14Transform *root,
+                     xm14Model *model,cv14Skeleton *sk,xm14Mesh *mesh,const char *parentTag,cv14BakeFile *files) {
+    char path[MAX_QPATH];void *data=NULL;int n,ok;
+    if(!CW_ViewPath(path,name,"xmodel/",0))return 0;n=R_CV14ReadInput(files,0,path,&data);
+    ok=n>0 && data && XM14_Model(data,(size_t)n,model);R_CV14ReleaseInput(files,0,data);if(!ok)return 0;data=NULL;
+    if(!CW_ViewPath(path,model->lod[0],"xmodelparts/",0))return 0;n=R_CV14ReadInput(files,1,path,&data);
+    ok=n>0 && data && CV14_Parts(data,(size_t)n,sk);R_CV14ReleaseInput(files,1,data);if(!ok)return 0;data=NULL;
+    if(parentTag)CV14_ApplyAttachedPose(sk,pose,root,parentTag);
+    else CV14_ApplyPose(sk,pose,root);
+    if(!CW_ViewPath(path,model->lod[0],"xmodelsurfs/",0))return 0;n=R_CV14ReadInput(files,2,path,&data);
+    ok=n>0 && data && CV14_Mesh(data,(size_t)n,sk,mesh);R_CV14ReleaseInput(files,2,data);
+    return ok && model->ns[0]==mesh->ns;
 }
 static int R_CV14Part(const char *name,const cv14Pose *pose,const cv14Transform *root,
                      xm14Model *model,cv14Skeleton *sk,xm14Mesh *mesh,const char *parentTag) {
-    char path[MAX_QPATH];void *data=NULL;int n,ok;
-    if(!CW_ViewPath(path,name,"xmodel/",0))return 0;n=ri.FS_ReadFile(path,&data);
-    ok=n>0 && data && XM14_Model(data,(size_t)n,model);if(data)ri.FS_FreeFile(data);if(!ok)return 0;data=NULL;
-    if(!CW_ViewPath(path,model->lod[0],"xmodelparts/",0))return 0;n=ri.FS_ReadFile(path,&data);
-    ok=n>0 && data && CV14_Parts(data,(size_t)n,sk);if(data)ri.FS_FreeFile(data);if(!ok)return 0;data=NULL;
-    if(parentTag)CV14_ApplyAttachedPose(sk,pose,root,parentTag);
-    else CV14_ApplyPose(sk,pose,root);
-    if(!CW_ViewPath(path,model->lod[0],"xmodelsurfs/",0))return 0;n=ri.FS_ReadFile(path,&data);
-    ok=n>0 && data && CV14_Mesh(data,(size_t)n,sk,mesh);if(data)ri.FS_FreeFile(data);
-    return ok && model->ns[0]==mesh->ns;
+    return R_CV14PartInput(name,pose,root,model,sk,mesh,parentTag,NULL);
 }
 /* KAR98_CLIP_R1: a narrow compatibility visibility rule for the retail
  * non-scoped Kar98k. Its fire/lastshot tracks park the reload clip to the left,
@@ -104,7 +214,7 @@ static short R_CV14Normal(const float *n) {
     lat=(int)(atan2(n[1],n[0])*255.0/(2.0*M_PI));lng=(int)(acos(z)*255.0/(2.0*M_PI));
     return (short)(((lat&255)<<8)|(lng&255));
 }
-static qboolean R_LoadCod1ViewFrame(model_t *mod,const cwViewProfile *profile,const char *clip,int sample) {
+static qboolean R_LoadCod1ViewFrame(model_t *mod,const cwViewProfile *profile,const char *clip,int sample,cv14BakeFile *files) {
     cv14Pose *idle=NULL,*hip=NULL;cv14Skeleton *sk=NULL;xm14Model *models=NULL;xm14Mesh mesh[2];
     cv14Transform root,attachment;md3Tag_t tags[CV14_WEAPON_TAGS];int numTags;md3Header_t *header;md3Frame_t *frame;md3Surface_t *surf;
     md3Shader_t *material;md3Triangle_t *tri;md3St_t *st;md3XyzNormal_t *xyz;shader_t *shader;
@@ -113,18 +223,18 @@ static qboolean R_LoadCod1ViewFrame(model_t *mod,const cwViewProfile *profile,co
     idle=(cv14Pose*)calloc(1,sizeof(*idle));hip=(cv14Pose*)calloc(1,sizeof(*hip));
     sk=(cv14Skeleton*)calloc(1,sizeof(*sk));models=(xm14Model*)calloc(2,sizeof(*models));
     if(!idle || !hip || !sk || !models)goto done;
-    stage="xanim idle";if(!R_CV14Pose(clip,idle,(float)sample))goto done;
+    stage="xanim idle";if(!R_CV14PoseInput(clip,idle,(float)sample,files))goto done;
     CV14_Identity(&root);
     if(*profile->hip) {
-        stage="xanim hip offset";if(!R_CV14Pose(profile->hip,hip,0))goto done;
+        stage="xanim hip offset";if(!R_CV14PoseInput(profile->hip,hip,0,files+1))goto done;
         i=CV14_Find(hip,"tag_torso");if(i<0)goto done;root=hip->t[i];
     }
     /* Non-ADS clips contain their own tag_torso track; apply it only once. */
     stage="hands";
-    if(!R_CV14Part(profile->hands,idle,&root,&models[0],sk,&mesh[0],NULL))goto done;
+    if(!R_CV14PartInput(profile->hands,idle,&root,&models[0],sk,&mesh[0],NULL,files+2))goto done;
     for(i=0;i<sk->n;i++)if(!strcmp(sk->name[i],"tag_weapon")){attachment=sk->world[i];found=1;break;}
     if(!found)goto done;stage="weapon";
-    if(!R_CV14Part(profile->gun,idle,&attachment,&models[1],sk,&mesh[1],"tag_weapon"))goto done;
+    if(!R_CV14PartInput(profile->gun,idle,&attachment,&models[1],sk,&mesh[1],"tag_weapon",files+5))goto done;
     /* Skeleton transforms are already in the SAME posed space as the mesh.
      * Export before reusing/freeing the skeleton, without reapplying ADS or
      * tag_weapon. Missing optional tags do not disable an otherwise valid gun. */
@@ -259,22 +369,85 @@ static md3Header_t *R_CV14MergedAlloc(const md3Header_t *first,int framesCount,i
     if(outSize)*outSize=(int)total;return out;
 }
 static qboolean R_CV14LoadViewPose(model_t *pose,const cwViewProfile *profile,const char *definitionName,
-                                  const char *clip,int sample,int clipIndex) {
+                                  const char *clip,int sample,int clipIndex,cv14BakeFile *files) {
     Q_strncpyz(pose->name,definitionName,sizeof(pose->name));
-    if(R_LoadCod1ViewFrame(pose,profile,clip,sample))return qtrue;
+    if(R_LoadCod1ViewFrame(pose,profile,clip,sample,files))return qtrue;
     /* Presentation-only Bren melee fallback retained from HOTFIX_R2. */
     if(!strcmp(definitionName,"bren") && clipIndex==10+CW_VIEW_MELEE) {
         char why[256],warn[512];Q_strncpyz(why,r_cod1ViewFailure,sizeof(why));
         memset(pose,0,sizeof(*pose));Q_strncpyz(pose->name,definitionName,sizeof(pose->name));
-        if(!R_LoadCod1ViewFrame(pose,profile,profile->idle,0))return qfalse;
+        if(!R_LoadCod1ViewFrame(pose,profile,profile->idle,0,files))return qfalse;
         Com_sprintf(warn,sizeof(warn),"Bren melee pose fallback: %s",why);
         R_Cod1ViewWarningSet(warn);R_Cod1ViewFailureClear();ri.Printf(PRINT_WARNING,"CoD1 viewmodel: %s\n",warn);return qtrue;
     }
     ri.Printf(PRINT_WARNING,"CoD1 PATCH64: failed pose %s frame %d\n",clip,sample);return qfalse;
 }
+static int R_CV14SameHandModel(const cv709File *captured,const char *selected,const md3Header_t *md3) {
+    xm14Model *model;void *data=NULL;int size,i,ok=0;char texture[MAX_QPATH];
+    model=malloc(2*sizeof(*model));if(!model)return 0;
+    size=ri.FS_ReadFile(selected,&data);
+    if(!data||size<=0||!XM14_Model(captured->data,captured->size,&model[0])||
+       !XM14_Model(data,size,&model[1])||strcmp(model[0].lod[0],model[1].lod[0])||
+       model[0].ns[0]!=model[1].ns[0]||model[1].ns[0]>md3->numSurfaces)goto done;
+    for(i=0;i<model[1].ns[0];i++){
+        const md3Surface_t *s=R_CV14SurfaceAtConst(md3,i);
+        const md3Shader_t *m=(const md3Shader_t *)((const byte *)s+s->ofsShaders);
+        if(s->numShaders!=1||!CW_ViewPath(texture,model[1].skin[0][i],"skins/",0)||
+           strcmp(texture,m->name))goto done;
+    }
+    ok=1;
+done:
+    if(data)ri.FS_FreeFile(data);free(model);return ok;
+}
+static int R_CV14ReuseViewModel(model_t *mod,const cv709Receipt *wanted) {
+    int i,j,size,sawHands;
+    for(i=0;i<cv709Count;i++){
+        const cv709Receipt *r=&cv709Saved[i];
+        const model_t *owner;
+        const md3Header_t *md3;
+        if(r->index<=0||r->index>=tr.numModels||tr.models[r->index]!=r->model||
+           strcmp(r->weapon,wanted->weapon)||r->fp!=wanted->fp||r->mxcsr!=wanted->mxcsr||
+           memcmp(&r->key,&wanted->key,sizeof(r->key)))continue;
+        owner=r->model;md3=owner->md3[0];
+        if(owner->type!=MOD_MESH||owner->numLods!=1||!md3)continue;
+        sawHands=0;
+        for(j=0;j<r->count;j++){
+            const cv709File *f=&r->files[j];
+            if(!strcmp(f->path,r->hands)){
+                sawHands=R_CV14SameHandModel(f,wanted->hands,md3);
+                if(!sawHands)break;
+            }else{
+                void *data=NULL;
+                size=ri.FS_ReadFile(f->path,&data);
+                int equal=data&&size==f->size&&!memcmp(data,f->data,size);
+                if(data)ri.FS_FreeFile(data);
+                if(!equal)break;
+            }
+        }
+        if(j!=r->count||!sawHands)continue;
+        /* Shader indices belong to the current renderer. Missing-media
+         * warnings and a changed binding take the usual registration path. */
+        for(j=0;j<md3->numSurfaces;j++){
+            const md3Surface_t *s=R_CV14SurfaceAtConst(md3,j);
+            const md3Shader_t *m=(const md3Shader_t *)((const byte *)s+s->ofsShaders);
+            shader_t *shader;
+            if(s->numShaders!=1||m->shaderIndex<=0)break;
+            shader=R_FindShader(m->name,LIGHTMAP_NONE,qtrue);
+            if(shader->defaultShader||shader->index!=m->shaderIndex)break;
+        }
+        if(j!=md3->numSurfaces)continue;
+        mod->type=MOD_MESH;mod->numLods=1;mod->dataSize=owner->dataSize;
+        for(j=0;j<MD3_MAX_LODS;j++)mod->md3[j]=owner->md3[j];
+        return 1;
+    }
+    return 0;
+}
+
 /* One registration per definition name. Frames/fps come from its XAnim. */
 static qboolean R_LoadCod1ViewWeapon(model_t *mod,const char *resourceName) {
-    model_t pose;md3Header_t *out=NULL;int i,n,size=0; qboolean ok=qfalse;
+    cv709Receipt proposal={0},*capture=NULL;
+    cv14BakeFile files[8]={0};
+    model_t pose={0};md3Header_t *out=NULL;int i,n,size=0; qboolean ok=qfalse;
     cwDef_t *def;cwViewProfile profile;cwViewAnim anim[CW_VIEW_CLIPS];
     const char *clips[CW_VIEW_CLIPS],*clip;int a,sample,clipIndex;
     char path[MAX_QPATH],definitionName[CW_VIEW_PATH],selectedHands[CW_VIEW_PATH];void *data=NULL;
@@ -286,17 +459,31 @@ static qboolean R_LoadCod1ViewWeapon(model_t *mod,const char *resourceName) {
     i=size>0 && data && CW_Parse(def,definitionName,data,size)>0 && CW_ViewProfile(def,&profile) && CW_ViewSelectHands(&profile,selectedHands);
     if(data)ri.FS_FreeFile(data);free(def);data=NULL;
     if(!i){R_Cod1ViewFailureSet(mod?mod->name:NULL,path,0,"weapon definition/profile");ri.Printf(PRINT_WARNING,"CoD1 PATCH35: invalid viewmodel definition %s\n",path);return qfalse;}
+    /* Only the merged view backend uses this identity. Explicit variants
+     * retain their own model handles. A missing or changed resource takes
+     * the original path including its failure and warning behavior. */
+    if(!strncmp(mod->name,"cod1view64/",11) && strcmp(definitionName,"bren") &&
+       strcmp(profile.gun,profile.hands) && R_CV14SourceKey(&proposal,&profile,definitionName)){
+        if(profile.selectedHands){
+            if(R_CV14ReuseViewModel(mod,&proposal))return qtrue;
+        }else if(cv709Count<sizeof(cv709Saved)/sizeof(cv709Saved[0]) &&
+                 mod->index>0 && mod->index<tr.numModels && tr.models[mod->index]==mod){
+            capture=&proposal;
+            for(i=0;i<8;i++)files[i].receipt=capture;
+        }
+    }
     n=1;memset(anim,0,sizeof(anim));
     for(a=0;a<CW_VIEW_CLIPS;a++) {
         clips[a]=CW_ViewClip(&profile,a);if(!*clips[a])continue;
         data=NULL;size=ri.FS_ReadFile(clips[a],&data);i=CW_ViewAnimInfo(data,size,&anim[a]);
+        R_CV14CaptureFile(capture,clips[a],size,data);
         if(data)ri.FS_FreeFile(data);
-        if(!i){R_Cod1ViewFailureSet(mod?mod->name:NULL,clips[a],0,"clip header");ri.Printf(PRINT_WARNING,"CoD1 PATCH64: unsupported clip %s\n",clips[a]);return qfalse;}
-        if(anim[a].frames<0 || n>8192-anim[a].frames){R_Cod1ViewFailureSet(mod?mod->name:NULL,clips[a],0,"frame count limit");return qfalse;}
+        if(!i){R_Cod1ViewFailureSet(mod?mod->name:NULL,clips[a],0,"clip header");ri.Printf(PRINT_WARNING,"CoD1 PATCH64: unsupported clip %s\n",clips[a]);goto done;}
+        if(anim[a].frames<0 || n>8192-anim[a].frames){R_Cod1ViewFailureSet(mod?mod->name:NULL,clips[a],0,"frame count limit");goto done;}
         n+=anim[a].frames;
     }
     memset(&pose,0,sizeof(pose));clip=profile.idle;sample=0;clipIndex=-1;
-    if(!R_CV14LoadViewPose(&pose,&profile,definitionName,clip,sample,clipIndex))goto done;
+    if(!R_CV14LoadViewPose(&pose,&profile,definitionName,clip,sample,clipIndex,files))goto done;
     out=R_CV14MergedAlloc(pose.md3[0],n,&size);
     if(!out){R_Cod1ViewFailureSet(mod?mod->name:NULL,clip,sample,"merged viewmodel size limit");goto done;}
     if(!R_CV14MergedCopyFrame(out,pose.md3[0],0)){R_Cod1ViewFailureSet(mod?mod->name:NULL,clip,sample,"initial frame copy");goto done;}
@@ -304,7 +491,7 @@ static qboolean R_LoadCod1ViewWeapon(model_t *mod,const char *resourceName) {
     for(i=1;i<n;i++) {
         sample=i-1;clip=profile.idle;clipIndex=-1;
         for(a=0;a<CW_VIEW_CLIPS;a++){if(sample<anim[a].frames){clip=clips[a];clipIndex=a;break;}sample-=anim[a].frames;}
-        if(!R_CV14LoadViewPose(&pose,&profile,definitionName,clip,sample,clipIndex))goto done;
+        if(!R_CV14LoadViewPose(&pose,&profile,definitionName,clip,sample,clipIndex,files))goto done;
         if(!R_CV14MergedLayoutMatch(out,pose.md3[0])) {
             R_Cod1ViewFailureSet(mod?mod->name:NULL,clip,sample,"surface/attachment layout mismatch");goto done;
         }
@@ -318,6 +505,11 @@ static qboolean R_LoadCod1ViewWeapon(model_t *mod,const char *resourceName) {
     R_Cod1ViewFailureClear();
     ri.Printf(PRINT_ALL,"CoD1 PATCH35 viewmodel %s: fire=%d reload=%d empty=%d switch=%d ADSfire=%d frames, total=%d\n",definitionName,anim[0].frames,anim[1].frames,anim[2].frames,anim[3].frames,anim[4].frames,n);ok=qtrue;
 done:
+    if(capture && ok && !capture->refused && capture->count && cv709Count<sizeof(cv709Saved)/sizeof(cv709Saved[0])){
+        capture->model=mod;capture->index=mod->index;
+        cv709Saved[cv709Count++]=*capture;
+    }else if(capture)R_CV14ReleaseReceipt(capture);
+    for(i=0;i<8;i++)free(files[i].data);
     if(pose.md3[0])free(pose.md3[0]);
     return ok;
 }

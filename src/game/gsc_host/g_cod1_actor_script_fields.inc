@@ -37,6 +37,7 @@ static int ActorScriptClassify(void *user,const GscEntityRef *ref,const char *na
 }
 static float *ActorScriptFloat(const cod1ActorLease_t *lease,const char *name) {
     if(!Q_stricmp(name,"maxsightdistsqrd"))return &cod1Actors[lease->actorIndex].defaults.allocation.maxsightdistsqrd;
+    if(!Q_stricmp(name,"grenadeawareness"))return &cod1Actors[lease->actorIndex].defaults.allocation.grenadeawareness;
     if(!Q_stricmp(name,"walkdist"))return &cod1Actors[lease->actorIndex].defaults.allocation.walkdist;
     if(!Q_stricmp(name,"interval"))return &cod1Actors[lease->actorIndex].defaults.allocation.interval;
     if(!Q_stricmp(name,"accuracy"))return &cod1Actors[lease->actorIndex].nativeData.actor.accuracy;
@@ -48,6 +49,8 @@ static float *ActorScriptFloat(const cod1ActorLease_t *lease,const char *name) {
  * use the pointer immediately, without callbacks or cached ownership. The
  * uint32 dropweapon cell carries the same four native bits as signed INT32. */
 static void *ActorScriptInt32Cell(const cod1ActorLease_t *lease,const char *name) {
+    if(!Q_stricmp(name,"followmin"))return &cod1Actors[lease->actorIndex].defaults.allocation.followmin;
+    if(!Q_stricmp(name,"followmax"))return &cod1Actors[lease->actorIndex].defaults.allocation.followmax;
     if(!Q_stricmp(name,"dontavoidplayer"))return &cod1Actors[lease->actorIndex].nativeData.actor.dontavoidplayer;
     if(!Q_stricmp(name,"dropweapon"))return &cod1Actors[lease->actorIndex].nativeData.actor.dropweapon;
     if(!Q_stricmp(name,"drawoncompass"))return &cod1Actors[lease->actorIndex].nativeData.actor.drawoncompass;
@@ -116,11 +119,47 @@ static int ActorScriptFieldReadSelected(int runtime,void *user,const GscEntityRe
        ActorOverlap(input,sizeof(*input),out,sizeof(*out))||!out||!name)return 0;
     if(!(runtime?ActorPoseLease(input,&lease):ActorScriptLease(input,&lease))){EntityError(error,size,"native field read requires a current owned actor in a ready map");return 0;}
     memset(&copy,0,sizeof(copy));
-    if(runtime && !Q_stricmp(name,"node")) {
-        /* Sentient field 8923C, type 10. A null claim produces no VM value.
-         * An occupied claim needs a live class-2 node and map-owned identity. */
-        if(cod1Sentients[lease.sentientIndex].rawGoal.node0040) {
-            EntityError(error,size,"claimed node requires typed map-owned node transport");
+    if(!Q_stricmp(name,"damagetaken")){if(!ActorDamageTakenRead(cod1Actors+lease.actorIndex,&copy)){EntityError(error,size,"native damageTaken has no current admitted hit");return 0;}*out=copy;return 1;}
+    if(!Q_stricmp(name,"damageyaw")){if(!ActorDamageYawRead(cod1Actors+lease.actorIndex,&copy)){EntityError(error,size,"native damageYaw has no current admitted hit");return 0;}*out=copy;return 1;}
+    if(!Q_stricmp(name,"damagedir")){if(!ActorDamageDirectionRead(cod1Actors+lease.actorIndex,&copy)){EntityError(error,size,"native damageDir has no current admitted direction");return 0;}*out=copy;return 1;}
+    if(!Q_stricmp(name,"lookforward")||!Q_stricmp(name,"lookright")||!Q_stricmp(name,"lookup")){
+        /* Saved retail rows89788/8979C/897B0: readonly type5 vectors
+         * at FC/108/114. Read the existing native orientation cells;
+         * do not substitute body angles, a tag, or a fabricated enemy. */
+        const cod1ActorNativeData_t *data=&cod1Actors[lease.actorIndex].nativeData;
+        const float *v=!Q_stricmp(name,"lookforward")?data->orientation.lookforward:
+            !Q_stricmp(name,"lookright")?data->orientation.lookright:data->orientation.lookup;
+        if(!isfinite(v[0])||!isfinite(v[1])||!isfinite(v[2]))return 0;
+        copy.type=3;memcpy(copy.vector,v,12);*out=copy;return 1;
+    }
+    if(!Q_stricmp(name,"grenade")){
+        const GscEntityRef *grenade=&cod1Actors[lease.actorIndex].grenade1164;
+        if(grenade->epoch||grenade->slot||grenade->generation){
+            EntityError(error,size,"grenade reference producer/transport not qualified");return 0;
+        }
+        /* Native type6 null pointer returns undefined, not integer zero. */
+        *out=copy;return 1;
+    }
+    if(runtime && !Q_stricmp(name,"groundtype")){
+        /* GAME 5B960 leaves the result undefined for the zero phys cell.
+         * Read the owned +294 word, shared with the actor physics record. */
+        if(cod1Actors[lease.actorIndex].defaults.lifeWords[(0x294-0x26c)/4]){
+            EntityError(error,size,"ground material configstring lookup unavailable");return 0;
+        }
+        *out=copy;return 1;
+    }
+    if(runtime && !Q_stricmp(name,"desiredangle")){
+        if(!ActorDesiredAngleRead(cod1Actors+lease.actorIndex,&copy)){
+            EntityError(error,size,"native desiredAngle producer is not currently admitted");return 0;}
+        *out=copy;return 1;
+    }
+    if(runtime && (!Q_stricmp(name,"node") || !Q_stricmp(name,"chainnode"))) {
+        const cod1SentientRecord_t *sentient=&cod1Sentients[lease.sentientIndex];
+        /* Retail sentient rows 8923C and 89250 are type 10. A fresh
+         * sentient owns both null pointers independently of its script goal. */
+        uint32_t node=!Q_stricmp(name,"node")?sentient->rawGoal.node0040:sentient->rawGoal.node004c;
+        if(node){
+            EntityError(error,size,"sentient node requires typed map-owned node transport");
             return 0;
         }
         *out=copy;
@@ -135,6 +174,9 @@ static int ActorScriptFieldReadSelected(int runtime,void *user,const GscEntityRe
     } else if(!Q_stricmp(name,"health")||!Q_stricmp(name,"maxhealth")) {
         copy.type=5;copy.integer=!Q_stricmp(name,"health")?g_entities[lease.entity.slot].health:
             cod1Actors[lease.actorIndex].nativeData.entity.maxhealth;
+    } else if(!Q_stricmp(name,"suppressionwait")) {
+        copy.type=4;
+        copy.number=(float)((double)cod1Actors[lease.actorIndex].defaults.allocation.suppressionwait * (double)0.001f);
     } else if((byteCell=ActorScriptByteCell(&lease,name))!=NULL) {
         copy.type=5;copy.integer=(int32_t)*byteCell;
     } else if((shortCell=ActorScriptShort16Cell(&lease,name))!=NULL) {
@@ -173,6 +215,8 @@ static int ActorScriptFieldWrite(void *user,const GscEntityRef *input,const char
             "dontavoidplayer write requires a current owned actor field lease":!Q_stricmp(name,"dropweapon")?
             "dropweapon write requires a current owned actor field lease":!Q_stricmp(name,"drawoncompass")?
             "drawoncompass write requires a current owned actor field lease":"pacifist write requires a current owned actor field lease");return 0;}
+    } else if(!Q_stricmp(name,"grenadeawareness") || !Q_stricmp(name,"suppressionwait")) {
+        if(!ActorPoseLease(input,&lease)){EntityError(error,size,"AI tuning requires a current actor");return 0;}
     } else if(!Q_stricmp(name,"interval")) {
         if(!ActorPoseLease(input,&lease)){EntityError(error,size,"interval write requires a current owned actor field lease");return 0;}
     } else if(!Q_stricmp(name,"walkdist")) {
@@ -201,7 +245,9 @@ static int ActorScriptFieldWrite(void *user,const GscEntityRef *input,const char
     }
     cell=ActorScriptInt32Cell(&lease,name);
     if(cell) {
-        if(copy.type!=5){EntityError(error,size,!Q_stricmp(name,"dontavoidplayer")?
+        if(copy.type!=5){EntityError(error,size,
+              (!Q_stricmp(name,"followmin")||!Q_stricmp(name,"followmax"))?"follow range requires an admitted INT32 field value":
+              !Q_stricmp(name,"dontavoidplayer")?
             "dontavoidplayer requires an admitted INT32 field value":!Q_stricmp(name,"dropweapon")?
             "dropweapon requires an admitted INT32 field value":!Q_stricmp(name,"drawoncompass")?
             "drawoncompass requires an admitted INT32 field value":"pacifist requires an admitted INT32 field value");return 0;}
@@ -214,6 +260,27 @@ static int ActorScriptFieldWrite(void *user,const GscEntityRef *input,const char
         else if(!Q_stricmp(text.string,"neutral"))team=3;
         else{EntityError(error,size,"unknown team; expected axis, allies, or neutral");return 0;}
         return G_Cod1ActorSetTeam(&lease,team,error,size);
+    }
+    if(!Q_stricmp(name,"grenadeawareness") || !Q_stricmp(name,"suppressionwait")) {
+        if(copy.type==4)converted=copy.number;
+        else if(copy.type==5)converted=(float)copy.integer;
+        else {EntityError(error,size,"actor field requires a numeric value");return 0;}
+        if(!isfinite(converted))return 0;
+        if(!Q_stricmp(name,"grenadeawareness")){
+            if(converted<0.0f || converted>1.0f){
+                if(error&&size)snprintf(error,size,"actor field %s clamped from %g to %d",name,(double)converted,converted>1.0f);
+                return 0;
+            }
+            cod1Actors[lease.actorIndex].defaults.allocation.grenadeawareness=converted;
+        }else{
+            /* GAME 5B890 spills seconds*1000 to float32 before the biased
+             * FISTP. Invalid integer conversion produces x87 indefinite. */
+            float scaled=(float)((double)converted*1000.0);
+            double ms=floor((double)scaled+0x1p-30+0.5);
+            cod1Actors[lease.actorIndex].defaults.allocation.suppressionwait=
+                (ms>=INT32_MIN && ms<=INT32_MAX)?(int32_t)ms:INT32_MIN;
+        }
+        return 1;
     }
     number=ActorScriptFloat(&lease,name);if(!number){EntityError(error,size,"native actor field has no admitted writable provider");return 0;}
     if(copy.type==4){converted=copy.number;if(!isfinite(converted))return 0;}

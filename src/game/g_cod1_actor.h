@@ -89,6 +89,8 @@ typedef struct {
     uint32_t cell00dc, cell0234, dropweapon, drawoncompass, cell11c4;
     /* +17c,+180,+184,+18c,+190,+194,+198,+19c,+1a0. */
     uint32_t zeroCells[9];
+    uint32_t proneNodes16c[3];int proneGround188,proneTick;
+    uint64_t proneRuntime,proneCatalog;
     /* Native allocation-zero Actor+0x788, type0 INT32; not readiness flags. */
     int32_t dontavoidplayer;
     /* Native allocation-zero Actor+0x798, plain type0 INT32; not pacifistwait. */
@@ -343,6 +345,7 @@ int G_Cod1ActorReserve( const GscEntityRef *entity, cod1ActorLease_t *out,
  * without an actor slot. No read/predicate silently creates this reservation. */
 int G_Cod1PlayerSentientReserve( const GscEntityRef *entity, cod1ActorLease_t *out,
     char *error, size_t errorSize );
+int G_Cod1ActorLinkedAndAlive(const cod1ActorLease_t *lease);
 int G_Cod1ActorLeaseCurrent( const cod1ActorLease_t *lease );
 int G_Cod1ActorReadLease( const cod1ActorLease_t *lease,
     cod1ActorLeaseSnapshot_t *out, char *error, size_t errorSize );
@@ -444,6 +447,7 @@ typedef struct {
     uint32_t degreesBits,delayBits,anglelerprateBits;
     int modelByteAuthoritative;
 } cod1EntityNativeStaticSnapshot_t;
+int G_Cod1EntityReadNoteworthy(const GscEntityRef *ref,GscStringCastValue *out,char *error,size_t size);
 int G_Cod1EntityPublishNativeStaticExtras(const GscEntityRef *,
     const cod1EntityNativeStaticExtras_t *,char *,size_t);
 /* Initial BSP authority is one-time per allocation, including bootstrap.
@@ -559,6 +563,16 @@ struct gentity_s;
 int G_Cod1PlacedActorIntake(struct gentity_s *,char *,size_t);
 int G_Cod1PlacedActorCapture(const struct gentity_s *,GscEntityRef *);
 int G_Cod1PlacedActorRead(const GscEntityRef *,cod1PlacedActorSnapshot_t *,char *,size_t);
+/* Internal pair of independently sealed BSP field arrays. The live
+ * cohort reader consumes an already established match, never establishes it. */
+typedef struct {
+    cod1ActorLease_t lease;
+    const char *bytes;
+    const unsigned short *keys, *values;
+    size_t size, pairs;
+} cod1BspLiveRow_t;
+int G_Cod1BspLiveRows(const cod1BspLiveRow_t *,unsigned,uint64_t);
+int G_Cod1PlacedActorMatchesFields(const GscEntityRef *,const char *,size_t,size_t,const unsigned short *,const unsigned short *);
 int G_Cod1PlacedActorRawField(const GscEntityRef *,size_t,char *,size_t,char *,size_t,char *,size_t);
 typedef struct {
     GscEntityRef entity;
@@ -665,6 +679,8 @@ const GscEntityFieldHost *G_Cod1ActorConstructorFieldHost(void);
 const GscEntityFieldHost *G_Cod1ActorPoseFieldHost(void);
 int G_Cod1ActorReadRuntimeStringField(const GscEntityRef*,const char*,GscStringCastValue*,char*,size_t);
 int G_Cod1ActorReadAbsentEnemyField(const GscEntityRef*,GscStringCastValue*,char*,size_t);
+int G_Cod1MapModelStarting(uint64_t);
+int G_Cod1EntityReadModelField(const GscEntityRef *input,GscStringCastValue *out,char *error,size_t size);
 int G_Cod1ActorReadModelField(const GscEntityRef *,GscStringCastValue *,char *,size_t);
 int G_Cod1ActorReadRuntimeField(const GscEntityRef *,const char *,GscStringCastValue *,char *,size_t);
 const GscEntityAccessHost *G_Cod1ActorConstructorAccessHost(void);
@@ -798,6 +814,7 @@ typedef struct {
     int has_label,has_script_label;
     char label[128],script_label[128];
 } cod1ActorCriticalSnapshot_t;
+int G_Cod1ActorLocomotionSource(const GscEntityRef*,uint64_t,int,int,int*,int(*)(void*),void*);
 int G_Cod1ActorCriticalRead(const cod1ActorLease_t *,cod1ActorCriticalSnapshot_t *,char *,size_t);
 /* Explicit current-script metadata binding, never invented by the VM. NULL
  * clears this metadata. label is a bounded128-byte C string when non-NULL. */

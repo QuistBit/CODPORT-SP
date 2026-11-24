@@ -3,7 +3,7 @@
  * substituted. Original success/failure markers are independent of task life. */
 static GscMissionCallback mission_callback(const GscMissionHost *host,int kind) {
     if(!host)return NULL;
-    return kind==GSC_MISSION_SUCCESS?host->success:kind==GSC_MISSION_FAILED?host->failed:NULL;
+    return (kind==GSC_MISSION_SUCCESS||kind==GSC_MISSION_CHANGELEVEL)?host->success:kind==GSC_MISSION_FAILED?host->failed:NULL;
 }
 static int mission_runtime_preflight(const GscProgram *g,const GscMissionHost *host,char *error,size_t size) {
     int n,kind;
@@ -91,6 +91,7 @@ static int mission_statement(GscRuntime *r,int kind,const Value *args,int argc,i
         if(context<0)return 0;
         if(!context)return 1;
     }
+    if(kind==GSC_MISSION_CHANGELEVEL)return 1;
     memset(&event,0,sizeof(event));event.kind=GSC_MISSION_SUCCESS;event.phase=GSC_MISSION_SUCCESS_MARK;
     context=mission_emit(r,callback,&event,line);return context>=0;
 }

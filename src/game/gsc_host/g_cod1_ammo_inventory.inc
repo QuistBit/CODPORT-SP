@@ -75,6 +75,12 @@ static int AmmoInventoryProject(const GscEntityRef *ref,
             if(chosen>=0)return 0;
             chosen=w;
         }
+        out->inventory.weapons[i]=*pickup;
+        /* The mounted bank also owns turret/non-player and currently unmapped
+         * player definitions. These resources have no inventory bit or counter
+         * cell; their metadata remains present and their ownership stays zero.
+         * Grant/pickup callers still require an explicit physical mapping. */
+        if(chosen<0)continue;
         if(chosen<=WP_NONE || chosen>=MAX_WEAPONS || chosen>=64 ||
            pickup->ammoIndex<=0 || pickup->ammoIndex>=registry->ammoCount ||
            pickup->clipIndex<=0 || pickup->clipIndex>=registry->clipCount)return 0;
@@ -84,7 +90,6 @@ static int AmmoInventoryProject(const GscEntityRef *ref,
            !AmmoInventoryMap(pickup->clipIndex,cc,clipCell,clipPool) ||
            ps->ammo[ac]<0 || ps->ammoclip[cc]<0)return 0;
         out->mapping[i].wp=chosen;out->mapping[i].ammoCell=ac;out->mapping[i].clipCell=cc;
-        out->inventory.weapons[i]=*pickup;
         out->inventory.ammo[pickup->ammoIndex]=ps->ammo[ac];
         out->inventory.clip[pickup->clipIndex]=ps->ammoclip[cc];
         allowed[chosen/32]|=UINT32_C(1)<<(chosen%32);

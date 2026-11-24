@@ -1,9 +1,10 @@
 /* Fixed original6FAD0 zero-transition input, NOT a spatial world receipt.
  * It reads native active/path bits only. Every live slot is represented;
- * unknown owners (including the currently unsupported player) refuse.
+ * unknown owners (outside their verified phase) refuse.
  * 1000 alone and2000 alone do not reach native726C0. Both remain unsupported
  * here until that candidate/trace contract is separately implemented. */
-typedef struct {cod1PathNodeOwner_t owner;cod1ActorLease_t actor;int inuse,reserve,helper,turret,spawner,isActor;} C1LateDisconnectRow;
+#include "g_cod1_player_lifetime.h"
+typedef struct {cod1PathNodeOwner_t owner;cod1PlayerLifetime_t player;cod1ActorLease_t actor;int inuse,reserve,helper,turret,spawner,isActor;} C1LateDisconnectRow;
 static struct {
  uint64_t serial,receipt,epoch;int count,time,busy,cancelled;
  C1LateDisconnectRow rows[MAX_GENTITIES];
@@ -49,6 +50,11 @@ static int Cod1LateDisconnectRowRead(unsigned slot,C1LateDisconnectRow*out){
   if(value.reserve+value.helper!=1||value.isActor||value.turret||value.spawner)return 0;
   value.owner.adapter=1;*out=value;return 1;
  }
+ if(G_Cod1StartupPlayerEvent(&ref)){value.owner.adapter=1;*out=value;return 1;}
+ if(slot==0 && g_entities[slot].client){
+  if(value.isActor||value.turret||value.spawner||!G_Cod1StartupPlayerPath(&ref,&value.player))return 0;
+  value.owner.active=1;value.owner.flags=0;*out=value;return 1;
+ }
  memset(&typed,0,sizeof(typed));typed.ref=ref;typed.isTurret=value.turret;typed.isSpawner=value.spawner;
  if((typed.isTurret&&typed.isSpawner)||((typed.isTurret||typed.isSpawner)&&value.isActor))return 0;
  if(!Cod1PathNodeOwnerFlags(&typed,&value.owner.flags)||
@@ -88,7 +94,10 @@ int G_Cod1LateDisconnectBegin(uint64_t*out){
  cod1LateDisconnectWorld.epoch=G_Cod1EntityMapEpoch();cod1LateDisconnectWorld.count=level.num_entities;
  cod1LateDisconnectWorld.time=level.time;memset(cod1LateDisconnectWorld.rows,0,sizeof(cod1LateDisconnectWorld.rows));
  for(i=0;i<cod1LateDisconnectWorld.count;i++)if(!Cod1LateDisconnectRowRead((unsigned)i,cod1LateDisconnectWorld.rows+i)||
-    cod1LateDisconnectWorld.cancelled)goto done;
+    cod1LateDisconnectWorld.cancelled){
+  G_Printf("[late path] unqualified slot=%d class=%s tick=%d\n",i,
+      g_entities[i].classname?g_entities[i].classname:"",level.time);goto done;
+ }
  if(cod1LateDisconnectWorld.epoch!=G_Cod1EntityMapEpoch()||cod1LateDisconnectWorld.count!=level.num_entities||
     cod1LateDisconnectWorld.time!=level.time||cod1LateDisconnectWorld.cancelled)goto done;
  receipt=++cod1LateDisconnectWorld.serial;cod1LateDisconnectWorld.receipt=receipt;ok=1;

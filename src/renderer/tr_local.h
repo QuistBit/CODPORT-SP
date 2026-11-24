@@ -1729,6 +1729,8 @@ LIGHTS
 void R_DlightBmodel( bmodel_t *bmodel );
 void R_SetupEntityLighting( const trRefdef_t *refdef, trRefEntity_t *ent );
 qboolean R_Cod1PrepareEntityLighting( const trRefdef_t *refdef, trRefEntity_t *ent );
+qboolean R_Cod1ShadeEntityVertices( const trRefEntity_t *ent, int count,
+    const vec4_t *xyz, const vec4_t *normal, byte *rgba );
 qboolean R_Cod1ShadeEntityVertex( const trRefEntity_t *ent, const float *localXYZ,
                                 const float *localNormal, byte *RGBA );
 qboolean R_Cod1PrepareStaticLighting( const cod1ModelLightSource_t *source,

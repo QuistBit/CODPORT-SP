@@ -344,6 +344,7 @@ extern cvar_t  *cl_noprint;
 extern cvar_t  *cl_timegraph;
 extern cvar_t  *cl_maxpackets;
 extern cvar_t  *cl_packetdup;
+extern cvar_t  *cl_avidemo;
 extern cvar_t  *cl_shownet;
 extern cvar_t  *cl_showSend;
 extern cvar_t  *cl_timeNudge;

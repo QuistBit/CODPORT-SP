@@ -1,6 +1,10 @@
 /* R199 node queries use a separate value and host lane. No gentity fallback. */
 #define NODE_QUERY_TARGET_BASE 11000
 static int node_query_descriptor(const GscProgram *g,const char *name) {
+    if(g->vehicle_nodes_selected){
+        if(callable_name_equal(g,name,"getvehiclenode"))return GSC_VEHICLE_QUERY_ONE;
+        if(callable_name_equal(g,name,"getvehiclenodearray"))return GSC_VEHICLE_QUERY_ARRAY;
+    }
     if(!g->node_queries_selected)return 0;
     if(callable_name_equal(g,name,"getnode"))return GSC_NODE_QUERY_ONE;
     if(callable_name_equal(g,name,"getnodearray"))return GSC_NODE_QUERY_ARRAY;
@@ -9,7 +13,7 @@ static int node_query_descriptor(const GscProgram *g,const char *name) {
 }
 static int node_query_arity(int kind) {
     return kind==GSC_NODE_QUERY_ALL?0:
-        kind==GSC_NODE_QUERY_ONE||kind==GSC_NODE_QUERY_ARRAY?2:-1;
+        kind==GSC_NODE_QUERY_ONE||kind==GSC_NODE_QUERY_ARRAY||kind==GSC_VEHICLE_QUERY_ONE||kind==GSC_VEHICLE_QUERY_ARRAY?2:-1;
 }
 static unsigned node_query_static_issues(const GscProgram *g,int kind,const int *args,int argc) {
     int n,type;

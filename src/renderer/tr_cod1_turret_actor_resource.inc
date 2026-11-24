@@ -1,6 +1,23 @@
 #include "tr_cod1_turret_actor.h"
 static cod1TurretActorModel_t *cod1TurretActorResources;
-void R_Cod1TurretActorReset(void){cod1TurretActorModel_t*r=cod1TurretActorResources,*next;while(r){next=r->next;C1AA14_Free(r->resource);free(r);r=next;}cod1TurretActorResources=NULL;}
+/* Skinning is synchronous on the renderer front end. Only the final draw
+ * vertices and the animated bounds have to survive until backend completion. */
+cnsArena_t cod1ActorSkinScratch;
+static int R_ReserveActorSkinScratch(size_t bytes) {
+ unsigned char *data;
+ if (bytes <= cod1ActorSkinScratch.capacity) return 1;
+ data = realloc(cod1ActorSkinScratch.data, bytes);
+ if (!data) return 0;
+ cod1ActorSkinScratch.data = data;
+ cod1ActorSkinScratch.capacity = bytes;
+ return 1;
+}
+static void R_FreeActorResource(cod1TurretActorModel_t*r){if(r->sealed.storage)C1AA14_Unseal(&r->sealed);else C1AA14_Free(r->resource);free(r);}
+void R_ReleaseActorCapture(cod1TurretActorModel_t*r){if(r&&r->pendingFrames){r->pendingFrames--;if(r->retired&&!r->pendingFrames)R_FreeActorResource(r);}}
+void R_Cod1TurretActorReset(void){cod1TurretActorModel_t*r=cod1TurretActorResources,*next;R_ClearActorCapturePins();while(r){next=r->next;r->retired=1;if(!r->pendingFrames)R_FreeActorResource(r);r=next;}cod1TurretActorResources=NULL;
+ free(cod1ActorSkinScratch.data);
+ memset(&cod1ActorSkinScratch,0,sizeof(cod1ActorSkinScratch));
+}
 static int R_Cod1TurretActorPath(char out[128],const char*prefix,const char*name){size_t i,n;if(!name||!memchr(name,0,64)||!(n=strlen(name))||n>=64||strstr(name,"..")||strchr(name,':')||strchr(name,'\\')||strchr(name,'/'))return 0;for(i=0;i<n;i++)if((unsigned char)name[i]<32)return 0;if(strlen(prefix)+n>=128)return 0;strcpy(out,prefix);strcat(out,name);return 1;}
 /* Called only through the typed registration export, not a fixed actor alias. */
 qhandle_t RE_RegisterCod1TurretActor(const cod1TurretActorResourceState_t*input){
@@ -29,8 +46,14 @@ qhandle_t RE_RegisterCod1TurretActor(const cod1TurretActorResourceState_t*input)
  if(!C1AA14_Create(parts,def.partCount,&r->resource))goto done;
  {cv14Skeleton bind=r->resource->part[0].mesh.bind;cv14Pose empty;cv14Transform identity;cnsArena_t arena;c1aa14Frame_t*captured;
   memset(&empty,0,sizeof(empty));CV14_Identity(&identity);CV14_ApplyPose(&bind,&empty,&identity);memset(&arena,0,sizeof(arena));arena.capacity=16u*1024u*1024u;arena.data=malloc(arena.capacity);if(!arena.data)goto done;
-  captured=C1AA14_Capture(r->resource,bind.world,bind.n,&arena);if(captured)memcpy(r->bounds,captured->bounds,sizeof(r->bounds));free(arena.data);if(!captured)goto done;
+  captured=C1AA14_Capture(r->resource,bind.world,bind.n,&arena);if(captured)memcpy(r->bounds,captured->bounds,sizeof(r->bounds));free(arena.data);
+  /* Bind and animated captures share the same topology and vertex counts.
+   * Allow padding for a different base address in the reusable arena. */
+  if(!captured || !R_ReserveActorSkinScratch(arena.used + 15))goto done;
  }
+ /* Sealing is optional: allocation/protection failure preserves the strict
+  * existing resource. Successful copies contain no pointer to the old owner. */
+ if(C1AA14_Seal(r->resource,&r->sealed)){C1AA14_Free(r->resource);r->resource=(c1aa14Resource_t*)r->sealed.resource;C1AA575_Build(r->resource,&r->poseBounds);}
  for(i=0;i<(unsigned)def.partCount;i++)for(j=0;j<(unsigned)r->resource->part[i].mesh.numSurfaces;j++){
   char path[128];if(!R_Cod1TurretActorPath(path,"skins/",r->resource->part[i].model.skin[0][j]))goto done;
   r->shader[i][j]=R_FindShader(path,LIGHTMAP_NONE,qtrue);if(!r->shader[i][j]||r->shader[i][j]->defaultShader)goto done;
@@ -38,5 +61,5 @@ qhandle_t RE_RegisterCod1TurretActor(const cod1TurretActorResourceState_t*input)
  model=R_AllocModel();if(!model)goto done;
  Com_sprintf(model->name,sizeof(model->name),"@cod1_turret_actor_%d",model->index);model->type=MOD_COD1_TURRET_ACTOR;model->cod1TurretActor=r;model->numLods=1;model->dataSize=sizeof(*r);r->handle=model->index;r->next=cod1TurretActorResources;cod1TurretActorResources=r;ok=1;
  done:for(i=0;i<C1AA14_PARTS;i++)for(j=0;j<3;j++)if(data[i][j])ri.FS_FreeFile(data[i][j]);
- if(!ok){C1AA14_Free(r->resource);free(r);return 0;}return r->handle;
+ if(!ok){if(r->sealed.storage)C1AA14_Unseal(&r->sealed);else C1AA14_Free(r->resource);free(r);return 0;}return r->handle;
 }

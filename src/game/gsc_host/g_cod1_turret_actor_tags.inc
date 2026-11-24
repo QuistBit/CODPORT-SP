@@ -1,3 +1,4 @@
+#include "g_cod1_actor_tag_matrix584.h"
 /* Include after the real turret animation host/mounted-frame implementation.
  * Map owned immutable resource cache; only current actual mounted owner trees.
  * Reset/private hooks must be included by the owning entity host. */
@@ -51,7 +52,7 @@ int G_Cod1TurretActorTagMatrix(const GscEntityRef*actor,const char*name,int now,
  for(g=0;g<2;g++){for(i=0;i<25;i++)weights[g][i]=c.animation.actorTree[g].node[i].currentWeight;for(i=0;i<21;i++)phases[g][i]=c.animation.actorTree[g].node[4+i].phase;}
  if(c.generic){const c1al14Bank_t*look=ActorGenericLookBankView(&c.actor,now);const c1ab14Clip_t*mg[2][21];c1ast14Bank_t bank;c1ast14Node_t nodes[98];c1aw14Pose_t placed;
   for(g=0;g<2;g++)for(i=0;i<21;i++)mg[g][i]=cod1TurretBodies[g][20-i];
-  if(!look||!C1ALT14_Bank(resource->full,mg,look,&bank)||!C1ALT14_Nodes(c.genericCurrent,phases,nodes)||!C1AST14_Sample(&bank,nodes,98,accum,128)||!C1AD14_Build(resource->full,accum,bank.bones,&body)||!C1AW14_Place(&body,c.origin,c.angles,&placed)||(unsigned)bone>=placed.bones)goto done;memcpy(matrix,placed.matrix[bone],64);
+  if(!look||!C1ALT14_Bank(resource->full,mg,look,&bank)||!C1ALT14_Nodes(c.genericCurrent,phases,nodes)||!C1AST14_Sample(&bank,nodes,98,accum,128)||!C1AD14_Build(resource->full,accum,bank.bones,&body)||!C1AW584_TagMatrix(&body,c.origin,c.angles,(unsigned)bone,matrix))goto done;
  }else if(!CGTA14_Sample(&resource->bank,weights,phases,accum,128)||!C1AW14_Build(resource->resource->body,accum,resource->bank.bones,&body)||!C1AT14_Build(resource->resource,&body,&frame)||!C1AT14_WorldMatrix(&frame,(unsigned)bone,c.origin,c.angles,matrix))goto done;
  if(!TurretActorTagFence(&c)||!ActorGoalBuffers(actor,sizeof(*actor),out,64,NULL,0)||!ActorGoalBuffers(name,strlen(c.copiedName)+1,out,64,NULL,0)||TurretActorTagPrivate(out,64))goto done;
  memcpy(out,matrix,64);ok=1;

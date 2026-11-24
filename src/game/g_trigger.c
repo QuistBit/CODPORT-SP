@@ -211,7 +211,10 @@ static void G_Cod1SpawnEventTrigger( gentity_t *ent, const GscEntityRef *ref, qb
 	int index, count;
 	int *admissions;
 	G_Cod1TriggerInert( ent );
-	if ( ent->spawnflags ) {
+	/* Native43910: flags24 means no-player + vehicle-only (contents8).
+	 * Publish its real brush for vehicle overlap queries. Native touch/action
+	 * dispatch remains a checked vehicle boundary, never the player callback. */
+	if ( ent->spawnflags && (useBridge || ent->spawnflags != 24) ) {
 		G_Cod1TriggerRejected( ent, ref, "unsupported spawnflags", useBridge );
 		return;
 	}
@@ -237,6 +240,7 @@ static void G_Cod1SpawnEventTrigger( gentity_t *ent, const GscEntityRef *ref, qb
 	if ( !G_Cod1EntitySameAllocation( ref ) ) {
 		return;
 	}
+	if (!useBridge && ent->spawnflags == 24) {ent->r.contents=8;ent->touch=NULL;}
 	trap_LinkEntity( ent );
 	if ( !G_Cod1EntitySameAllocation( ref ) ) {
 		return;

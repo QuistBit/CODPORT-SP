@@ -61,7 +61,7 @@ static int r243_actor_float_session_query(void*user,const R243ActorFloatRequest*
  /* Preserve the genuine VM Current and copied intent through the pure GAME
   * read. Session's own sealed context is checked before and after publication. */
  accepted=f.seal.provider.query(f.seal.provider.user,&f.id.q,&f.reply,f.error,sizeof(f.error),current,context);f.error[sizeof(f.error)-1]=0;
- if(!r243_actor_float_session_current(&f)||accepted!=1||((f.reply.bits&0x80000000u)||(f.reply.bits&0x7f800000u)==0x7f800000u))goto done;ok=1;
+ if(!r243_actor_float_session_current(&f)||accepted!=1||!ActorFloatReplyValid(f.seal.q.method,f.reply.bits))goto done;ok=1;
 done:
  r243ActorFloatSessionActive=NULL;
  if(!ok){if(error&&cap)snprintf(error,cap,"actor float Session query refused: %s",f.error[0]?f.error:"caller/map/context retired");return 0;}
@@ -69,7 +69,7 @@ done:
 }
 int gsc_session_select_r243_actor_float_methods(GscSession*s,const R243ActorFloatHost*input,unsigned methods,char*error,size_t cap){
  R243ActorFloatHost copy;
- if(!s||!input||!methods||(methods&~3u)||(cap&&!error)||session_animation_namespace_private(s,input,sizeof(*input))||session_animation_namespace_private(s,error,cap)||session_animation_namespace_overlap(input,sizeof(*input),error,cap))return 0;
+ if(!s||!input||!methods||(methods&~7u)||(cap&&!error)||session_animation_namespace_private(s,input,sizeof(*input))||session_animation_namespace_private(s,error,cap)||session_animation_namespace_overlap(input,sizeof(*input),error,cap))return 0;
  copy=*input;if(!copy.validate||!copy.query||!session_enter(s,error,cap))return 0;
  if(s->view.state!=GSC_SESSION_EMPTY||s->program||s->runtime||!s->animation_namespace_enabled||!s->execution_extensions||!s->actor_program_enabled||((methods&2u)&&!s->ai_arrays_enabled)||s->actor_float_query_enabled||!session_animation_resources_current(s)||!session_actor_program_current(s))return session_leave_rejected(s,"N0087 needs EMPTY declared Actor/AI/namespace Session",error,cap);
  s->actor_float_provider=copy;s->actor_float_profile_mask=methods;s->actor_float_query_enabled=1;s->busy=0;return 1;
@@ -84,7 +84,7 @@ int R243ActorFloatSessionHostTimeCurrent(const R243ActorFloatRequest*q,int hostN
 static int r243_actor_float_binding_scope(R243ActorFloatValidationFrame*f){const R243ActorFloatValidationIdentity*i;GscSession*s;
  if(!f||r243ActorFloatBindingActive!=f||memcmp(&f->id,&f->seal,sizeof(f->id)))return 0;i=&f->seal;s=i->s;
  return s&&s->actor_float_query_enabled&&s->runtime==i->r&&s->program==i->g&&s->view.session_id==i->id&&
-  s->view.logical_ms==i->logical&&s->view.origin_host_ms==i->origin&&s->actor_float_profile_mask==i->mask&&i->mask&&!(i->mask&~3u)&&
+  s->view.logical_ms==i->logical&&s->view.origin_host_ms==i->origin&&s->actor_float_profile_mask==i->mask&&i->mask&&!(i->mask&~7u)&&
   !memcmp(&s->actor_float_provider,&i->provider,sizeof(i->provider))&&!memcmp(&s->animation_namespace_map,&i->map,sizeof(i->map))&&
   s->busy&&!s->abort_requested&&!s->view.error[0];
 }

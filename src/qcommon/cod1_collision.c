@@ -4,6 +4,7 @@
 #include <float.h>
 #include <math.h>
 #include <string.h>
+#include "cod1_collision_blocks583.h"
 
 static unsigned COD1_CollisionReadLE16( const byte *p ) {
 	return (unsigned)p[0] | ( (unsigned)p[1] << 8 );
@@ -235,6 +236,7 @@ void COD1_CollisionTrace( const cod1CollisionTri_t *triangles, int triangleCount
 		const vec3_t start, const vec3_t end,
 		const vec3_t mins, const vec3_t maxs, trace_t *out ) {
 	vec3_t center, delta, extent, sweepMins, sweepMaxs;
+    const c1cb583Bounds *blocks;
 	int i, j, k, edge;
 	if ( !out ) return;
 	memset( out, 0, sizeof( *out ) );
@@ -247,7 +249,11 @@ void COD1_CollisionTrace( const cod1CollisionTri_t *triangles, int triangleCount
 		sweepMins[j] = center[j] + ( delta[j] < 0 ? delta[j] : 0 ) - extent[j];
 		sweepMaxs[j] = center[j] + ( delta[j] > 0 ? delta[j] : 0 ) + extent[j];
 	}
+    blocks=C1CB583_Select(triangles,triangleCount,sweepMins,sweepMaxs);
 	for ( i = 0; triangles && i < triangleCount; i++ ) {
+        if(blocks && !(i%C1CB583_SIZE) && C1CB583_Outside(blocks,i,sweepMins,sweepMaxs)){
+            i+=(triangleCount-i<C1CB583_SIZE?triangleCount-i:C1CB583_SIZE)-1;continue;
+        }
 		const cod1CollisionTri_t *tri = &triangles[i];
 		cod1Sweep_t sweep;
 		vec3_t axis, edges[3];

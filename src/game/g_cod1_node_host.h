@@ -21,9 +21,11 @@ typedef struct {
     unsigned char kind[COD1_TRAINING_ROUTE_LENGTH];
 } cod1TrainingRoute_t;
 int G_Cod1BindTrainingRoute(const char *first, cod1TrainingRoute_t *route);
+unsigned G_Cod1RunnerStep(const GscEntityRef *,const GscNodeRef *);
 int G_Cod1RunnerCourseGoal(const GscEntityRef *,uint64_t,const GscNodeRef *);
 int G_Cod1RunnerSharesNode(const GscEntityRef *actor,unsigned assignment);
 int TrainingElderCurrent(const GscEntityRef *);
+int G_Cod1StandingNode(const float *,const GscNodeRef *,GscNodeRef *);
 int G_Cod1WaitingRunnerContact(const GscEntityRef *actor,const float at[3]);
 const char *G_Cod1RunnerName(const GscEntityRef *);
 int G_Cod1MoodyCourseGoal(uint64_t,const GscNodeRef *);
@@ -54,6 +56,8 @@ int G_Cod1NodeGraphStageMap(GscSession *,uint64_t,uint64_t *);
 int G_Cod1NodeGraphStageCurrent(GscSession *,uint64_t,uint64_t);
 /* One-shot transfer of placed/sorted graph DATA to current map/registry/
  * program lifetime; no pathfinding/VM mutation grant. Stage APIs stay scoped. */
+int G_Cod1NodeGraphDisconnectPaths(GscSession *,uint64_t,const GscEntityRef *,int,char *,size_t,int (*)(void *),void *);
+int G_Cod1NodeGraphConnectPaths(GscSession *,uint64_t,const GscEntityRef *,char *,size_t,int (*)(void *),void *);
 int G_Cod1NodeGraphPublish(GscSession *,uint64_t,uint64_t);
 int G_Cod1NodeGraphPublishedCurrent(GscSession *,uint64_t,uint64_t);
 int G_Cod1NodeGraphPublishedInitialOwners(GscSession *,uint64_t,uint64_t);
@@ -61,6 +65,15 @@ int G_Cod1NodeGraphPostCohortInitialOwners(GscSession *,uint64_t,uint64_t,const 
 int G_Cod1NodeGraphPostCohortCurrent(GscSession *,uint64_t,uint64_t,const void*);
 int G_Cod1NodeGraphPostCohortEnd(GscSession *,uint64_t,uint64_t,const void*,int);
 int G_Cod1NodeGraphPostCohortPrivate(const void*,size_t);
+/* Copied identity of one current, active Begin->End graph edge. This is
+ * graph data only; it neither creates a path nor queues an AI state. */
+typedef struct {
+ uint64_t receipt,sessionId;GscNodeRef begin,end;GscNodeScriptRef script;
+ uint32_t beginPhysical,endPhysical;float start[3],finish[3],yaw;
+} cod1NegotiationPair_t;
+int G_Cod1NodeGraphNegotiationPair(GscSession*,uint64_t,const GscNodeRef*,const GscNodeRef*,cod1NegotiationPair_t*);
+/* Pure allocation/graph check inside an enclosing live map/resource lease. */
+int G_Cod1NodeGraphNegotiationCurrent(const cod1NegotiationPair_t*);
 typedef struct {uint64_t receipt;uint32_t nodes,links,beginRefs,owners;} cod1NodeGraphPublication_t;
 cod1NodeGraphPublication_t G_Cod1NodeGraphPublishedInfo(GscSession *,uint64_t,uint64_t);
 

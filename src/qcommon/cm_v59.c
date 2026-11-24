@@ -10,6 +10,7 @@ static void CM_LoadV59InlineCurves(void);
 static v59_world *codWorld;
 static v59_context *codContext;
 #include "cm_cod1_path_sight.inc"
+#include "cm_cod1_path_world_sight.inc"
 #include "cm_cod1_navigation_resource.inc"
 static cvar_t *codPlayerClip;
 static cvar_t *cod1Diag;
@@ -111,13 +112,14 @@ static qboolean CM_TraceV59Internal(trace_t *out, const vec3_t start, const vec3
     const vec3_t mins, const vec3_t maxs, int model, int mask,
     int capsule, const sphere_t *sphere, qboolean diagnosticClip) {
     v59_hit hit;
-    int i;
+    int i,box=0,status;
     if (!codWorld || model >= BOX_MODEL_HANDLE - 1) return qfalse;
     {
-        qboolean point=!model && !capsule && mins[0]==0 && mins[1]==0 && mins[2]==0 &&
+        qboolean point=!model && mins[0]==0 && mins[1]==0 && mins[2]==0 &&
             maxs[0]==0 && maxs[1]==0 && maxs[2]==0;
-        if (!point && (!capsule || maxs[0] <= mins[0] || maxs[1] <= mins[1] ||
-            maxs[2] <= mins[2] || maxs[0]-mins[0] != maxs[1]-mins[1])) {
+        box=!model&&!capsule&&!point&&!diagnosticClip;
+        if (!point && ((!capsule&&!box) || maxs[0] <= mins[0] || maxs[1] <= mins[1] ||
+            maxs[2] <= mins[2] || (!box&&maxs[0]-mins[0] != maxs[1]-mins[1]))) {
             ++fallbackQueries;
             ++shapeFallbacks;
             CM_Cod1DiagReport();
@@ -134,7 +136,9 @@ static qboolean CM_TraceV59Internal(trace_t *out, const vec3_t start, const vec3
         return qfalse;
     }
     if (diagnosticClip && !codPlayerClip->integer) mask &= ~CONTENTS_PLAYERCLIP;
-    if (v59_query(codContext, start, end, mins, maxs, (unsigned)mask, model, 1)) {
+    status=box?v59_query_box(codContext,start,end,mins,maxs,(unsigned)mask,model,1):v59_query(codContext,start,end,mins,maxs,(unsigned)mask,model,1);
+    if(box&&status)return qfalse;
+    if (status) {
         Com_Error(ERR_DROP, "CoD1 native capsule query rejected (model %d)", model);
         return qfalse;
     }

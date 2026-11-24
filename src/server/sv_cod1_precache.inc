@@ -139,3 +139,6 @@ int SV_Cod1CopyRegisteredModel(const cod1ModelResourceReference_t *input,
     *out = *cod1PrecacheBank[result.slot-1].resource;
     return 1;
 }
+
+#include "sv_cod1_model_part.inc"
+#include "sv_cod1_model_bounds.inc"

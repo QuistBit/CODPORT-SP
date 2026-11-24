@@ -48,6 +48,7 @@ static int ActorCurrentRootResource(const C1ActorCurrentRoot *v,unsigned ordinal
     else if((index=ActorGenericShuffleIndex(name))>=0){*root=cod1GenericUnmountedBank.root[index];*body=cod1GenericUnmountedBank.body[index];}
     else if(ActorFaceLeafIndex(ordinal)>=0){*root=ActorFaceRoot(ordinal);*body=ActorFaceBody(ordinal);}
     else if(ActorScriptedIndex(ordinal)>=0){*root=ActorScriptedRoot(ordinal);*body=ActorScriptedBody(ordinal);}
+    else if(ActorLocomotionRoot(ordinal)){*root=ActorLocomotionRoot(ordinal);*body=ActorLocomotionBody(ordinal);}
     else for(t=0;t<2;t++)for(j=0;j<21;j++)if(v->mgMap[t][4+j]==ordinal){*root=cod1TurretRoots[t][20-j];*body=cod1TurretBodies[t][20-j];}
     return *root&&*body&&(*root)->magic==C1AR14_MAGIC&&(*body)->magic==C1AB14_MAGIC&&
         (*root)->frames==(*body)->frames&&(*root)->flags==(*body)->flags&&
@@ -142,7 +143,7 @@ int G_Cod1ActorRootCurrent(const GscEntityRef *input,int now,unsigned sourceOrdi
     *output=result;ok=1;
 unlock:
     cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;
-    cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;
+    cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.nameStage=NULL;cod1GenericOperation.nameBytes=0;
     cod1GenericOperation.busy=0;
 done:
     free(v);return ok;

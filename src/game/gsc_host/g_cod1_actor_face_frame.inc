@@ -1,3 +1,4 @@
+#include "../../qcommon/cod1_actor_frame_weights14.h"
 static int FoleyNormalIdleOwner(const C1GARecord*);
 static int ActorHasNormalRecord(unsigned index);
 /* GAME phase2/3 dependency. Original GAME2001F327/3BF and ENGINE47B190,
@@ -13,10 +14,11 @@ typedef struct {
  uint64_t runtime,catalog,identity,frame;
  cod1ActorLease_t lease;
  unsigned count,nextNote;
- unsigned pairNative[C1ASB14_COUNT],idleNative[3];
+ unsigned pairNative[C1ASB14_COUNT],faceNative[5],standNative;
  unsigned scriptedCount,scriptedSource[32],scriptedNative[32];int scriptedParent[32];
  cod1ActorFaceNote_t notes[C1ANC14_MAX_NOTES];
 } C1FaceFrame;
+static int ActorLocomotionFrameAdvance(C1GARecord*,C1FaceFrame*,float);
 static C1FaceFrame cod1FaceFrames[COD1_ACTOR_CAPACITY];
 #if defined(_MSC_VER) && defined(_M_IX86) && _M_IX86_FP >= 2
 #include <emmintrin.h>
@@ -29,6 +31,17 @@ static struct {
  * is checked each time. The fast path accepts nonnegative IEEE encodings in
  * the scalar validator's inclusive ranges; anything else uses that validator
  * with the caller's current FP environment, including negative zero. */
+/* Four complete default nodes are valid in every supported FP mode.
+ * Compare all 128 bytes on every call. Any non-default bit retains the
+ * existing validator, including negative zero, subnormals and NaNs. */
+static __forceinline int ActorFaceFourDefault(const c1atl14Node_t*n){
+ const __m128i zero=_mm_setzero_si128(),last=_mm_setr_epi32(0,0x3f800000,0,0);
+ __m128i first=_mm_or_si128(_mm_loadu_si128((const __m128i*)(n)),_mm_loadu_si128((const __m128i*)(n+1)));
+ __m128i tail=_mm_or_si128(_mm_xor_si128(_mm_loadu_si128((const __m128i*)&n[0].currentWeight),last),_mm_xor_si128(_mm_loadu_si128((const __m128i*)&n[1].currentWeight),last));
+ first=_mm_or_si128(first,_mm_or_si128(_mm_loadu_si128((const __m128i*)(n+2)),_mm_loadu_si128((const __m128i*)(n+3))));
+ tail=_mm_or_si128(tail,_mm_or_si128(_mm_xor_si128(_mm_loadu_si128((const __m128i*)&n[2].currentWeight),last),_mm_xor_si128(_mm_loadu_si128((const __m128i*)&n[3].currentWeight),last)));
+ return _mm_movemask_epi8(_mm_cmpeq_epi8(_mm_or_si128(first,tail),zero))==65535;
+}
 static int ActorFaceTreeValid(const c1atl14Node_t *nodes){
  const __m128i zero=_mm_setzero_si128();
  const __m128i firstNormal=_mm_set1_epi32(0x00800000);
@@ -38,13 +51,14 @@ static int ActorFaceTreeValid(const c1atl14Node_t *nodes){
  unsigned i;
  _Static_assert(sizeof(c1atl14Node_t)==32 && offsetof(c1atl14Node_t,oldCycle)==28 &&
    offsetof(c1atl14Node_t,rate)==20 && offsetof(c1atl14Node_t,goalWeight)==12,"animation node layout");
- if(!faceTopology.valid || memcmp(faceTopology.definitions,cod1GenericDefinitions,sizeof(faceTopology.definitions))){
+ if(!faceTopology.valid || !R242ExactATRBytesEqual(faceTopology.definitions,cod1GenericDefinitions,sizeof(faceTopology.definitions))){
   if(!C1AGT14_Valid(cod1GenericDefinitions,nodes,C1GA_COUNT))return 0;
   memcpy(faceTopology.definitions,cod1GenericDefinitions,sizeof(faceTopology.definitions));
   faceTopology.valid=1;return 1;
  }
  if(!nodes || ActorOverlap(nodes,C1GA_COUNT*sizeof(*nodes),cod1GenericDefinitions,sizeof(cod1GenericDefinitions)))return 0;
  for(i=0;i<C1GA_COUNT;i++){
+  if(i+4<=C1GA_COUNT&&ActorFaceFourDefault(nodes+i)){i+=3;continue;}
   const __m128i first=_mm_loadu_si128((const __m128i *)&nodes[i].phase);
   const __m128i last=_mm_loadu_si128((const __m128i *)&nodes[i].currentWeight);
   const __m128i negative=_mm_cmpgt_epi32(zero,_mm_or_si128(first,last));
@@ -77,6 +91,7 @@ static int ActorScriptedFrameAdvance(C1GARecord*,C1FaceFrame*,float);
 static int MoodyIdleTree(const C1GARecord*);
 static int MoodyNamedIdle(const C1GARecord*);
 static int MoodyStopped(const C1GARecord*);
+static int MoodyQueuedIdle(const C1GARecord*);
 static int ActorFaceFrameClosure(const C1GARecord*);
 /* Native actor field dispatch20041A6F/87 and generic type4 getter20041B73:
  * a live actor owns WORD+178 independently of collision/motion/publication.
@@ -111,16 +126,16 @@ static int ActorFaceFrameCanMutate(const C1GARecord*r,int requested,int commit){
 }
 static int ActorFaceMutate(C1GARecord*r,void*user){
  const GscActorAnimationRequest*q=user;unsigned n=q->animation[0].ordinal,i;int face=ActorFaceLeafIndex(n);const char*end;float f[3];const c1anm14Metadata_t*m;
- if(q->method!=GSC_ACTOR_ANIMATION_FLAGGED_RESTART||face<0||!r->notify||r->notify->serial==UINT64_MAX||!ActorGenericBinding(q->animation,q->runtime_identity)||!ActorFaceReady(cod1EntityEpoch)||!(end=memchr(q->notify,0,sizeof(q->notify)))||end==q->notify)return 0;
+ if((q->method!=GSC_ACTOR_ANIMATION_FLAGGED_RESTART&&q->method!=GSC_ACTOR_ANIMATION_FLAGGED_KNOB)||face<0||!r->notify||r->notify->serial==UINT64_MAX||!ActorGenericBinding(q->animation,q->runtime_identity)||!ActorFaceReady(cod1EntityEpoch)||!(end=memchr(q->notify,0,sizeof(q->notify)))||end==q->notify)return 0;
  memcpy(f,q->scalar_bits,sizeof(f));m=cod1FaceResources.metadata+face;
- if(!C1AFK14_Select(cod1GenericDefinitions,r->nodes,r->notify->flags,C1GA_COUNT,n,n+1,f[0],f[1],f[2],1,m->notes,m->count))return 0;
- for(i=0;i<C1GA_COUNT;i++)if(!r->notify->flags[i].token){memset(r->notify->names[i],0,64);r->notify->generation[i]=r->notify->pending[i]=0;r->notify->pendingTick[i]=0;}
- memset(r->notify->names[n],0,64);memcpy(r->notify->names[n],q->notify,(size_t)(end-q->notify));r->notify->pending[n]=0;r->notify->pendingTick[n]=0;r->notify->generation[n]=++r->notify->serial;return 1;
+ if(!C1AFK14_Select(cod1GenericDefinitions,r->nodes,r->notify->flags,C1GA_COUNT,n,n+1,f[0],f[1],f[2],q->method==GSC_ACTOR_ANIMATION_FLAGGED_RESTART,m->notes,m->count))return 0;
+ for(i=0;i<C1GA_COUNT;i++)if(!r->notify->flags[i].token){(void)ActorGenericNameSet(r,i,NULL,0);r->notify->generation[i]=r->notify->pending[i]=0;r->notify->pendingTick[i]=0;}
+ if(!ActorGenericNameSet(r,n,q->notify,(size_t)(end-q->notify)))return 0;r->notify->pending[n]=0;r->notify->pendingTick[n]=0;r->notify->generation[n]=++r->notify->serial;return 1;
 }
 static int ActorFaceInvoke(void*unused,const GscActorAnimationRequest*input,char*error,size_t cap,int(*current)(void*),void*ctx){
  GscActorAnimationRequest q;(void)unused;
  if(!input||!ActorGoalBuffers(input,sizeof(*input),NULL,0,error,cap)||ActorGenericPrivate(input,sizeof(*input)))return 0;
- q=*input;if(q.method!=GSC_ACTOR_ANIMATION_FLAGGED_RESTART)return ActorGenericInvoke(NULL,input,error,cap,current,ctx);
+ q=*input;if(ActorLocomotionTarget(q.animation[0].ordinal)||ActorAimTarget(q.animation[0].ordinal)||ActorAimFaceLeaf(q.animation[0].ordinal))return ActorGenericInvoke(NULL,input,error,cap,current,ctx);if((q.method!=GSC_ACTOR_ANIMATION_FLAGGED_RESTART&&q.method!=GSC_ACTOR_ANIMATION_FLAGGED_KNOB))return ActorGenericInvoke(NULL,input,error,cap,current,ctx);
  if(q.precision_bits!=53||q.rounding)return 0;
  return ActorGenericTransaction(&input->entity,q.runtime_identity,q.catalog_identity,q.now_ms,input,sizeof(*input),error,cap,current,ctx,ActorFaceMutate,&q);
 }
@@ -131,7 +146,7 @@ extern int TrainingElderCurrent(const GscEntityRef*);
  * ordering. Keep the clock, lease, notetrack receipts and wire identity. */
 static int ActorRunnerFaceOwner(const C1GARecord*r){
  const cod1ActorRecord_t *a;
- if(!r||r->lease.actorIndex>=COD1_ACTOR_CAPACITY||!TrainingElderCurrent(&r->lease.entity)||
+ if(!r||r->lease.actorIndex>=COD1_ACTOR_CAPACITY||!TrainingCurrentRoute(&r->lease.entity)||
     !ActorLeaseValid(&r->lease)||!ActorScriptedClockSelected(r->lease.actorIndex))return 0;
  a=cod1Actors+r->lease.actorIndex;
  return a->scriptedController.entered&&!a->scriptedController.invalid&&!a->scriptedController.selectionSerial&&
@@ -139,13 +154,54 @@ static int ActorRunnerFaceOwner(const C1GARecord*r){
     !ActorHasNormalRecord(r->lease.actorIndex)&&a->scriptedAux.record==FRESH_AUX_EMPTY&&
     a->scriptedAux.prefix==FRESH_PREFIX_UNUSED;
 }
-static int ActorFaceFrameClosure(const C1GARecord*r){
+static int ActorStandingBody(const C1GARecord*r){
+  static const unsigned ordinals[]={107,108,109,117,118};
+  unsigned i;
+  if(r->notify->flags[131].token||r->nodes[131].currentWeight||r->nodes[131].goalWeight)return 1;
+  for(i=0;i<5;i++){
+   unsigned n=ordinals[i];
+   if(r->notify->flags[n].token||r->nodes[n].currentWeight||r->nodes[n].goalWeight)return 1;
+  }
+  return 0;
+}
+/* Four dormant nodes satisfy the original early-continue predicate.
+ * Read every pending identity and token; do not cache mutable node state.
+ * Only +0 weights enter this path. All other encodings, including -0,
+ * subnormals and NaNs, retain the original FP comparisons and error order. */
+static int ActorFaceFourDormant(const C1GARecord*r,unsigned i){
+#if defined(_MSC_VER) && defined(_M_IX86) && _M_IX86_FP >= 2
+ const __m128i zero=_mm_setzero_si128(),tokens=_mm_setr_epi32(0,65535,0,65535);
+ __m128i pending=_mm_or_si128(_mm_loadu_si128((const __m128i*)(r->notify->pending+i)),_mm_loadu_si128((const __m128i*)(r->notify->pending+i+2)));
+ __m128i flags=_mm_and_si128(tokens,_mm_or_si128(_mm_loadu_si128((const __m128i*)(r->notify->flags+i)),_mm_loadu_si128((const __m128i*)(r->notify->flags+i+2))));
+ __m128i weights=_mm_or_si128(_mm_or_si128(_mm_loadl_epi64((const __m128i*)&r->nodes[i].goalWeight),_mm_loadl_epi64((const __m128i*)&r->nodes[i+1].goalWeight)),
+   _mm_or_si128(_mm_loadl_epi64((const __m128i*)&r->nodes[i+2].goalWeight),_mm_loadl_epi64((const __m128i*)&r->nodes[i+3].goalWeight)));
+ _Static_assert(sizeof(c1afl14State_t)==8 && offsetof(c1afl14State_t,token)==4,"flag layout");
+ _Static_assert(offsetof(c1atl14Node_t,currentWeight)==offsetof(c1atl14Node_t,goalWeight)+4,"weight layout");
+ return _mm_movemask_epi8(_mm_cmpeq_epi8(_mm_or_si128(weights,_mm_or_si128(flags,pending)),zero))==65535;
+#else
+ (void)r;(void)i;return 0;
+#endif
+}
+static int ActorFaceFrameClosureInner(const C1GARecord*r){
+ if(ActorGeneralClockActive(r))return ActorLocomotionClosure(r);
  unsigned i,p;int named=0,idleNamed=0,scripted=r&&r->lease.actorIndex<COD1_ACTOR_CAPACITY&&ActorScriptedClockSelected(r->lease.actorIndex);
  if(!r||!r->nodes||!r->notify||!ActorFaceReady(cod1EntityEpoch))return 0;
- int runnerFace=scripted&&ActorRunnerFaceOwner(r);
+ /* stop::main starts its idle face before selecting standanim. Moody's
+  * initial stationary owner has the same single-face ordering until that
+  * body token exists, then the retained body/face two-lane ordering. */
+ int initialMoody=scripted&&MoodyStopped(r)&&
+    !cod1Actors[r->lease.actorIndex].goal.assigned&&
+    !cod1Actors[r->lease.actorIndex].motion.active&&
+    !cod1Actors[r->lease.actorIndex].scriptedController.selectionSerial;
+ int runnerFace=scripted&&(ActorRunnerFaceOwner(r)||initialMoody);
+ int moodyHandoff=scripted&&((MoodyNamedIdle(r)&&(MoodyStopped(r)||MoodyQueuedIdle(r)))||
+    (MoodyIdleTree(r)&&FoleyNormalIdleOwner(r)));
+ int faceStart=(runnerFace&&!initialMoody)?0:2;
+ if(ActorStandingBody(r)||(initialMoody&&MoodyNamedIdle(r)))runnerFace=0;
  if(runnerFace)scripted=0;
  for(i=0;i<C1GA_COUNT;i++){
   int face=-1,look,shuffle,extra;
+  if(i+4<=C1GA_COUNT&&ActorFaceFourDormant(r,i)){i+=3;continue;}
   if(r->notify->pending[i])return 0;
   if(!r->notify->flags[i].token && (cod1GenericDefinitions[i].children ||
       (!r->nodes[i].currentWeight && !r->nodes[i].goalWeight)))continue;
@@ -154,21 +210,21 @@ static int ActorFaceFrameClosure(const C1GARecord*r){
    * closure this is a membership test; the regular bank index stays local. */
   if(scripted&&i==892&&TrainingJumperAllocation(&r->lease.entity))extra=0;
   if(r->notify->flags[i].token){face=ActorFaceLeafIndex(i);
-   if(runnerFace&&(face<0||strcmp(r->notify->names[i],"animscript faceanim")))return 0;
+   if(runnerFace&&(face<(initialMoody?2:0)||strcmp(ActorGenericName(r,i),"animscript faceanim")))return 0;
    /* The original idle expression replaces the ended facial leaf. A mixed
     * idle/gesture notify set needs a different multi-leaf order contract. */
-   if(scripted&&face>=2&&face<5){
+   if(scripted&&face>=faceStart&&face<5){
     if(!(cod1Actors[r->lease.actorIndex].scriptedController.resumed4&&!ActorHasNormalRecord(r->lease.actorIndex))&&
-       !FoleyNormalIdleOwner(r) && !(MoodyStopped(r)&&MoodyNamedIdle(r)))return 0;
+       !ActorStandingBody(r) && !FoleyNormalIdleOwner(r) && !moodyHandoff)return 0;
     idleNamed++;
    }
-   if((scripted?(extra<0&&(face<2||face>=5)):face<0)||++named>(scripted?2:1)||r->notify->flags[i].token!=i+1||!r->notify->generation[i]||!r->notify->names[i][0])return 0;}
+   if((scripted?(extra<0&&(face<faceStart||face>=5)):face<0)||++named>(scripted?2:1)||r->notify->flags[i].token!=i+1||!r->notify->generation[i]||!ActorGenericName(r,i)[0])return 0;}
   if(cod1GenericDefinitions[i].children||(!r->nodes[i].currentWeight&&!r->nodes[i].goalWeight))continue;
   /* Resource classification is relevant only for a live leaf. The private
    * source hierarchy has 2078 nodes; do not rescan 40 names for every dormant
    * branch on every phase transaction. Pending/token guards still cover all. */
   if(face<0)face=ActorFaceLeafIndex(i);look=C1AL14_Index(cod1GenericNames[i].name);shuffle=ActorGenericShuffleIndex(cod1GenericNames[i].name);
-  if((scripted?(extra<0&&(face<2||face>=5)):face<0)&&look<0&&shuffle<0)return 0;
+  if((scripted?(extra<0&&(face<faceStart||face>=5)):face<0)&&look<0&&shuffle<0)return 0;
   if(extra>=0&&!ActorScriptedReady(cod1EntityEpoch))return 0;
   if(look>=0&&(r->nodes[i].phase||r->nodes[i].oldPhase||r->nodes[i].cycle||r->nodes[i].oldCycle))return 0;
   for(p=cod1GenericDefinitions[i].parent;p;p=cod1GenericDefinitions[p].parent)if((cod1GenericDefinitions[p].flags&3)||r->nodes[p].rate!=1)return 0;
@@ -176,11 +232,21 @@ static int ActorFaceFrameClosure(const C1GARecord*r){
  if(idleNamed){
   if(idleNamed!=1)return 0;
   if(named!=1){
-   if(named!=2||(!FoleyNormalIdleOwner(r)&&!MoodyNamedIdle(r)))return 0;
-   for(i=0;i<C1GA_COUNT;i++)if(r->notify->flags[i].token&&ActorFaceLeafIndex(i)<0&&!C1ASB14_Body(ActorScriptedIndex(i)))return 0;
+   if(named!=2||(!ActorStandingBody(r)&&!FoleyNormalIdleOwner(r)&&!MoodyNamedIdle(r)))return 0;
+   for(i=0;i<C1GA_COUNT;i++)if(r->notify->flags[i].token&&ActorFaceLeafIndex(i)<0&&!C1ASB14_Standing(i)&&!C1ASB14_Body(ActorScriptedIndex(i)))return 0;
   }
  }
  return ActorFaceTreeValid(r->nodes);
+}
+static int ActorFaceFrameClosure(const C1GARecord*r){
+ int ok=ActorFaceFrameClosureInner(r);
+ if(!ok&&r&&r->lease.entity.slot==174&&g_debugMove.integer){unsigned i;
+  G_Printf("[382 closure] tick=%d scripted=%d stopped=%d idle=%d runner=%d standing=%d normal=%d\n",r->tick,
+   ActorScriptedClockSelected(r->lease.actorIndex),MoodyStopped(r),MoodyNamedIdle(r),ActorRunnerFaceOwner(r),ActorStandingBody(r),FoleyNormalIdleOwner(r));
+  if(r->notify&&r->nodes)for(i=0;i<C1GA_COUNT;i++)if(r->notify->flags[i].token||r->notify->pending[i])
+   G_Printf("[382 token] n=%u name=%s token=%u pending=%llu current=%.6f goal=%.6f phase=%.6f\n",i,ActorGenericName(r,i),r->notify->flags[i].token,(unsigned long long)r->notify->pending[i],r->nodes[i].currentWeight,r->nodes[i].goalWeight,r->nodes[i].phase);
+ }
+ return ok;
 }
 typedef struct {
  GscEntityRef owner;cod1ActorLease_t lease;C1GARecord saved,stage,baseline;
@@ -193,15 +259,15 @@ static int ActorFaceFramePrivate(const void*p,size_t n){C1FaceFrameCall*c=cod1Fa
  if(ActorOverlap(p,n,&faceTopology,sizeof(faceTopology)))return 1;
 #endif
  if(ActorOverlap(p,n,cod1FaceFrames,sizeof(cod1FaceFrames))||ActorOverlap(p,n,&cod1FaceFrameOperation,sizeof(cod1FaceFrameOperation)))return 1;
- return c&&(ActorOverlap(p,n,c,sizeof(*c))||ActorOverlap(p,n,c->actor,c->actor?sizeof(*c->actor):0)||ActorOverlap(p,n,c->entity,c->entity?sizeof(*c->entity):0)||ActorOverlap(p,n,c->baseline.nodes,c->baseline.nodes?C1GA_COUNT*sizeof(*c->baseline.nodes):0)||ActorOverlap(p,n,c->baseline.notify,c->baseline.notify?sizeof(*c->baseline.notify):0));
+ return c&&(ActorOverlap(p,n,c,sizeof(*c))||ActorOverlap(p,n,c->actor,c->actor?sizeof(*c->actor):0)||ActorOverlap(p,n,c->entity,c->entity?sizeof(*c->entity):0)||ActorOverlap(p,n,c->baseline.nodes,c->baseline.nodes?C1GA_COUNT*sizeof(*c->baseline.nodes):0)||ActorGenericNamesPrivate(p,n,&c->baseline)||ActorOverlap(p,n,c->baseline.notify,c->baseline.notify?sizeof(*c->baseline.notify):0));
 }
 static int ActorFaceFrameFence(C1FaceFrameCall*c){
  cod1ActorLease_t after;C1GARecord*r=cod1GenericActors+c->lease.actorIndex;
  return !cod1GenericOperation.cancelled&&c->now==level.time&&c->epoch==cod1EntityEpoch&&c->epoch==cod1GenericEpoch&&cod1EntityReady&&!level.spawning&&!level.restarted&&ActorFaceReady(c->epoch)&&c->faceRevision==cod1FaceResources.revision&&c->scriptedRevision==cod1ScriptedResources.revision&&(!c->frame.scripted||ActorScriptedReady(c->epoch))&&
   !memcmp(c->borrowed,&c->owner,sizeof(c->owner))&&ActorGoalLease(&c->owner,&after)&&!memcmp(&c->lease,&after,sizeof(after))&&
-  !memcmp(r,&c->saved,sizeof(c->saved))&&R242ExactATRBytesEqual(r->nodes,c->baseline.nodes,C1GA_COUNT*sizeof(*r->nodes))&&R242ExactATRBytesEqual(r->notify,c->baseline.notify,sizeof(*r->notify))&&
-  !memcmp(cod1FaceFrames+c->lease.actorIndex,&c->frame,sizeof(c->frame))&&
-  !memcmp(cod1Actors+c->lease.actorIndex,c->actor,sizeof(*c->actor))&&!memcmp(g_entities+c->owner.slot,c->entity,sizeof(*c->entity));
+  !memcmp(r,&c->saved,sizeof(c->saved))&&R242ExactATRBytesEqual(r->nodes,c->baseline.nodes,C1GA_COUNT*sizeof(*r->nodes))&&R242ExactATRBytesEqual(r->notify,c->baseline.notify,sizeof(*r->notify))&&ActorGenericNamesEqual(r,&c->baseline)&&
+  R242ExactATRBytesEqual(cod1FaceFrames+c->lease.actorIndex,&c->frame,sizeof(c->frame))&&
+  R242ExactATRBytesEqual(cod1Actors+c->lease.actorIndex,c->actor,sizeof(*c->actor))&&R242ExactATRBytesEqual(g_entities+c->owner.slot,c->entity,sizeof(*c->entity));
 }
 static C1FaceFrameCall*ActorFaceFrameAcquire(const GscEntityRef*input,int now,int(*current)(void*),void*ctx,int writable){
  C1FaceFrameCall*c=NULL;C1GARecord*r;
@@ -219,19 +285,19 @@ static C1FaceFrameCall*ActorFaceFrameAcquire(const GscEntityRef*input,int now,in
  cod1GenericOperation.stage=c->stage.nodes;
  cod1GenericOperation.bytes=writable?C1GA_COUNT*sizeof(*c->stage.nodes):0;
  cod1GenericOperation.notifyStage=c->stage.notify;
- cod1GenericOperation.notifyBytes=writable?sizeof(*c->stage.notify):0;
- if(current(ctx)!=1||!ActorFaceFrameFence(c)){cod1FaceFrameOperation=NULL;cod1GenericOperation.busy=0;cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;goto rejected;}
+ cod1GenericOperation.notifyBytes=writable?sizeof(*c->stage.notify):0;cod1GenericOperation.nameStage=c->stage.names;cod1GenericOperation.nameBytes=writable?C1GA_COUNT*sizeof(*c->stage.names):0;
+ if(current(ctx)!=1||!ActorFaceFrameFence(c)){cod1FaceFrameOperation=NULL;cod1GenericOperation.busy=0;cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.nameStage=NULL;cod1GenericOperation.nameBytes=0;goto rejected;}
  return c;
  rejected:if(c){ActorGenericFreeOwned(&c->stage);ActorGenericFreeOwned(&c->baseline);free(c->actor);free(c->entity);free(c);}return NULL;
 }
 static C1FaceFrameCall*ActorFaceFrameEnter(const GscEntityRef*input,int now,int(*current)(void*),void*ctx){
  return ActorFaceFrameAcquire(input,now,current,ctx,1);
 }
-static void ActorFaceFrameLeave(C1FaceFrameCall*c){ActorGenericFreeOwned(&c->stage);ActorGenericFreeOwned(&c->baseline);free(c->actor);free(c->entity);free(c);cod1FaceFrameOperation=NULL;cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.busy=0;}
+static void ActorFaceFrameLeave(C1FaceFrameCall*c){ActorGenericFreeOwned(&c->stage);ActorGenericFreeOwned(&c->baseline);free(c->actor);free(c->entity);free(c);cod1FaceFrameOperation=NULL;cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.nameStage=NULL;cod1GenericOperation.nameBytes=0;cod1GenericOperation.busy=0;}
 static int ActorFaceFrameCommit(C1FaceFrameCall*c,const C1FaceFrame*next){
  C1GARecord*r=cod1GenericActors+c->lease.actorIndex;
  if(c->current(c->ctx)!=1||!ActorFaceFrameFence(c)||!ActorFaceFrameClosure(&c->stage))return 0;
- c->stage.revision++;ActorGenericFreeOwned(r);*r=c->stage;c->stage.nodes=NULL;c->stage.notify=NULL;cod1FaceFrames[c->lease.actorIndex]=*next;return 1;
+ c->stage.revision++;ActorGenericFreeOwned(r);*r=c->stage;c->stage.nodes=NULL;c->stage.notify=NULL;c->stage.names=NULL;cod1FaceFrames[c->lease.actorIndex]=*next;return 1;
 }
 int G_Cod1ActorFaceClockSelect(const GscEntityRef*input,int now,int(*current)(void*),void*ctx){
  C1FaceFrameCall*c=ActorFaceFrameEnter(input,now,current,ctx);C1FaceFrame next;int ok=0;if(!c)return 0;
@@ -256,7 +322,7 @@ int G_Cod1ActorFaceFrameBegin(const GscEntityRef*input,int now,uint64_t generati
  C1FaceFrameCall*c=ActorFaceFrameEnter(input,now,current,ctx);C1FaceFrame next;unsigned i;float dt;int ok=0;if(!c)return 0;
  if(!c->frame.selected||c->frame.open||c->frame.count||!generation||generation<=c->frame.frame||c->saved.tick!=c->frame.tick||!ActorFrameCadence(&c->frame,now,generation)||!ActorGenericDt(50,&dt))goto done;
  next=c->frame;next.open=1;next.done=0;next.tick=now;next.frame=generation;if(next.scripted)next.gameFrame=level.framenum;
- for(i=0;i<C1GA_COUNT;i++){c->stage.nodes[i].oldPhase=c->stage.nodes[i].phase;c->stage.nodes[i].oldCycle=c->stage.nodes[i].cycle;if(!C1ATL14_AdvanceWeight(c->stage.nodes+i,dt))goto done;}
+ if(!C1AFW601_Private(cod1GenericDefinitions,c->stage.nodes,C1GA_COUNT,dt))goto done;
  c->stage.tick=now;ok=ActorFaceFrameCommit(c,&next);
  done:ActorFaceFrameLeave(c);return ok;
 }
@@ -277,7 +343,11 @@ int G_Cod1ActorFaceFrameStep(const GscEntityRef*input,int now,uint64_t generatio
  c=ActorFaceFrameEnter(input,now,current,ctx);if(!c)return 0;
  if(!c->frame.selected||!c->frame.open||c->frame.done||c->frame.count||!generation||generation!=c->frame.frame||c->saved.tick!=now||!ActorGenericDt(50,&dt))goto done;
  next=c->frame;memset(&step,0,sizeof(step));step.usedDt=dt;
- if(c->frame.scripted&&!ActorRunnerFaceOwner(&c->stage)){
+ if(ActorGeneralClockActive(&c->stage)){
+  if(!ActorLocomotionFrameAdvance(&c->stage,&next,dt)||!ActorFaceFrameCommit(c,&next))goto done;
+  *resume=next.done?0:1;ok=1;goto done;
+ }
+ if(c->frame.scripted&&(ActorStandingBody(&c->stage)||!ActorRunnerFaceOwner(&c->stage))){
   if(!ActorScriptedFrameAdvance(&c->stage,&next,dt))goto done;
   if(!ActorFaceFrameCommit(c,&next))goto done;*resume=next.done?0:1;ok=1;goto done;
  }
@@ -285,7 +355,7 @@ int G_Cod1ActorFaceFrameStep(const GscEntityRef*input,int now,uint64_t generatio
  if(lead&&!ActorFaceFrameAdvanceNode(&c->stage,lead,dt,1,&step))goto done;
  for(i=1;i<C1GA_COUNT;i++)if(i!=lead&&!cod1GenericDefinitions[i].children&&(c->stage.nodes[i].currentWeight||c->stage.nodes[i].goalWeight))if(!ActorFaceFrameAdvanceNode(&c->stage,i,step.usedDt,0,&other))goto done;
  if(step.count){const c1anm14Metadata_t*m=cod1FaceResources.metadata+ActorFaceLeafIndex(lead);
-  for(j=0;j<step.count;j++){cod1ActorFaceNote_t*q=next.notes+j;memset(q,0,sizeof(*q));q->entity=c->owner;q->runtime=c->saved.runtime;q->catalog=c->saved.catalog;q->owner_identity=c->saved.notify->ownerIdentity;q->generation=c->saved.notify->generation[lead];q->frame_generation=generation;q->ordinal=lead;q->produced_ms=now;memcpy(q->event,c->saved.notify->names[lead],64);if(!C1ANM14_Resolve(m,step.payload[j],q->payload))goto done;}
+  for(j=0;j<step.count;j++){cod1ActorFaceNote_t*q=next.notes+j;memset(q,0,sizeof(*q));q->entity=c->owner;q->runtime=c->saved.runtime;q->catalog=c->saved.catalog;q->owner_identity=c->saved.notify->ownerIdentity;q->generation=c->saved.notify->generation[lead];q->frame_generation=generation;q->ordinal=lead;q->produced_ms=now;memcpy(q->event,ActorGenericName(&c->saved,lead),64);if(!C1ANM14_Resolve(m,step.payload[j],q->payload))goto done;}
  }
  next.count=step.count;next.done=step.resume?0:1;if(next.done&&!next.count)next.open=0;
  if(!ActorFaceFrameCommit(c,&next))goto done;*resume=(int)step.resume;ok=1;

@@ -29,6 +29,7 @@ If you have questions concerning this license or the applicable additional terms
 // cg_view.c -- setup all the parameters (position, angle, etc)
 // for a 3D rendering
 #include "cg_local.h"
+static void CG_Cod1PlayerShock(void);
 #include "cg_r241_frame_trace.h"
 #include "cg_cod1_step.h"
 #include "cg_cod1_bob.h"
@@ -1639,6 +1640,7 @@ static void CG_DrawActiveFrameUntracedR241( int serverTime, stereoFrame_t stereo
 		CG_DrawInformation();
 		return;
 	}
+    if(cg.snap)CG_Cod1PlayerShock();
     CG_Cod1FoleySceneFrame();
     CG_Cod1VoiceFrame();
     CG_Cod1LoopSoundFrame();
@@ -1799,6 +1801,28 @@ static void CG_DrawActiveFrameUntracedR241( int serverTime, stereoFrame_t stereo
 }
 
 #include "cg_r241_frame_trace.inc"
+/* Read the current authoritative interval once per snapshot change and
+ * expire it using server time, including after late client startup. */
+static void CG_Cod1PlayerShock(void){
+    static char last[96];static int previousTime,active,index,begin,duration;
+    const char *record=CG_ConfigString(CS_COD1_PLAYER_SHOCK);
+    unsigned slot,generation;int n=0;
+    if(cg.time<previousTime){last[0]=0;active=0;}
+    previousTime=cg.time;
+    if(strcmp(record,last)){
+        Q_strncpyz(last,record,sizeof(last));active=0;
+        if(sscanf(record,"%u %u %d %d %d%n",&slot,&generation,&index,&begin,&duration,&n)==5&&
+           !record[n]&&slot==(unsigned)cg.snap->ps.clientNum&&generation&&index>0&&index<16&&
+           begin>=0&&duration>=0&&duration<=60000){
+            active=1;
+            if(cg_debugAnim.integer>1)CG_Printf("[shellshock CG] effect=%d start=%d duration=%d\n",index,begin,duration);
+        }else if(!record[0]&&cg_debugAnim.integer>1)CG_Printf("[shellshock CG] cleared\n");
+    }
+    if(active&&(int64_t)cg.time-begin>=duration){
+        active=0;
+        if(cg_debugAnim.integer>1)CG_Printf("[shellshock CG] expired effect=%d at=%d\n",index,cg.time);
+    }
+}
 void CG_DrawActiveFrame(int serverTime,stereoFrame_t stereoView,qboolean demoPlayback){
     CG_R241TraceBegin(serverTime,stereoView);
     CG_DrawActiveFrameUntracedR241(serverTime,stereoView,demoPlayback);

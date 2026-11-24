@@ -15,8 +15,10 @@ if (-not $GameDirectory) {
 }
 
 $game = (Get-Item -LiteralPath $GameDirectory).FullName
-if (-not (Test-Path -LiteralPath (Join-Path $game 'main\pak0.pk3') -PathType Leaf)) {
-    throw "Missing main\pak0.pk3 in the selected Call of Duty installation: $game"
+foreach ($required in @('CoDSP.exe', 'main\pak0.pk3')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $game $required) -PathType Leaf)) {
+        throw "Missing $required in the selected Call of Duty installation: $game"
+    }
 }
 $runtime = Join-Path $PSScriptRoot 'bin'
 $profile = Join-Path $PSScriptRoot 'profile'
@@ -28,7 +30,7 @@ $engineArgs = @(
     '+set', 'r_ignorehwgamma', '1', '+set', 'sys_cpuMHz', '3000',
     '+set', 'vm_game', '0', '+set', 'vm_cgame', '0', '+set', 'vm_ui', '0',
     '+set', 'com_introplayed', '1', '+set', 'com_maxfps', '60',
-    '+set', 'developer', '0', '+set', 'logfile', '1', '+exec', 'training_player.cfg'
+    '+set', 'developer', '0', '+set', 'logfile', '2', '+exec', 'training_player.cfg'
 )
 Push-Location -LiteralPath $runtime
 try {

@@ -33,6 +33,7 @@ If you have questions concerning this license or the applicable additional terms
 #include <stddef.h>
 #include "v59_prefix.h"
 #include "geom/qcommon/cm_local.h"
+#include "v59_mesh_build_math.h"
 
 
 // counters are only bumped when running single threaded,
@@ -238,13 +239,13 @@ winding_t *BaseWindingForPlane( vec3_t normal, vec_t dist ) {
 		break;
 	}
 
-	v = DotProduct( vup, normal );
-	VectorMA( vup, -v, normal, vup );
-	VectorNormalize2( vup, vup );
+	v = C1MLStore(C1MLDot(vup,normal,2,1,0));
+	for(i=0;i<3;i++) vup[i]=C1MLStore((double)vup[i]-(double)v*normal[i]);
+	C1MLNorm(vup);
 
 	VectorScale( normal, dist, org );
 
-	CrossProduct( vup, normal, vright );
+	C1MLCross(vup,normal,vright);
 
 	VectorScale( vup, MAX_MAP_BOUNDS, vup );
 	VectorScale( vright, MAX_MAP_BOUNDS, vright );
@@ -437,8 +438,7 @@ void ChopWindingInPlace( winding_t **inout, vec3_t normal, vec_t dist, vec_t eps
 // determine sides for each point
 	for ( i = 0 ; i < in->numpoints ; i++ )
 	{
-		dot = (in->p[i][2] * normal[2] + in->p[i][0] * normal[0]) + in->p[i][1] * normal[1];
-		dot -= dist;
+		dot = C1MLStore(C1MLDot(in->p[i],normal,2,0,1)-dist);
 		dists[i] = dot;
 		if ( dot > epsilon ) {
 			sides[i] = SIDE_FRONT;
@@ -489,7 +489,7 @@ void ChopWindingInPlace( winding_t **inout, vec3_t normal, vec_t dist, vec_t eps
 		// generate a split point
 		p2 = in->p[( i + 1 ) % in->numpoints];
 
-		dot = dists[i] / ( dists[i] - dists[i + 1] );
+		dot = C1MLStore((double)dists[i] / ((double)dists[i] - dists[i + 1]));
 		for ( j = 0 ; j < 3 ; j++ )
 		{   // avoid round off error when possible
 			if ( normal[j] == 1 ) {
@@ -497,7 +497,7 @@ void ChopWindingInPlace( winding_t **inout, vec3_t normal, vec_t dist, vec_t eps
 			} else if ( normal[j] == -1 ) {
 				mid[j] = -dist;
 			} else {
-				mid[j] = p1[j] + dot * ( p2[j] - p1[j] );
+				mid[j] = C1MLStore((double)p1[j] + (double)dot * ((double)p2[j] - p1[j]));
 			}
 		}
 

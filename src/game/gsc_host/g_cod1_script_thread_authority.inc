@@ -26,6 +26,16 @@ static int ScriptThreadPlayerCurrent(const GscEntityRef *input,uint64_t serial) 
     ref=*input;
     return ScriptThreadPlayerRead(&ref,&receipt)&&receipt.completion==serial;
 }
+/* A brush thread belongs to this allocation through hide/show, motion and
+ * waits. Reuse of the slot must never resume the former owner's task. */
+static int ScriptBrushThreadCurrent(const GscEntityRef *ref,uint64_t generation) {
+    const gentity_t *e;
+    if (!ref || !generation || generation != ref->generation ||
+        !ActorOwnerAllowed(ref,0)) return 0;
+    e = &g_entities[ref->slot];
+    return e->classname && !strcmp(e->classname,"script_brushmodel") &&
+        e->s.eType == ET_MOVER && e->r.bmodel && EntityControlInlineModel(e);
+}
 static int ScriptThreadResolve(void *user,const GscEntityRef *input,
                               GscEntityExecutionCertificate *out,
                               char *error,size_t size) {
@@ -106,6 +116,21 @@ static int ScriptThreadResolve(void *user,const GscEntityRef *input,
         certificate.serial=ref.generation;certificate.current=G_Cod1SignThreadCurrent;
         *out=certificate;
         G_Printf("[Foley private] current trigger_lookat thread slot=%u generation=%u stale rejected\n",ref.slot,ref.generation);
+        return 1;
+    }
+    if(G_Cod1VehicleThreadRead(&ref,&certificate)){*out=certificate;return 1;}
+    if(G_Cod1TurretFactoryThreadRead(&ref,&certificate)){*out=certificate;return 1;}
+    if (ScriptModelThreadCurrent(&ref,ref.generation)) {
+        memset(&certificate,0,sizeof(certificate));certificate.owner=ref;
+        certificate.serial=ref.generation;certificate.current=ScriptModelThreadCurrent;
+        *out=certificate;return 1;
+    }
+    if (ScriptBrushThreadCurrent(&ref,ref.generation)) {
+        memset(&certificate,0,sizeof(certificate));
+        certificate.owner=ref;
+        certificate.serial=ref.generation;
+        certificate.current=ScriptBrushThreadCurrent;
+        *out=certificate;
         return 1;
     }
     return ActorThreadResolve(NULL,&ref,out,error,size);

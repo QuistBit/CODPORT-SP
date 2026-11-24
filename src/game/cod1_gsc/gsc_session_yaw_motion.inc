@@ -32,3 +32,11 @@ static int session_yaw_motion_invoke(void *user,const GscYawMotionRequest *input
     ok=l.host.invoke(l.host.user,&request,error,size,session_yaw_motion_current,&l);
     return ok==1&&session_yaw_motion_scope(&l)&&!memcmp(&request,&original,sizeof(request));
 }
+
+int gsc_session_select_map_moveto(GscSession*s,char*error,size_t cap){
+ if((cap&&!error)||!s||session_animation_namespace_private(s,error,cap))return 0;
+ if(!session_enter(s,error,cap))return 0;
+ if(s->view.state!=GSC_SESSION_EMPTY||s->program||s->runtime||!s->root_map_enabled||!s->root_map.receipt||!s->root_map.current||s->actor_bootstrap_enabled||!s->yaw_motion_enabled||s->map_moveto_enabled)
+  return session_leave_rejected(s,"map moveto requires idle map authority and real motion host",error,cap);
+ s->map_moveto_enabled=1;s->busy=0;return 1;
+}

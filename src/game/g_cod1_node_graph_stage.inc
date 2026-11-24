@@ -5,6 +5,9 @@
 #include "g_cod1_path_entity_host.h"
 static C1NPPrepared*cod1GraphPrepared;
 static C1DPGraphCandidate*cod1GraphStaged;
+/* The graph stores native owner slots. Reject a reused slot even when the
+ * new allocation belongs to the same map and has the same path flags. */
+static GscEntityRef cod1PathOwnerRefs[MAX_GENTITIES];
 static uint64_t cod1GraphSerial,cod1GraphReceipt,cod1GraphWorld,cod1GraphPending;
 static int cod1GraphBusy,cod1GraphCancelled,cod1GraphPublished;
 static cod1NavigationResource_t cod1GraphResource;
@@ -14,6 +17,7 @@ static struct {int active;GscSession*session;uint64_t id,receipt;GscEntityRef ro
  C1NPPrepared*prepared;C1DPGraphCandidate*graph;cod1NavigationResource_t resource;
 } cod1GraphActorPin;
 static void Cod1GraphRelease(void){
+ memset(cod1PathOwnerRefs,0,sizeof(cod1PathOwnerRefs));
  G_Cod1PathNodeWorldEnd(cod1GraphWorld);cod1GraphWorld=0;cod1GraphReceipt=0;cod1GraphPublished=0;
  memset(&cod1GraphResource,0,sizeof(cod1GraphResource));
  C1DP_GraphDestroy(cod1GraphStaged);cod1GraphStaged=NULL;
@@ -96,6 +100,7 @@ static int Cod1GraphInitialOwners(C1GraphAcquire*a,C1DPGraphCandidate*g){
  state.node_count=g->count;state.link_count=g->linkCount;state.record_count=C1NS_POOL_COUNT;state.owner_count=g->ownerCount;
  context.acquire=a;context.owners=owners;
  if(!Cod1GraphAcquireCurrent(a)||C1NS_InitialDisconnect(&state,active,owners->count,owners->time,Cod1GraphInitialTrace,&context,&result)!=C1DP_OK||!Cod1GraphAcquireCurrent(a))goto done;
+ for(i=0;i<owners->count;i++)if(active[i])cod1PathOwnerRefs[i]=owners->rows[i].ref;
  ok=1;
 done:free(active);free(owners);return ok;
 }
@@ -382,3 +387,44 @@ int G_Cod1NodeGraphPostCohortEnd(GscSession*s,uint64_t id,uint64_t receipt,const
  G_Cod1LateDisconnectEnd(cod1GraphLatePin.world);memset(&cod1GraphLatePin,0,sizeof(cod1GraphLatePin));cod1GraphBusy=0;
  if(!ok)Cod1GraphRelease();return ok;
 }
+
+/* A live method runs inside Session execution; the nonexecuting graph
+ * preparation/query API cannot be entered here. No node-program callbacks
+ * or world traversal are required to release this entity's stored edges. */
+int G_Cod1NodeGraphConnectPaths(GscSession *session,uint64_t id,const GscEntityRef *entity,
+                                char *error,size_t capacity,int (*current)(void *),void *lease) {
+    C1DPGraphCandidate *graph;
+    C1DPState state;
+    const GscEntityRef *bound;
+    uint32_t flags;
+    int result=0;
+    if(!session||!entity||!current||!current(lease)||!G_Cod1EntitySameAllocation(entity))
+        return 0;
+    if(!G_Cod1PathEntityRead(entity,&flags)||!(flags&0x1000u)){
+        snprintf(error,capacity,"entity has no current dynamic path owner");
+        return 0;
+    }
+    if(cod1GraphBusy){cod1GraphCancelled=1;return 0;}
+    graph=cod1GraphStaged;
+    if(!cod1GraphPublished||!graph||!cod1GraphPrepared||!graph->owners||
+       entity->slot>=graph->ownerCount||entity->slot>=MAX_GENTITIES)
+        return 0;
+    bound=&cod1PathOwnerRefs[entity->slot];
+    if(bound->slot!=entity->slot||bound->generation!=entity->generation||bound->epoch!=entity->epoch)
+        return 0;
+    cod1GraphBusy=1;
+    if(cod1GraphPrepared->sessionId==id && cod1GraphResource.incarnation &&
+       gsc_session_running_path_graph(session,id,cod1GraphReceipt) &&
+       Cod1NodePreparedOwner(cod1GraphPrepared->registryEpoch) && Cod1GraphResourceCurrent(&cod1GraphResource) &&
+       current(lease) && G_Cod1EntitySameAllocation(entity) && !cod1GraphCancelled &&
+       gsc_session_running_path_graph(session,id,cod1GraphReceipt)){
+        state.nodes=graph->nodes;state.links=graph->links;state.records=graph->blockRecords;state.owners=graph->owners;
+        state.node_count=graph->count;state.link_count=graph->linkCount;state.record_count=C1NS_POOL_COUNT;state.owner_count=graph->ownerCount;
+        result=C1DP_ConnectOwned(&state,entity->slot)==C1DP_OK;
+    }
+    cod1GraphBusy=0;
+    if(cod1GraphCancelled){Cod1GraphRelease();return 0;}
+    return result;
+}
+
+#include "g_cod1_node_disconnectpaths.inc"

@@ -1275,6 +1275,14 @@ void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 
 	}
 
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+    GscEntityRef placedWeapon;
+    int retirePlaced = respawn == RESPAWN_SP && ent->s.eType == ET_ITEM &&
+        ent->item && ent->item->giType == IT_WEAPON && CW_WeaponDef(ent->item->giTag) &&
+        !(ent->flags & FL_DROPPED_ITEM) && !ent->wait && !ent->targetname && !ent->target &&
+        G_Cod1MapEntities() && G_Cod1GscTestCarbineActive() &&
+        G_Cod1EntityCapture(ent, &placedWeapon);
+#endif
 	// fire item targets
 	G_UseTargets( ent, other );
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
@@ -1284,6 +1292,12 @@ void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 #endif
 
 #if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+    /* The retail SP pickup result -1 retires the picked allocation. Script
+     * precacheItem authorizes a future spawn, independent of this pickup. */
+    if (retirePlaced) {
+        if (G_Cod1EntitySameAllocation(&placedWeapon)) G_FreeEntity(ent);
+        return;
+    }
     if (G_Cod1GscTestCarbineActive() && ent->item && ent->item->giType==IT_WEAPON &&
         G_Cod1GscTestCarbineSpawnAllowed(ent->classname) && respawn<0 && !ent->wait &&
         !ent->targetname && !ent->target) {
@@ -1879,6 +1893,7 @@ G_RunItem
 */
 void G_RunItem( gentity_t *ent ) {
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if(G_Cod1ScriptLaunchFrame(ent))return;
 	if(G_Cod1DroppedItemFrame(ent))return;
 #endif
 	vec3_t origin;

@@ -11,6 +11,18 @@ int gsc_runtime_select_r233_namespace_animation_length(GscRuntime *r,const GscAn
  h=*input;if(!h.query||!anim_data_current(r,NULL)||memcmp(input,&h,sizeof(h))||!animation_namespace_scope(r))return 0;
  r->animation_length=h;r->animation_length_enabled=1;return 1;
 }
+/* Explicit independent map selection; actor/turret selectors remain strict. */
+int gsc_program_select_map_animation_length(GscProgram*g){
+ if(!g||!g->map_animation_names.count||!g->map_source_float_selected||g->map_animation_length_selected||!gsc_program_select_r233_namespace_animation_length(g))return 0;
+ g->map_animation_length_selected=1;return 1;
+}
+int gsc_runtime_select_map_animation_length(GscRuntime*r,const GscAnimationLengthHost*input){
+ GscAnimationLengthHost host;const GscProgram*program;uint64_t instance,catalog;
+ if(!input||!animation_namespace_quiescent(r)||!animation_namespace_scope(r)||!r->program->map_animation_length_selected||!r->map_source_float_enabled||r->turret_animations_enabled||r->animation_length_enabled||runtime_private_overlap(r,input,sizeof(*input)))return 0;
+ host=*input;if(!host.query)return 0;program=r->program;instance=r->array_token;catalog=r->animation_namespace.identity;
+ if(!anim_data_current(r,NULL)||!animation_namespace_quiescent(r)||!animation_namespace_scope(r)||r->program!=program||r->array_token!=instance||r->animation_namespace.identity!=catalog||r->animation_length_enabled||memcmp(input,&host,sizeof(host)))return 0;
+ r->animation_length=host;r->animation_length_enabled=1;return 1;
+}
 typedef struct {GscRuntime*r;Task*task;uint64_t serial,instance,catalog;int now,checking,cancelled;
  GscAnimationLengthHost host;GscAnimationLengthRequest *input,copy;} NamespaceLengthLease;
 static int namespace_length_scope(const NamespaceLengthLease*l){GscRuntime*r=l->r;
@@ -32,7 +44,7 @@ static int namespace_length_call(GscRuntime*r,const Value*args,int argc,int sele
  if(r->animation_length_busy||r->entity_field_busy||r->entity_method_busy||r->entity_inheritance_busy||r->entity_prepare_busy||r->entity_certificate_busy)return rfail(r,line,"namespace animation length callback reentered");
  if(args[0].kind!=V_NAMESPACED_ANIMATION||!animation_namespace_value_valid(r,args))return rfail(r,line,"getanimlength requires a current namespace animation");
  entry=&r->animation_namespace.entries[args[0].object-1];
- if(entry->catalog>=2||!entry->declaration.ordinal||(entry->declaration.flags&GSC_ANIMATION_NODE_BRANCH))return rfail(r,line,"getanimlength requires a declared leaf animation");
+ if((r->program->map_animation_length_selected?entry->catalog>=r->program->map_animation_names.count:entry->catalog>=2)||!entry->declaration.ordinal||(entry->declaration.flags&GSC_ANIMATION_NODE_BRANCH))return rfail(r,line,"getanimlength requires a declared leaf animation");
  memset(&q,0,sizeof(q));q.runtime_identity=r->array_token;q.ordinal=entry->declaration.ordinal;q.flags=entry->declaration.flags;
  strcpy(q.tree,r->animation_namespace.catalogs[entry->catalog].tree);strcpy(q.name,entry->declaration.name);
  /* The selected native query materializes binary32 independently of the
@@ -47,4 +59,18 @@ static int namespace_length_call(GscRuntime*r,const Value*args,int argc,int sele
  if(!animation_length_ratio(reply.frames,reply.fps,rounding,&bits,&exact))return rfail(r,line,"namespace length metadata outside validated domain");
  memset(&value,0,sizeof(value));value.kind=V_NUMBER;memcpy(&value.number,&bits,4);*out=value;return 1;
 retired:r->animation_length_busy=0;return r->error[0]?0:rfail(r,line,"namespace length task/resources retired or intent changed");
+}
+
+int gsc_runtime_map_animation_metadata_request(const GscRuntime*r,unsigned index,GscAnimationLengthRequest*out){
+ GscAnimationLengthRequest q;unsigned i,n=0;
+ if(!out||!animation_namespace_quiescent(r)||!animation_namespace_scope(r)||!r->program->map_animation_length_selected||!r->animation_length_enabled||runtime_private_overlap(r,out,sizeof(*out)))return -1;
+ for(i=0;i<(unsigned)r->animation_namespace.entry_count;i++){
+  const AnimationNamespaceEntry*e=r->animation_namespace.entries+i;
+  if(e->declaration.flags||!e->declaration.ordinal)continue;
+  if(n++!=index)continue;
+  if(e->catalog>=r->program->map_animation_names.count)return -1;
+  memset(&q,0,sizeof(q));q.runtime_identity=r->array_token;q.ordinal=e->declaration.ordinal;q.flags=e->declaration.flags;
+  strcpy(q.tree,r->animation_namespace.catalogs[e->catalog].tree);strcpy(q.name,e->declaration.name);*out=q;return 1;
+ }
+ return 0;
 }

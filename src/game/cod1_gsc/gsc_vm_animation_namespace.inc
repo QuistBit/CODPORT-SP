@@ -4,8 +4,8 @@ static const char *const animation_namespace_trees[GSC_ANIMATION_NAMESPACE_CATAL
     "generic_human","animation_rig_gear_trainingjump","animation_rig_wire_trainingjump"
 };
 static const char *const r232_animation_namespace_trees[4]={"generic_human","mg42","animation_rig_gear_trainingjump","animation_rig_wire_trainingjump"};
-static int animation_namespace_count(const GscProgram *g){return g->training_rigs_selected?4:g->turret_animations_selected?2:GSC_ANIMATION_NAMESPACE_CATALOGS;}
-static const char *animation_namespace_name(const GscProgram *g,int n){return g->turret_animations_selected?r232_animation_namespace_trees[n]:animation_namespace_trees[n];}
+static int animation_namespace_count(const GscProgram *g){return g->map_animation_names.count?(int)g->map_animation_names.count:g->training_rigs_selected?4:g->turret_animations_selected?2:GSC_ANIMATION_NAMESPACE_CATALOGS;}
+static const char *animation_namespace_name(const GscProgram *g,int n){return g->map_animation_names.count?g->map_animation_names.names[n]:g->turret_animations_selected?r232_animation_namespace_trees[n]:animation_namespace_trees[n];}
 static int animation_namespace_tree_index_for_program(const GscProgram *g,const char *name){int n;for(n=0;n<animation_namespace_count(g);n++)if(!strcmp(name,animation_namespace_name(g,n)))return n;return -1;}
 static int animation_namespace_kind(int kind){return kind==V_ANIMATION_TREE||kind==V_NAMESPACED_ANIMATION;}
 static int animation_namespace_tree_index(const char *name){int n;for(n=0;n<GSC_ANIMATION_NAMESPACE_CATALOGS;++n)if(!strcmp(name,animation_namespace_trees[n]))return n;return -1;}
@@ -14,6 +14,20 @@ int gsc_program_select_animation_namespace(GscProgram *g){
        !g->anim_data_selected||g->animation_namespace_selected||g->animation_refs_selected||
        g->start_origin_selected||g->animation_length_selected||g->animation_methods_selected)return 0;
     g->animation_namespace_selected=1;return 1;
+}
+/* Independent immutable declared namespace; no actor, playback or resource
+ * sampling capability follows from selecting these names. */
+int gsc_program_select_map_animation_namespace(GscProgram*g,const GscMapAnimationNames*input){
+ GscMapAnimationNames copy;unsigned i,j,k;
+ if(!g||!input||g->map_animation_names.count||g->turret_animations_selected||g->training_rigs_selected)return 0;
+ copy=*input;if(!copy.count||copy.count>GSC_MAP_ANIMATION_CATALOGS)return 0;
+ for(i=0;i<copy.count;i++){
+  if(!copy.names[i][0]||!memchr(copy.names[i],0,64))return 0;
+  for(k=0;copy.names[i][k];k++)if(!((copy.names[i][k]>='a'&&copy.names[i][k]<='z')||(copy.names[i][k]>='0'&&copy.names[i][k]<='9')||copy.names[i][k]=='_'))return 0;
+  for(j=0;j<i;j++)if(!strcmp(copy.names[i],copy.names[j]))return 0;
+ }
+ if(!gsc_program_select_animation_namespace(g))return 0;
+ g->map_animation_names=copy;g->native_animation_roots_selected=1;return 1;
 }
 static int animation_namespace_scope(const GscRuntime *r){
     const AnimationNamespace *space;
@@ -86,21 +100,24 @@ static int animation_namespace_bind_atom(const GscProgram *program,const GscAnim
     }
     atom->kind=V_NAMESPACED_ANIMATION;atom->object=(uint32_t)j+1;return 1;
 }
-static int animation_namespace_select(GscRuntime *r,const GscAnimationNamespaceSelection *input,const GscAnimationCatalog *wire){
+static int animation_namespace_select_full(GscRuntime *r,const GscAnimationNamespaceSelection *input,const GscAnimationCatalog *wire,const GscMapAnimationNamespaceSelection *map){
     static uint64_t serial;static int selecting;
     GscAnimationNamespaceSelection selection;AnimationNamespace *staged=NULL;
     const GscProgram *program;GscMapExecutionCertificate certificate;uint64_t runtime_identity;
     int n,k,accepted;unsigned char admitted[MAX_FUNCS],required[MAX_FUNCS];int scoped;
-    if(selecting||serial==UINT64_MAX||!input||!animation_namespace_quiescent(r)||
+    const void *descriptor=map?(const void*)map:(const void*)input;size_t descriptor_size=map?sizeof(*map):sizeof(*input);
+    if(selecting||serial==UINT64_MAX||!descriptor||(map&&input)||!animation_namespace_quiescent(r)||
        !r->program->animation_namespace_selected||!r->anim_data_enabled||r->animation_refs_enabled||
-       r->animation_namespace_enabled||runtime_private_overlap(r,input,sizeof(*input)))goto refused;
-    const GscAnimationCatalog *catalogs[4];
-    selection=*input;memcpy(catalogs,selection.catalogs,sizeof(selection.catalogs));catalogs[3]=wire;certificate=selection.map_certificate;
+       r->animation_namespace_enabled||runtime_private_overlap(r,descriptor,descriptor_size)||
+       (!!map!=!!r->program->map_animation_names.count))goto refused;
+    const GscAnimationCatalog *catalogs[GSC_MAP_ANIMATION_CATALOGS]={0};
+    if(map){GscMapAnimationNamespaceSelection copy=*map;for(n=0;n<GSC_MAP_ANIMATION_CATALOGS;n++)catalogs[n]=copy.catalogs[n];certificate=copy.map_certificate;}
+    else{selection=*input;for(n=0;n<GSC_ANIMATION_NAMESPACE_CATALOGS;n++)catalogs[n]=selection.catalogs[n];catalogs[3]=wire;certificate=selection.map_certificate;}
     if(!certificate.receipt||!certificate.current||certificate.receipt!=r->anim_data.receipt||certificate.current!=r->anim_data.current)goto refused;
     staged=GSC_RUNTIME_CALLOC(1,sizeof(*staged));if(!staged)goto refused;staged->runtime_identity=r->array_token;staged->program=r->program;staged->map_certificate=certificate;
     for(n=0;n<animation_namespace_count(r->program);++n){const GscAnimationCatalog *c=catalogs[n];
         if(!c||runtime_private_overlap(r,c,sizeof(*c))||
-           Cod1ModelStringOverlap(c,sizeof(*c),input,sizeof(*input))||!animation_namespace_catalog_valid(c,n,r->program))goto refused;
+           Cod1ModelStringOverlap(c,sizeof(*c),descriptor,descriptor_size)||!animation_namespace_catalog_valid(c,n,r->program))goto refused;
         for(k=0;k<n;++k)if(Cod1ModelStringOverlap(c,sizeof(*c),catalogs[k],sizeof(*c)))goto refused;
         strcpy(staged->catalogs[n].tree,c->tree);staged->catalogs[n].declared_count=c->count;staged->catalogs[n].source_token=c->token;
     }
@@ -135,6 +152,9 @@ static int animation_namespace_select(GscRuntime *r,const GscAnimationNamespaceS
     staged->identity=++serial;r->animation_namespace=*staged;GSC_RUNTIME_FREE(staged);staged=NULL;if(scoped)memcpy(r->function_admission,admitted,sizeof(admitted));r->animation_namespace_enabled=1;return 1;
 refused:GSC_RUNTIME_FREE(staged);return 0;
 }
+
+static int animation_namespace_select(GscRuntime*r,const GscAnimationNamespaceSelection*input,const GscAnimationCatalog*wire){return animation_namespace_select_full(r,input,wire,NULL);}
+int gsc_runtime_select_map_animation_namespace(GscRuntime*r,const GscMapAnimationNamespaceSelection*input){return animation_namespace_select_full(r,NULL,NULL,input);}
 
 static int animation_namespace_reference_value(GscRuntime *r,const Expr *e,int expression,int line,Value *out){
     int n;Value value;

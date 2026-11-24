@@ -4,7 +4,7 @@
 Return to Castle Wolfenstein single player GPL Source Code
 Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company. 
 
-This file is part of the Return to Castle Wolfenstein single player GPL Source Code (RTCW SP Source Code).  
+This file is part of the Return to Castle Wolfenstein single player GPL Source Code (В“RTCW SP Source CodeВ”).  
 
 RTCW SP Source Code is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -1364,6 +1364,8 @@ R_ModelInit
 void R_ModelInit( void ) {
 	model_t     *mod;
 
+	R_CV14ForgetEquivalences();
+
 	// leave a space for NULL model
 	tr.numModels = 0;
 
@@ -1944,6 +1946,8 @@ R_PurgeModels
 */
 void R_PurgeModels( int count ) {
 	static int lastPurged = 0;
+
+	R_CV14ForgetEquivalences();
 
 	//Com_Printf("R_PurgeModels\n");
 

@@ -790,13 +790,23 @@ int SV_PointContents( const vec3_t p, int passEntityNum ) {
  * model lane and its exact key; this never grants link/DObj mutation authority. */
 #include "../game/bg_cod1_unmounted_actor_wire.h"
 #include "../game/scripted_wire.h"
+#include "../game/source_pose_wire.h"
+static int CS_ActorSnapshotPose(const entityState_t *wire,int now){
+    if(wire->cod1TurretActorVersion==COD1_SOURCE_POSE_WIRE_VERSION)return C1SourcePoseWireValid(wire,now);
+    if(wire->cod1TurretActorVersion==COD1_TURRET_ACTOR_WIRE_GENERIC_VERSION ||
+       wire->cod1TurretActorVersion==COD1_TURRET_ACTOR_WIRE_VERSION)
+        return C1TAW_Valid(wire,now);
+    if(wire->cod1TurretActorVersion==COD1_SCRIPTED_ACTOR_WIRE_VERSION)
+        return C1ScriptedWireValid(wire,now);
+    return C1UAW_Valid(wire,now);
+}
 qboolean SV_Cod1UnmountedSnapshotCurrent(const sharedEntity_t *ent) {
  const cod1SpatialActorState_t *state;const cod1DObjInstance_t *object;int slot;
  if(!ent||!CS_TableReady()||!CM_HasV59())return qfalse;
  slot=ent->s.number;
  if(slot<0||slot>=sv.num_entities||slot>=ENTITYNUM_WORLD||SV_GentityNum(slot)!=ent||
     !(ent->r.svFlags&SVF_NOCLIENT)||ent->s.cod1TurretActorTick!=svs.time||
-    !(ent->s.cod1TurretActorVersion==COD1_SCRIPTED_ACTOR_WIRE_VERSION?C1ScriptedWireValid(&ent->s,svs.time):C1UAW_Valid(&ent->s,svs.time))||!CS_StateValid(slot,ent)||!CS_ModelLaneCurrent(slot))return qfalse;
+    !CS_ActorSnapshotPose(&ent->s,svs.time)||!CS_StateValid(slot,ent)||!CS_ModelLaneCurrent(slot))return qfalse;
  state=cod1SpatialActors+slot;object=cod1DObjInstances[slot];
  if(!state->hasDObj||!CS_KeyValid(&state->key)||!object||!CD_Associated(object)||
     !CS_KeyEqual(&state->key,&object->key)||object->entity!=ent||

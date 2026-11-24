@@ -5,7 +5,7 @@ static int float_arithmetic_active(const GscRuntime *r) {
     fn=task->frames[task->depth-1].fn;if(fn<0||fn>=r->program->func_count)return 0;
     module=r->program->funcs[fn].module;
     if(module<0||module>=r->program->module_count)return 0;
-    if(r->program->r232_source_float_selected&&r232_source_float_module(r->program->modules[module]))return 2;
+    if(r->program->r232_source_float_selected&&(r232_source_float_module(r->program->modules[module])||r->map_source_float_enabled))return 2;
     return !strcmp(r->program->modules[module],r->program->float_arithmetic_module);
 }
 int gsc_runtime_select_module_float_arithmetic(GscRuntime *r) {

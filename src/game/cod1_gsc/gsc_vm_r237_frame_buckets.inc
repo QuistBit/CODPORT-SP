@@ -100,7 +100,30 @@ static int r237_timed_wait(GscRuntime *r,Task *t,const Value *value,int line){
  if(bootstrap)r->training_tower_bootstrap_waited=1;
  return 1;
 }
-static int r237_drain_bucket(GscRuntime *r,int *budget){
+static int r237_dispatch_task(GscRuntime *r,Task *chosen,int *budget,uint64_t stamp){
+ int ok;
+  chosen->r237_enqueued=0;chosen->r237_insertion=0;chosen->r243_time_root_incarnation=0;
+  if(!refresh_state_context(r,chosen)||!refresh_wait_owner(r,chosen))return 0;
+  if(!r237_owner_current(r,stamp))return rfail(r,0,"R237 time-root changed during queued certificate callbacks");
+  if(chosen->status!=TASK_DEAD){
+   chosen->status=TASK_READY;
+   if(chosen->event_scope==EVENT_ENTITY)clear_wait_owner(chosen);
+   r->executing_task=chosen;
+   configured_precache_dispatch_begin(r,chosen);
+   if(r->r238_array_value_cow_enabled)r->array_dispatch_root=chosen;
+   ok=r->results_enabled?run_task_results(r,chosen,budget):run_task(r,chosen,budget);
+   r->array_dispatch_root=NULL;r->array_next_scan=0;r->array_next_entry_scan=0;
+   configured_precache_dispatch_end(r,chosen);
+   r->executing_task=NULL;
+   if(!r237_owner_current(r,stamp))return rfail(r,0,"R237 time-root changed during source continuation");
+   if(!ok&&!(r->state_enabled&&chosen->status==TASK_DEAD&&!r->error[0]))return 0;
+   if(chosen->status==TASK_READY)return rfail(r,0,"R237 continuation returned without a suspension");
+  }
+  if(r->resources_enabled&&chosen->serial==r->resources_entry_serial)r->resources_closed=1;
+  if(chosen->status==TASK_DEAD&&chosen->results){GSC_RUNTIME_FREE(chosen->results);chosen->results=NULL;}
+ return 1;
+}
+static int r237_drain_bucket_slice(GscRuntime *r,int *budget,int (*expired)(void)){
  Task *chosen;int n,ok;uint64_t stamp=r237_owner_stamp(r);
  while(!r->error[0]){
   if(!r237_owner_current(r,stamp))return rfail(r,0,"R237 drain time-root retired");
@@ -116,25 +139,13 @@ static int r237_drain_bucket(GscRuntime *r,int *budget){
    }
   }
   if(!chosen)return 1;
-  chosen->r237_enqueued=0;chosen->r237_insertion=0;chosen->r243_time_root_incarnation=0;
-  if(!refresh_state_context(r,chosen)||!refresh_wait_owner(r,chosen))return 0;
-  if(!r237_owner_current(r,stamp))return rfail(r,0,"R237 time-root changed during queued certificate callbacks");
-  if(chosen->status!=TASK_DEAD){
-   chosen->status=TASK_READY;
-   if(chosen->event_scope==EVENT_ENTITY)clear_wait_owner(chosen);
-   r->executing_task=chosen;
-   configured_precache_dispatch_begin(r,chosen);
-   ok=r->results_enabled?run_task_results(r,chosen,budget):run_task(r,chosen,budget);
-   configured_precache_dispatch_end(r,chosen);
-   r->executing_task=NULL;
-   if(!r237_owner_current(r,stamp))return rfail(r,0,"R237 time-root changed during source continuation");
-   if(!ok&&!(r->state_enabled&&chosen->status==TASK_DEAD&&!r->error[0]))return 0;
-   if(chosen->status==TASK_READY)return rfail(r,0,"R237 continuation returned without a suspension");
-  }
-  if(r->resources_enabled&&chosen->serial==r->resources_entry_serial)r->resources_closed=1;
-  if(chosen->status==TASK_DEAD&&chosen->results){GSC_RUNTIME_FREE(chosen->results);chosen->results=NULL;}
+  if(!r237_dispatch_task(r,chosen,budget,stamp))return 0;
+  if(expired && expired())return 2;
  }
  return 0;
+}
+static int r237_drain_bucket(GscRuntime *r,int *budget){
+ return r237_drain_bucket_slice(r,budget,NULL);
 }
 static int r237_finish_operation(GscRuntime *r,int ok){
  /* A genuine bootstrap operation may finish before the configured root is
@@ -143,6 +154,25 @@ static int r237_finish_operation(GscRuntime *r,int ok){
  r->execution_budget=NULL;r->executing_task=NULL;r->advancing=0;
  if(!ok||r->error[0])return 0;
  endon_collect_retired(r);return array_collect_safe_point(r);
+}
+/* GAME 1ED87 enters the cached map function synchronously. The ordinary
+ * export7 frame runner later owns the other due/retained continuations. */
+static int r237_run_start_root(GscRuntime *r,uint64_t serial){
+ int n,budget=MAX_STEPS,ok;uint64_t stamp=r237_owner_stamp(r);
+ if(!r->r237_start_draining||r->r237_frame_open||r->now_ms||r237_bucket(r)||!r237_owner_current(r,stamp))return 0;
+ for(n=0;n<r->task_count;n++){
+  Task *task=task_at(r,n);
+  if(task->serial!=serial)continue;
+  if(task->status!=TASK_READY||!task->r237_enqueued||!task->r237_insertion||
+     task->r243_time_root_incarnation!=stamp||task->wake_ms!=0||task->depth!=1||
+     task->frames[0].fn!=r->program->entry_fn)return rfail(r,0,"cached map entry changed before dispatch");
+  r->advancing=1;r->execution_budget=&budget;
+  r->map_model_start_stamp=stamp;
+  ok=r237_dispatch_task(r,task,&budget,stamp);
+  r->map_model_start_stamp=0;
+  return r237_finish_operation(r,ok);
+ }
+ return rfail(r,0,"cached map entry missing");
 }
 static int r237_bootstrap_drain(GscRuntime *r){
  int budget=MAX_STEPS,ok;
@@ -166,22 +196,37 @@ static int r237_frame_valid(GscRuntime *r,uint64_t generation){
  generation==r->r237_frame_generation&&r237_bucket(r)>=0&&r237_bucket(r)<=r->r237_frame_target_ms&&
  r->r237_frame_target_ms==r->now_ms&&r->r237_frame_target_ms<=INT32_C(0xffffff);
 }
-int gsc_r237_run_current_bucket(GscRuntime *r,uint64_t generation){
- int ok;
- if(r&&r237_busy(r))return rfail(r,0,"reentrant R237 frame scheduler call");
- if(!r237_frame_valid(r,generation))return 0;
- r->advancing=1;r->execution_budget=&r->r237_frame_budget;
- ok=r237_drain_bucket(r,&r->r237_frame_budget);return r237_finish_operation(r,ok);
-}
-int gsc_r237_advance_exclusive(GscRuntime *r,uint64_t generation){
+int gsc_r237_frame_phase_slice(GscRuntime *r,uint64_t generation,int exclusive,int (*expired)(void)){
  int ok=1;
  if(r&&r237_busy(r))return rfail(r,0,"reentrant R237 frame scheduler call");
- if(!r237_frame_valid(r,generation))return 0;
+ if((exclusive!=0 && exclusive!=1) || !r237_frame_valid(r,generation))return 0;
  r->advancing=1;r->execution_budget=&r->r237_frame_budget;
- while(r237_bucket(r)<r->r237_frame_target_ms){
-  if(!r237_drain_bucket(r,&r->r237_frame_budget)){ok=0;break;}
+ while(!exclusive || r237_bucket(r)<r->r237_frame_target_ms){
+  ok=r237_drain_bucket_slice(r,&r->r237_frame_budget,expired);
+  if(ok==2){
+   /* The selected Task has already suspended or retired. There is no active
+    * stack, borrowed receiver, or array root to retain across the host call.
+    * Close precache and collect exactly once at the original phase boundary. */
+   r->execution_budget=NULL;r->advancing=0;
+   return 2;
+  }
+  if(!ok || !exclusive)break;
   if(!r237_bucket_set(r,r237_bucket(r)+1,r->r237_frame_time_root)){ok=0;break;}
  }
- if(ok)r->r237_frame_open=0;
+ if(ok && exclusive)r->r237_frame_open=0;
  return r237_finish_operation(r,ok);
+}
+int gsc_r237_run_current_bucket(GscRuntime *r,uint64_t generation){
+ return gsc_r237_frame_phase_slice(r,generation,0,NULL);
+}
+int gsc_r237_advance_exclusive(GscRuntime *r,uint64_t generation){
+ return gsc_r237_frame_phase_slice(r,generation,1,NULL);
+}
+
+/* GAME 4463C uses level.initializing, still set across cached map main
+ * and its synchronous children (1ED84..1ED8D). */
+int gsc_runtime_model_starting(const GscRuntime *r){
+    return r && r->map_model_start_stamp && r->executing_task && r->advancing &&
+        r->execution_budget && r->r237_start_draining && !r->r237_frame_open &&
+        !r->error[0] && r237_owner_current(r,r->map_model_start_stamp);
 }

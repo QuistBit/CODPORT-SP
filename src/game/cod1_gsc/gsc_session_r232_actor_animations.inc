@@ -10,6 +10,17 @@ int gsc_session_select_r232_actor_animations(GscSession *s,const GscActorAnimati
         return session_leave_rejected(s,"actor animation selection expired",error,cap);
     s->actor_animations=copy;s->actor_animations_enabled=1;s->busy=0;return 1;
 }
+int gsc_session_select_r400_source_animations(GscSession*s,const GscActorAnimationHost*input,char*error,size_t cap){
+ GscActorAnimationHost h;
+ if(!s||!input||(cap&&!error)||session_animation_namespace_private(s,input,sizeof(*input))||
+    session_animation_namespace_private(s,error,cap)||session_animation_namespace_overlap(input,sizeof(*input),error,cap))return 0;
+ h=*input;if(!h.validate||!h.invoke||!session_enter(s,error,cap))return 0;
+ if(s->view.state!=GSC_SESSION_EMPTY||s->program||s->runtime||!s->actor_animations_enabled||s->source_actor_animations_enabled)
+  return session_leave_rejected(s,"source animation provider requires idle exclusive Actor configuration",error,cap);
+ if(!session_animation_resources_current(s)||memcmp(input,&h,sizeof(h)))return session_leave_rejected(s,"source animation provider retired",error,cap);
+ s->source_actor_animations=h;s->source_actor_animations_enabled=1;s->busy=0;return 1;
+}
+
 typedef struct {SessionTurretAnimationLease base;GscActorAnimationHost host;SessionSourceAnimationLease*source;int checking;} SessionActorAnimationLease;
 static int session_actor_animation_scope(const SessionActorAnimationLease *l) {
     GscSession *s=l->base.session;
@@ -102,14 +113,16 @@ static int session_actor_animation_invoke(void *user,const GscActorAnimationRequ
     SessionSourceAnimationLease source;
     if(!s||!input||!current)return 0;
     owned=session_source_begin(s,input,current,context,&source);if(owned<0)return 0;
-    if(input->method==GSC_ACTOR_ANIMATION_FLAGGED_ALL){if(owned)return session_source_end(&source,0);return r243_command_session_invoke(s,input,error,cap,current,context);}
+    if(input->method==GSC_ACTOR_ANIMATION_FLAGGED_ALL&&!owned)return r243_command_session_invoke(s,input,error,cap,current,context);
     copy=original=*input;session_actor_animation_lease(s,&l,current,context);
+    if(owned)copy=source.gameQ;
     if(owned&&(!session_source_bind(&source,&l,&copy)||(cap&&!error)||
        session_animation_namespace_private(s,error,cap)||!gsc_runtime_r243_controller_storage_separate(s->runtime,error,cap)))goto done;
-    if(copy.runtime_identity!=l.base.instance||copy.now_ms!=l.base.now||!copy.catalog_identity||!session_actor_animation_current(&l))goto done;
+    if(original.runtime_identity!=l.base.instance||original.now_ms!=l.base.now||!original.catalog_identity||!session_actor_animation_current(&l))goto done;
     if(owned&&!session_source_enter_game(&source))goto done;
-    ok=l.host.invoke(l.host.user,&copy,error,cap,session_actor_animation_current,&l);
-    if(!(ok==1&&session_actor_animation_current(&l)&&!memcmp(&copy,&original,sizeof(copy))&&!memcmp(input,&original,sizeof(copy)))){ok=0;goto done;}
+    if(owned)ok=source.provider.invoke(source.provider.user,&copy,error,cap,session_actor_animation_current,&l);
+    else ok=l.host.invoke(l.host.user,&copy,error,cap,session_actor_animation_current,&l);
+    if(!(ok==1&&session_actor_animation_current(&l)&&!memcmp(&copy,owned?&source.gameQ:&original,sizeof(copy))&&!memcmp(input,&original,sizeof(copy)))){ok=0;goto done;}
     if(s->actor_animation_end_enabled&&original.method!=GSC_ACTOR_ANIMATION_ORIENT_ERROR_PREFIX){s->actor_animation_end_runtime=l.base.instance;s->actor_animation_end_catalog=original.catalog_identity;}
 done:if(owned)ok=session_source_end(&source,ok);return ok==1;
 }

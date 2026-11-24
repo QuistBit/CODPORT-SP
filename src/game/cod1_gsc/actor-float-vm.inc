@@ -15,7 +15,7 @@ static int r243_actor_float_vm_private(const void*p,size_t n){
   (r243ActorFloatActive&&Cod1ModelStringOverlap(p,n,r243ActorFloatActive,sizeof(*r243ActorFloatActive)));
 }
 int R243ProgramSelectActorFloat(GscProgram*g,unsigned mask){
- if(!mask||(mask&~3u)||!g||g->invalid||g->linked||g->module_count||g->expr_count||g->func_count||g->string_count||
+ if(!mask||(mask&~7u)||!g||g->invalid||g->linked||g->module_count||g->expr_count||g->func_count||g->string_count||
     !g->function_ref_syntax||!g->function_program_token||!g->anim_data_selected||!g->animation_namespace_selected||g->actor_float_selected)return 0;
  g->actor_float_selected=mask;return 1;
 }
@@ -43,7 +43,7 @@ static int r243_actor_float_scope(R243ActorFloatCall*c){
   t->depth>0&&t->depth<=MAX_FRAMES&& &t->frames[t->depth-1]==i->f&&i->f->fn==i->fn&&i->f->pc==i->pc;
 }
 int R243ActorFloatRuntimeMaskCurrent(const GscRuntime*r,unsigned mask){
- return r&&mask&&!(mask&~3u)&&r->actor_float_enabled&&r->actor_float_mask==mask&&r->program&&r->program->actor_float_selected==mask&&
+ return r&&mask&&!(mask&~7u)&&r->actor_float_enabled&&r->actor_float_mask==mask&&r->program&&r->program->actor_float_selected==mask&&
   (!r243ActorFloatActive||(r243ActorFloatActive->seal.r==r&&r243_actor_float_scope(r243ActorFloatActive)));
 }
 static int r243_actor_float_current(void*opaque){
@@ -93,7 +93,7 @@ static int r243_actor_float_call(GscRuntime*r,const Value*receiver,int method,in
  accepted=c.seal.host.query(c.seal.host.user,&c.q,&c.reply,c.error,sizeof(c.error),r243_actor_float_current,(void*)(uintptr_t)c.id.call);c.error[sizeof(c.error)-1]=0;
  if(!r243_actor_float_current((void*)(uintptr_t)c.id.call))goto done;
  if(accepted!=1){rfail(r,line,"actor float query native provider refused: %s",c.error[0]?c.error:"Actor/path owner unavailable");goto done;}
- if((c.reply.bits&0x80000000u)||(c.reply.bits&0x7f800000u)==0x7f800000u){rfail(r,line,"actor float query requires finite nonnegative float32 reply");goto done;}
+ if(!ActorFloatReplyValid(method,c.reply.bits)){rfail(r,line,"actor float query reply outside the selected method range");goto done;}
  memset(&value,0,sizeof(value));value.kind=V_NUMBER;memcpy(&value.number,&c.reply.bits,sizeof(c.reply.bits));ok=1;
 done:
  r243ActorFloatActive=NULL;r->actor_float_busy=0;r->entity_method_busy=0;

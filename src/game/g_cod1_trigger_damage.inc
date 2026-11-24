@@ -16,6 +16,17 @@ static int Cod1DamageTriggerSame(const GscEntityRef *ref) {
         e->takedamage==(e->spawnflags==3?qtrue:qfalse)&&
         (e->spawnflags==0||e->spawnflags==3);
 }
+/* GAME 38380 only sets this bit on trigger_damage. Keep it on the
+ * recorded allocation, independent of RTCW flags and authored spawnflags. */
+static GscEntityRef grenadeTouchOwner[MAX_GENTITIES];
+int G_Cod1EnableGrenadeTouchDamage(const GscEntityRef *ref){
+    if(!Cod1DamageTriggerSame(ref))return 0;
+    grenadeTouchOwner[ref->slot]=*ref;
+    return 1;
+}
+static int ScriptGrenadeTouch(const GscEntityRef *ref){
+    return !memcmp(ref,grenadeTouchOwner+ref->slot,sizeof(*ref));
+}
 /* A waiter's receiver is the brush allocation recorded by SP_trigger_damage.
  * Keep validating that same receiver through suspension and its timed return. */
 int G_Cod1GrenadeTargetThreadCurrent(const GscEntityRef *ref, uint64_t birth) {
@@ -107,16 +118,29 @@ int G_Cod1GrenadeDamageTriggers(const vec3_t start,const vec3_t end,gentity_t *m
  for(j=0;j<3;j++)if(!isfinite(start[j])||!isfinite(end[j]))return 1;
  epoch=shot.epoch;owner=missile->r.ownerNum;
  for(i=MAX_CLIENTS;i<level.num_entities&&i<MAX_GENTITIES;i++)
-  if(Cod1DamageTriggerSame(&cod1DamageTriggerRefs[i])&&g_entities[i].spawnflags==3)refs[count++]=cod1DamageTriggerRefs[i];
+  if(Cod1DamageTriggerSame(&cod1DamageTriggerRefs[i])&&(g_entities[i].spawnflags==3||ScriptGrenadeTouch(cod1DamageTriggerRefs+i)))refs[count++]=cod1DamageTriggerRefs[i];
  for(i=0;i<count;i++){
   trace_t trace;gentity_t *e;int wait,model;vec3_t origin,angles;
   if(epoch!=G_Cod1EntityMapEpoch()||now!=level.time||!G_Cod1EntitySameAllocation(&shot)||!G_Cod1EntitySameAllocation(&player)||!G_Cod1GscTestGrenadeDamageActive()||missile->r.ownerNum!=owner||missile->s.eType!=ET_MISSILE||missile->s.weapon!=WP_GRENADE_PINEAPPLE)return 0;
-  if(!Cod1DamageTriggerSame(&refs[i])||g_entities[refs[i].slot].spawnflags!=3||now<cod1DamageTriggerDeadline[refs[i].slot])continue;
+  if(!Cod1DamageTriggerSame(&refs[i])||(!ScriptGrenadeTouch(refs+i)&&(g_entities[refs[i].slot].spawnflags!=3||now<cod1DamageTriggerDeadline[refs[i].slot])))continue;
   e=&g_entities[refs[i].slot];model=e->s.modelindex;VectorCopy(e->r.currentOrigin,origin);VectorCopy(e->r.currentAngles,angles);
   trap_TraceUseEntity(&trace,start,end,(int)refs[i].slot);
   if(epoch!=G_Cod1EntityMapEpoch()||now!=level.time||!G_Cod1EntitySameAllocation(&shot)||!G_Cod1EntitySameAllocation(&player)||!G_Cod1GscTestGrenadeDamageActive()||missile->r.ownerNum!=owner||missile->s.eType!=ET_MISSILE||missile->s.weapon!=WP_GRENADE_PINEAPPLE)return 0;
   if(!Cod1DamageTriggerSame(&refs[i])||model!=g_entities[refs[i].slot].s.modelindex||!VectorCompare(origin,g_entities[refs[i].slot].r.currentOrigin)||!VectorCompare(angles,g_entities[refs[i].slot].r.currentAngles)||!isfinite(trace.fraction)||trace.fraction<0||trace.fraction>1)continue;
   if(!trace.startsolid&&!trace.allsolid&&trace.fraction==1)continue;
+  if(ScriptGrenadeTouch(refs+i)){
+   /* 442D0 pushes the actual missile and its damage. VM parameters read
+    * in reverse push order, as in the original window's waittill. */
+   memset(values,0,sizeof(values));
+   values[0].kind=GSC_EVENT_NUMBER;values[0].number=(float)missile->damage;
+   values[1].kind=GSC_EVENT_ENTITY;values[1].entity=shot;
+   G_Cod1GscTestEntityEventWithPayload(e,"damage",values,2,&awakened);
+   if(!G_Cod1EntitySameAllocation(&shot))return 0;
+   if(!Cod1DamageTriggerSame(&refs[i]))continue;
+   if(g_debugMove.integer>1)
+    G_Printf("[grenade touch] owner=%u shot=%u damage=%d awakened=%d\n",refs[i].slot,shot.slot,missile->damage,awakened);
+  }
+  if(g_entities[refs[i].slot].spawnflags!=3||now<cod1DamageTriggerDeadline[refs[i].slot])continue;
   e=&g_entities[refs[i].slot];if(!isfinite(e->wait)||e->wait<0||e->wait>3600)return 1;
   wait=(int)ceil((double)e->wait*1000);if(now>INT_MAX-wait)return 1;
   cod1DamageTriggerDeadline[refs[i].slot]=now+wait;

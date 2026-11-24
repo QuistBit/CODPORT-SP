@@ -8,6 +8,7 @@
 struct gentity_s;
 /* DATA receipt for the exact current early compiled Session; no entry permit. */
 uint64_t G_Cod1GscTestEarlyProgramIdentity(uint64_t epoch,uint64_t receipt);
+void G_Cod1GscCampaignMapProfile(void);
 int G_Cod1GscTestPrepareBeforeBsp( int levelTime );
 int G_Cod1GscTestPreparePlacedResources(void);
 struct cod1ActorBspConstructionOwner_s;
@@ -22,6 +23,7 @@ void G_Cod1GscLoopSoundFrame(void);
 void G_Cod1GscVoiceReply(int clientNum);
 void G_Cod1LookAtRunFrame(void);
 void G_Cod1GscTestRunFrame( int levelTime );
+int G_Cod1GscTestRunFrameSlice(int levelTime,int (*expired)(void));
 void G_Cod1GscTestShutdown( void );
 void G_Cod1GscTestBeforeLoad( void );
 /* Unsupported VM state must never be accepted as an RTCW raw save. */
@@ -40,6 +42,7 @@ int G_Cod1GscTestEntityUseEvent( struct gentity_s *owner, struct gentity_s *play
 /* Called only after the real ClientBegin/ClientSpawn has completed. */
 void G_Cod1GscTestClientSpawned( struct gentity_s *player );
 #else
+#define G_Cod1GscCampaignMapProfile() ((void)0)
 #define G_Cod1GscTestPrepareBeforeBsp(t) (1)
 #define G_Cod1GscTestGraphBeforePlayer(n) (1)
 #define G_Cod1GscTestGraphCommand(n) (0)
@@ -51,6 +54,7 @@ void G_Cod1GscTestClientSpawned( struct gentity_s *player );
 #define G_Cod1GscVoiceReply(n) ((void)0)
 #define G_Cod1GscTestPreparePlacedResources() (1)
 #define G_Cod1GscTestRunFrame(t) ((void)0)
+#define G_Cod1GscTestRunFrameSlice(t, expired) 1
 #define G_Cod1GscTestShutdown() ((void)0)
 #define G_Cod1GscTestBeforeLoad() ((void)0)
 #define G_Cod1GscTestBlocksRawSave() (0)

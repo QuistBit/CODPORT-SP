@@ -13,7 +13,7 @@ static int SpawnerPosePrivate(const void *p,size_t n) {
         Cod1SpawnerOverlap(p,n,&g_gametype,sizeof(g_gametype)) ||
         Cod1SpawnerOverlap(p,n,&cod1AiDomainAccounted,sizeof(cod1AiDomainAccounted)) ||
         Cod1SpawnerOverlap(p,n,&cod1AiCoverage,sizeof(cod1AiCoverage)) ||
-        Cod1SpawnerOverlap(p,n,cod1Spawners,sizeof(cod1Spawners)) ||
+        Cod1SpawnerOverlap(p,n,&cod1SpawnerStorage,sizeof(cod1SpawnerStorage)) ||
         Cod1SpawnerOverlap(p,n,&cod1SpawnerEpoch,sizeof(cod1SpawnerEpoch)) ||
         Cod1SpawnerOverlap(p,n,&cod1SpawnerIntakeSerial,sizeof(cod1SpawnerIntakeSerial)) ||
         Cod1SpawnerOverlap(p,n,&cod1SpawnerPoseHost,sizeof(cod1SpawnerPoseHost)) ||

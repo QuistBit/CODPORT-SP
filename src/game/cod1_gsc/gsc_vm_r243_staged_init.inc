@@ -72,7 +72,7 @@ static int r243s_init_immutable(const R243SInitCall*c,int prepop){
  return !memcmp(&observed,&o->seal,sizeof(observed));
 }
 static int r243s_init_member(const GscRuntime*r,const Task*t){
- int n,limit;if(!r||!t)return 0;limit=r->lifetime_enabled?GSC_LIFETIME_TASK_CAPACITY:MAX_THREADS;
+ int n,limit;if(!r||!t)return 0;limit=task_directory_limit(r);
  if(r->task_count<0||r->task_count>limit)return 0;
  for(n=0;n<r->task_count;n++)if(task_at(r,n)==t)return 1;return 0;
 }

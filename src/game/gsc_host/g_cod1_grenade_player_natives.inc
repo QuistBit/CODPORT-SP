@@ -19,6 +19,7 @@ static int GrenadePlayerNativeInvoke(void *user,const GscPlayerNativeRequest *in
     uint64_t serial;
     (void)user;
     if(!GrenadePlayerBuffers(input,out,error,size))return 0;
+    if(input->kind!=GSC_PLAYER_SET_ANGLES&&(input->angles_bits[0]||input->angles_bits[1]||input->angles_bits[2]))return 0;
     if(input->kind!=GSC_PLAYER_GET_FRACTION_MAX_AMMO)
         return PlayerNativeInvoke(NULL,input,out,error,size,current,context);
     if(!current)return 0;

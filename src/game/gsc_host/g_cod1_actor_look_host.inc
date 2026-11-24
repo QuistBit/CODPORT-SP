@@ -1,3 +1,5 @@
+static int ActorProneFrame(const GscEntityRef*,int,int(*)(void*),void*);
+static int ActorOrientationFrame(const GscEntityRef*,int,int(*)(void*),void*);
 /* Included after the concrete generic graph transaction owner and current-tag
  * service. No successful generic visibility/perception replacement is supplied. */
 #include "../g_cod1_actor_look.h"
@@ -5,11 +7,15 @@
 #include "../g_cod1_actor_unmounted_tags.h"
 static struct {int busy,cancelled;uint64_t serial;void*stage;size_t bytes;} cod1ActorLookOperation;
 static struct {uint64_t epoch,lease;int tick;} cod1ActorLookClocks[COD1_ACTOR_CAPACITY];
+typedef struct {uint64_t epoch,lease;int tick,valid;float origin[3],forward[3];} C1AMuzzle;
+static C1AMuzzle cod1ActorMuzzles[COD1_ACTOR_CAPACITY];
+typedef struct {uint64_t epoch,lease;int tick,valid;} C1AShotClock;
+static C1AShotClock cod1ActorShotClocks[COD1_ACTOR_CAPACITY];
 static GscActorLookHost cod1ActorLookFacade;
 static GscSpatialNativeHost cod1ActorEyeFacade;
-static int ActorLookPrivate(const void*p,size_t n){return ActorOverlap(p,n,&cod1ActorLookOperation,sizeof(cod1ActorLookOperation))||ActorOverlap(p,n,cod1ActorLookClocks,sizeof(cod1ActorLookClocks))||ActorOverlap(p,n,&cod1ActorLookFacade,sizeof(cod1ActorLookFacade))||ActorOverlap(p,n,&cod1ActorEyeFacade,sizeof(cod1ActorEyeFacade))||ActorOverlap(p,n,cod1ActorLookOperation.stage,cod1ActorLookOperation.bytes);}
-static void ActorLookReset(void){if(cod1ActorLookOperation.busy)cod1ActorLookOperation.cancelled=1;if(cod1ActorLookOperation.serial!=UINT64_MAX)cod1ActorLookOperation.serial++;memset(cod1ActorLookClocks,0,sizeof(cod1ActorLookClocks));}
-typedef struct {GscEntityRef entity;cod1ActorLease_t lease;uint64_t epoch,serial;int now;const void*source;size_t bytes;const void*copy;int(*current)(void*);void*ctx;} C1ALCall;
+static int ActorLookPrivate(const void*p,size_t n){return ActorOverlap(p,n,cod1ActorShotClocks,sizeof(cod1ActorShotClocks))||ActorOverlap(p,n,cod1ActorMuzzles,sizeof(cod1ActorMuzzles))||ActorOverlap(p,n,&cod1ActorLookOperation,sizeof(cod1ActorLookOperation))||ActorOverlap(p,n,cod1ActorLookClocks,sizeof(cod1ActorLookClocks))||ActorOverlap(p,n,&cod1ActorLookFacade,sizeof(cod1ActorLookFacade))||ActorOverlap(p,n,&cod1ActorEyeFacade,sizeof(cod1ActorEyeFacade))||ActorOverlap(p,n,cod1ActorLookOperation.stage,cod1ActorLookOperation.bytes);}
+static void ActorLookReset(void){if(cod1ActorLookOperation.busy)cod1ActorLookOperation.cancelled=1;if(cod1ActorLookOperation.serial!=UINT64_MAX)cod1ActorLookOperation.serial++;memset(cod1ActorLookClocks,0,sizeof(cod1ActorLookClocks));memset(cod1ActorMuzzles,0,sizeof(cod1ActorMuzzles));memset(cod1ActorShotClocks,0,sizeof(cod1ActorShotClocks));}
+typedef struct {GscEntityRef entity;cod1ActorLease_t lease;uint64_t epoch,serial;int now,sourceOwned;const void*source;size_t bytes;const void*copy;int(*current)(void*);void*ctx;} C1ALCall;
 static int ActorLookScope(C1ALCall*c){cod1ActorLease_t lease;
  return c&&cod1ActorLookOperation.busy&&!cod1ActorLookOperation.cancelled&&c->serial==cod1ActorLookOperation.serial&&c->epoch==cod1EntityEpoch&&cod1EntityReady&&!level.spawning&&!level.restarted&&level.time==c->now&&ActorMapAvailable()&&TurretAnimationMapCurrent(cod1TurretAnimationReceipt)&&
   ActorGoalBuffers(c->source,c->bytes,NULL,0,NULL,0)&&!ActorLookPrivate(c->source,c->bytes)&&!memcmp(c->source,c->copy,c->bytes)&&ActorGoalLease(&c->entity,&lease)&&!memcmp(&lease,&c->lease,sizeof(lease));
@@ -77,12 +83,31 @@ static int ActorLookApply(C1GARecord*r,void*user){C1ALMutation*m=user;c1al14Stat
  }
  memcpy(r->lookCells,&result.state,64);return 1;
 }
-static int ActorLookInvoke(void*user,const GscActorLookRequest*input,GscActorLookReply*out,char*error,size_t cap,int(*current)(void*),void*ctx){
+#include "g_cod1_actor_may_move.inc"
+#include "g_cod1_actor_check_prone.inc"
+#include "g_cod1_actor_canshoot.inc"
+#include "g_cod1_actor_shoot.inc"
+#include "g_cod1_actor_aim_at_pos.inc"
+#include "g_cod1_actor_traverse_methods.inc"
+static int ActorLookInvokeCore(void*user,const GscActorLookRequest*input,GscActorLookReply*out,char*error,size_t cap,int(*current)(void*),void*ctx,int sourceOwned){
  C1ALCall c;C1ALMutation m;GscActorLookReply reply;cod1ActorNativeData_t native;gentity_t body;float origin[3],angles[3],matrix[16];int ok=0;(void)user;
  if(!input||!out||!ActorGoalBuffers(input,sizeof(*input),out,sizeof(*out),error,cap)||ActorLookPrivate(out,sizeof(*out))||ActorLookPrivate(error,cap))return 0;
- memset(&m,0,sizeof(m));m.q=*input;memset(&reply,0,sizeof(reply));if(!m.q.runtime_identity||!m.q.catalog_identity||m.q.precision_bits!=53||m.q.rounding||m.q.method<1||m.q.method>7)return 0;
+ memset(&m,0,sizeof(m));m.q=*input;memset(&reply,0,sizeof(reply));if(!m.q.runtime_identity||!m.q.catalog_identity||m.q.precision_bits!=53||m.q.rounding||m.q.method<1||m.q.method>GSC_ACTOR_NEGOTIATION_END)return 0;
  if(!ActorLookBegin(&c,&m.q.entity,m.q.now_ms,input,sizeof(*input),&m.q,current,ctx))return 0;
- if(m.q.method==GSC_ACTOR_LOOK_TAG_ORIGIN){
+ c.sourceOwned=sourceOwned;
+ if(m.q.method==GSC_ACTOR_TRAVERSE_MODE||m.q.method==GSC_ACTOR_NEGOTIATION_END){
+  ok=ActorTraverseMethod(&c,&m.q,&reply,error,cap);
+ }else if(m.q.method==GSC_ACTOR_LOOK_CHECK_PRONE){
+  ok=ActorCheckProne(&c,&m.q,&reply,error,cap);
+ }else if(m.q.method==GSC_ACTOR_LOOK_MAY_MOVE){
+  ok=ActorMayMoveToPoint(&c,&m.q,&reply,error,cap);
+ }else if(m.q.method==GSC_ACTOR_LOOK_AIM_AT_POS){
+  ok=ActorAimAtPos(&c,&m.q,&reply,error,cap);
+ }else if(m.q.method==GSC_ACTOR_LOOK_SHOOT){
+  ok=ActorShoot(&c,&m.q,&reply,error,cap);
+ }else if(m.q.method==GSC_ACTOR_LOOK_CAN_SHOOT){
+  ok=ActorCanShoot(&c,&m.q,&reply,error,cap);
+ }else if(m.q.method==GSC_ACTOR_LOOK_TAG_ORIGIN){
   if(!memchr(m.q.tag,0,sizeof(m.q.tag))||!m.q.tag[0])goto done;
   native=cod1Actors[c.lease.actorIndex].nativeData;body=g_entities[c.entity.slot];
   if(!ActorLookPreparePose(&c)||!ActorLookTagMatrix(&c,m.q.tag,matrix)||!ActorLookFence(&c)||
@@ -97,13 +122,38 @@ static int ActorLookInvoke(void*user,const GscActorLookRequest*input,GscActorLoo
    * clear ray is not that perception authority; refuse until it is supplied. */
   goto done;
  }else{
+  c1al14State_t prior;
+  if(g_debugMove.integer && m.q.method==GSC_ACTOR_LOOK_TARGET)
+   memcpy(&prior,cod1GenericActors[c.lease.actorIndex].lookCells,sizeof(prior));
   if(!ActorGenericTransaction(&m.q.entity,m.q.runtime_identity,m.q.catalog_identity,m.q.now_ms,input,sizeof(*input),error,cap,ActorLookFence,&c,ActorLookApply,&m))goto done;
+  if(g_debugMove.integer && m.q.method==GSC_ACTOR_LOOK_TARGET && !prior.active){
+   c1al14State_t state;
+   memcpy(&state,cod1GenericActors[c.lease.actorIndex].lookCells,sizeof(state));
+   G_Printf("[look acquired] owner=%u name=%s time=%d ready=%u active=%u speedBefore=%.8g speed=%.8g xyz=%.9g,%.9g,%.9g\n",
+    c.entity.slot,g_entities[c.entity.slot].targetname?g_entities[c.entity.slot].targetname:"",
+    c.now,state.ready,state.active,prior.speed,state.speed,state.target[0],state.target[1],state.target[2]);
+  }
   if(m.q.method==GSC_ACTOR_LOOK_NODES){cod1ActorLookClocks[c.lease.actorIndex].epoch=c.entity.epoch;cod1ActorLookClocks[c.lease.actorIndex].lease=c.lease.serial;cod1ActorLookClocks[c.lease.actorIndex].tick=m.q.now_ms;}
   reply.kind=GSC_ACTOR_LOOK_RESULT_VOID;ok=1;
  }
-done:if(ok&&(!ActorLookFence(&c)||!ActorGoalBuffers(input,sizeof(*input),out,sizeof(*out),error,cap)||ActorLookPrivate(out,sizeof(*out))||ActorLookPrivate(error,cap)))ok=0;
+done:if(ok&&(!(sourceOwned?(ActorLookScope(&c)&&ActorControllerLookSourcePure()):ActorLookFence(&c))||!ActorGoalBuffers(input,sizeof(*input),out,sizeof(*out),error,cap)||ActorLookPrivate(out,sizeof(*out))||ActorLookPrivate(error,cap)))ok=0;
  if(ok)*out=reply;cod1ActorLookOperation.busy=0;return ok;
 }
+static int ActorLookInvoke(void*user,const GscActorLookRequest*input,GscActorLookReply*out,char*error,size_t cap,int(*current)(void*),void*ctx){
+ GscActorLookRequest q;int owned,ok;
+ if(!input||!out||!current||!ActorGoalBuffers(input,sizeof(*input),out,sizeof(*out),error,cap)||ActorLookPrivate(input,sizeof(*input))||ActorLookPrivate(out,sizeof(*out))||ActorLookPrivate(error,cap))return 0;
+ q=*input;
+ if(q.method!=GSC_ACTOR_LOOK_AIM_AT_POS)return ActorLookInvokeCore(user,input,out,error,cap,current,ctx,0);
+ owned=ActorControllerLookSourceEnter(&input->entity,q.runtime_identity,q.catalog_identity,q.now_ms,input,sizeof(*input),current,ctx,&q);
+ if(owned<0)return 0;
+ ok=ActorLookInvokeCore(user,input,out,error,cap,owned?ActorControllerLookSourceCurrent:current,owned?ActorControllerLookSourceContext():ctx,owned);
+ return ActorControllerLookSourceFinish(owned,ok);
+}
+static int ActorSourceLookInvoke(void*u,const GscActorLookRequest*q,GscActorLookReply*out,char*error,size_t cap,int(*current)(void*),void*ctx){
+ if(!q||q->method!=GSC_ACTOR_LOOK_AIM_AT_POS||!cod1ControllerAnimation.busy)return 0;
+ return ActorLookInvoke(u,q,out,error,cap,current,ctx);
+}
+const GscActorLookHost*G_Cod1ActorSourceLookHost(void){static const GscActorLookHost h={NULL,ActorLookValidate,ActorSourceLookInvoke};return &h;}
 const GscActorLookHost*G_Cod1ActorLookHost(void){cod1ActorLookFacade.user=NULL;cod1ActorLookFacade.validate=ActorLookValidate;cod1ActorLookFacade.invoke=ActorLookInvoke;return &cod1ActorLookFacade;}
 /* Actor and player share the existing typed GetEye descriptor. This adapter
  * changes no old spatial policy and never returns a bind-eye fallback. */
@@ -114,6 +164,18 @@ static int ActorEyeInvoke(void*unused,const GscSpatialNativeRequest*input,GscSpa
  if(cod1ActorLookOperation.busy){cod1ActorLookOperation.cancelled=1;return 0;}
  if(!input||!out||!current||!ActorGoalBuffers(input,sizeof(*input),out,sizeof(*out),error,cap)||ActorLookPrivate(input,sizeof(*input))||ActorLookPrivate(out,sizeof(*out))||ActorLookPrivate(error,cap))return 0;
  q=*input;
+ if(q.kind==GSC_SPATIAL_STANDING_NODE){
+  GscNodeRef node={0};
+  if(q.now_ms!=level.time||q.other.epoch||!ActorGoalLease(&q.receiver,&lease)||!current(ctx))return 0;
+  if(!ActorLeaseValid(&lease)||!G_Cod1StandingNode(g_entities[q.receiver.slot].r.currentOrigin,
+      &cod1Actors[lease.actorIndex].standingNode,&node)||!current(ctx)||!ActorLeaseValid(&lease)||memcmp(input,&q,sizeof(q)))return 0;
+  memset(&reply,0,sizeof(reply));reply.kind=GSC_SPATIAL_RESULT_NODE;reply.value=node.generation;
+  reply.node.epochLo=(uint32_t)node.epoch;reply.node.epochHi=(uint32_t)(node.epoch>>32);reply.node.index=node.index;
+  if(!cod1Actors[lease.actorIndex].standingNode.generation && node.generation)
+    G_Printf("[Training standing node] owner=%u node=%u xyz=%.2f %.2f %.2f\n",q.receiver.slot,node.index,
+     g_entities[q.receiver.slot].r.currentOrigin[0],g_entities[q.receiver.slot].r.currentOrigin[1],g_entities[q.receiver.slot].r.currentOrigin[2]);
+  cod1Actors[lease.actorIndex].standingNode=node;*out=reply;return 1;
+ }
  if(q.kind!=GSC_SPATIAL_GET_EYE||!ActorGoalLease(&q.receiver,&lease)){
   const GscSpatialNativeHost*host=G_Cod1SpatialNativeHost();
   return host&&host->invoke&&host->invoke(host->user,input,out,error,cap,current,ctx)==1;
@@ -133,6 +195,7 @@ done:cod1ActorLookOperation.stage=NULL;cod1ActorLookOperation.bytes=0;cod1ActorL
 const GscSpatialNativeHost*G_Cod1ActorSpatialNativeHost(void){cod1ActorEyeFacade.user=NULL;cod1ActorEyeFacade.invoke=ActorEyeInvoke;return &cod1ActorEyeFacade;}
 int G_Cod1ActorLookFrame(const GscEntityRef*input,int now,int(*current)(void*),void*ctx){
  C1ALCall c;GscEntityRef ref;C1ALMutation m;C1GARecord saved;C1GARecord*row;c1al14State_t state;float angles[3];uint32_t yaw;int index,ok=0;
+ if(!ActorOrientationFrame(input,now,current,ctx)||!ActorProneFrame(input,now,current,ctx))return 0;
  if(!input||!ActorGoalBuffers(input,sizeof(*input),NULL,0,NULL,0))return 0;ref=*input;if(!ActorLookBegin(&c,&ref,now,input,sizeof(*input),&ref,current,ctx))return 0;index=c.lease.actorIndex;row=cod1GenericActors+index;
  if(!row->used){ok=1;goto done;}saved=*row;memcpy(&state,row->lookCells,64);if(!state.ready){ok=1;goto done;}
  if(cod1ActorLookClocks[index].epoch!=ref.epoch||cod1ActorLookClocks[index].lease!=c.lease.serial||now<cod1ActorLookClocks[index].tick)goto done;

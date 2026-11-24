@@ -227,7 +227,7 @@ static int GscTestLoopFxDelete(void*u,const GscDeleteTransactionRequest*input,
  const GscDeleteTransactionServices*api,char*error,size_t cap){
  GscTestLoopFxRow*r;GscTestFxScene scene;GscDeleteTransactionRequest q;GscDeleteTransactionServices expected;int ok=0,time=level.time;
  (void)u;if(!input||!api)return 0;r=GscTestLoopRow(&input->entity);
- if(!r)return G_Cod1EntityDeleteTransactionHost()->invoke(NULL,input,api,error,cap);
+ if(!r)return GscVehicleDelete(NULL,input,api,error,cap);
  if(gscTestLoopBusy||gscTestLoopFreeBusy){gscTestLoopCancelled=1;return 0;}
  if(!api->current||!api->notify_death||GscTestLoopPrivate(error,cap)||
   GscTestLoopOverlap(input,sizeof(*input),error,cap)||GscTestLoopOverlap(api,sizeof(*api),error,cap))return 0;

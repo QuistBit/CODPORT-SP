@@ -2678,11 +2678,12 @@ static void CG_Cod1AllyCaption(void){
     if(idx<0||idx>=COD1_ALLY_INFO_COUNT)return;
     Q_strncpyz(info,CG_ConfigString(CS_COD1_ALLY_INFO+idx),sizeof(info));
     weapon=strchr(info,'|');if(!weapon)return;*weapon++=0;
-    CG_Cod1PromptText(345,216,info,.24f,1,green);
+    const float captionX=CodHud_Width()*.5f+25.f;
+    CG_Cod1PromptText(captionX,216,info,.24f,1,green);
     def=CW_Get(CW_Find(weapon));
     if(def&&(role=CW_String(def,"AIOverlayDescription"))&&*role){
         role=CG_Cod1MessageLocalize(role);
-        if(role)CG_Cod1PromptText(345,234,role,.24f,1,white);
+        if(role)CG_Cod1PromptText(captionX,234,role,.24f,1,white);
     }
     if(cg_debugAnim.integer>2)CG_Printf("[Training ally caption] owner=%d/%d name=%s weapon=%s\n",hit->number,hit->cod1TurretActorGeneration,info,weapon);
 }

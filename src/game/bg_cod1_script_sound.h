@@ -12,6 +12,7 @@
 #include <errno.h>
 
 #define COD1_SS_LOADED_CAPTION_PROFILE 3
+#define COD1_SS_CAMPAIGN_VOICE_PROFILE 4
 #define COD1_SS_TEXT_BYTES 128
 #define COD1_SS_PATH_BYTES 256
 #define COD1_SS_VARIANTS 64
@@ -63,8 +64,35 @@ static int Cod1SS_Token(const char *p,size_t cap) {
 }
 /* Strict line-local CSV; quoted commas/doubled quotes supported. Embedded
  * linebreaks in quoted fields are HELD, not silently concatenated/truncated. */
+/* Find the first of two byte delimiters without reading beyond the
+ * supplied span. This changes scanning only; quoted/invalid CSV still uses
+ * the same parser and every unrelated row is validated. */
+#if defined(_MSC_VER) && (defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2))
+#include <emmintrin.h>
+#include <intrin.h>
+#endif
+static const char *Cod1SS_Delimiter(const char *p,const char *end,char a,char b){
+#if defined(_MSC_VER) && (defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2))
+ const __m128i first=_mm_set1_epi8(a),second=_mm_set1_epi8(b);
+ while(end-p>=16){
+  const __m128i bytes=_mm_loadu_si128((const __m128i*)p);
+  unsigned mask=(unsigned)_mm_movemask_epi8(_mm_or_si128(_mm_cmpeq_epi8(bytes,first),_mm_cmpeq_epi8(bytes,second)));
+  if(mask){unsigned long bit;_BitScanForward(&bit,mask);return p+bit;}
+  p+=16;
+ }
+#endif
+ while(p<end&&*p!=a&&*p!=b)++p;return p;
+}
 static const char *Cod1SS_Cell(const char *p,const char *end,char *out,size_t cap,int *bad) {
  size_t n=0;int quoted=0,closed=0;char c;
+ if(cap&&p<end&&*p!='"'){
+  const char *stop=Cod1SS_Delimiter(p,end,',','"');
+  if(stop==end||*stop==','){
+   size_t bytes=(size_t)(stop-p),take=bytes<cap?bytes:cap-1;
+   memcpy(out,p,take);out[take]=0;if(bytes>=cap)*bad=1;
+   return stop<end?stop+1:stop;
+  }
+ }
  if(p<end&&*p=='"'){quoted=1;++p;}
  while(p<end){c=*p++;
   if(quoted&&c=='"'){if(p<end&&*p=='"')++p;else{quoted=0;closed=1;continue;}}
@@ -123,24 +151,29 @@ static Cod1SSResourceStatus Cod1ScriptSoundParseTableMode(const char *data,size_
  const char *alias,const char *map,Cod1SSPlan *out,Cod1SSDiagnostic *diag,int allowVoice,int loopMode) {
  enum {NAME,SEQUENCE,FILEPATH,VMIN,VMAX,PMIN,PMAX,DMIN,DMAX,CHANNEL,TYPE,PROB,LOOP,MASTER,LOADSPEC,SUBTITLE,NFIELDS};
  const char *keys[NFIELDS]={"name","sequence","file","vol_min","vol_max","pitch_min","pitch_max","dist_min","dist_max","channel","type","probability","loop","masterslave","loadspec","subtitle"};
- const char *p,*end,*le,*next;int idx[NFIELDS],header=0,col,bad,k,selected;unsigned line=0,j;
+ const char *p,*end,*le,*next;int idx[NFIELDS],field[64],header=0,col,bad,k,selected;unsigned line=0,j;
  char cell[256],values[NFIELDS][256];Cod1SSPlan plan;Cod1SSVariant v;size_t aliaslen;
  if(diag){diag->reason=COD1_SS_REASON_NONE;diag->line=0;}
  if(!data||!size||size>COD1_SS_TABLE_BYTES||!out||!Cod1SS_Length(alias,COD1_SS_TEXT_BYTES,&aliaslen)||!aliaslen||!Cod1SS_Token(alias,COD1_SS_TEXT_BYTES)||Cod1SS_Loadspec("",map)<0||memchr(data,0,size))return Cod1SS_Fail(diag,COD1_SS_REASON_INPUT,0);
  memset(&plan,0,sizeof(plan));memcpy(plan.alias,alias,aliaslen+1);for(k=0;k<NFIELDS;++k)idx[k]=-1;
  p=data;end=p+size;if(size>=3&&(unsigned char)p[0]==239&&(unsigned char)p[1]==187&&(unsigned char)p[2]==191)p+=3;
- while(p<end){++line;le=p;while(le<end&&*le!='\r'&&*le!='\n')++le;next=le;if(next<end&&*next=='\r')++next;if(next<end&&*next=='\n')++next;
-  bad=0;memset(values,0,sizeof(values));col=0;
+ while(p<end){++line;le=Cod1SS_Delimiter(p,end,'\r','\n');next=le;if(next<end&&*next=='\r')++next;if(next<end&&*next=='\n')++next;
+  bad=0;for(k=0;k<NFIELDS;++k)values[k][0]=0;col=0;
   if(p==le){p=next;continue;}
   /* Empty/# first columns are ignored by the original CSV's own header. */
   {const char *first=Cod1SS_Cell(p,le,cell,sizeof(cell),&bad);(void)first;if(!bad&&(!cell[0]||cell[0]=='#')){p=next;continue;}}
   while(p<le){p=Cod1SS_Cell(p,le,cell,sizeof(cell),&bad);if(col>=64)bad=1;
    if(!header){for(k=0;k<NFIELDS;++k)if(Cod1SS_Equal(cell,keys[k])){if(idx[k]>=0)bad=1;idx[k]=col;}}
-   else for(k=0;k<NFIELDS;++k)if(idx[k]==col)memcpy(values[k],cell,strlen(cell)+1);
+   else if(col<64 && field[col]>=0)memcpy(values[field[col]],cell,strlen(cell)+1);
    ++col;
   }
   if(bad)return Cod1SS_Fail(diag,COD1_SS_REASON_CSV,line);
-  if(!header){if(idx[NAME]<0||idx[FILEPATH]<0)return Cod1SS_Fail(diag,COD1_SS_REASON_HEADER,line);header=1;p=next;continue;}
+  if(!header){if(idx[NAME]<0||idx[FILEPATH]<0)return Cod1SS_Fail(diag,COD1_SS_REASON_HEADER,line);/* Header validation above bounds every mapped column. Each recognized
+   * column has one field; absent cells remain empty strings. Keep parsing
+   * all cells, including unrelated aliases, for the same CSV diagnostics. */
+   for(k=0;k<64;++k)field[k]=-1;
+   for(k=0;k<NFIELDS;++k)if(idx[k]>=0)field[idx[k]]=k;
+   header=1;p=next;continue;}
   p=next;if(!Cod1SS_Equal(values[NAME],alias))continue;
   selected=Cod1SS_Loadspec(values[LOADSPEC],map);if(selected<0)return Cod1SS_Fail(diag,COD1_SS_REASON_LOADSPEC,line);if(!selected)continue;
   if(plan.count==COD1_SS_VARIANTS)return Cod1SS_Fail(diag,COD1_SS_REASON_CAPACITY,line);
@@ -155,7 +188,7 @@ static Cod1SSResourceStatus Cod1ScriptSoundParseTableMode(const char *data,size_
       !values[SUBTITLE][9] || !Cod1SS_Token(values[SUBTITLE],sizeof(v.subtitle)))
     return Cod1SS_Fail(diag,COD1_SS_REASON_UNSUPPORTED,line);
    strcpy(v.subtitle,values[SUBTITLE]);
-  }else if(v.streamed && (!loopMode || !Cod1SS_Equal(values[CHANNEL],"auto"))){
+  }else if(v.streamed && !(allowVoice==COD1_SS_CAMPAIGN_VOICE_PROFILE&&!loopMode&&Cod1SS_Equal(values[CHANNEL],"voice")) && (!loopMode || !Cod1SS_Equal(values[CHANNEL],"auto"))){
    return Cod1SS_Fail(diag,COD1_SS_REASON_UNSUPPORTED,line);
   }
   /* Native42B9D0: master and numeric slave are distinct flags. Only the
@@ -167,7 +200,7 @@ static Cod1SSResourceStatus Cod1ScriptSoundParseTableMode(const char *data,size_
   if(!Cod1SS_Path(values[FILEPATH],v.path))return Cod1SS_Fail(diag,COD1_SS_REASON_PATH,line);
   if(!Cod1SS_Sequence(values[SEQUENCE],&v.sequence)||!Cod1SS_Number(values[VMIN],1,&v.volume_min)||!Cod1SS_Number(values[VMAX],v.volume_min,&v.volume_max)||!Cod1SS_Number(values[PMIN],1,&v.pitch_min)||!Cod1SS_Number(values[PMAX],v.pitch_min,&v.pitch_max)||!Cod1SS_Number(values[DMIN],120,&v.dist_min)||!Cod1SS_Number(values[DMAX],0,&v.dist_max)||!Cod1SS_Number(values[PROB],1,&v.probability)||v.volume_max<v.volume_min||v.pitch_max<v.pitch_min||v.pitch_min<=0)return Cod1SS_Fail(diag,COD1_SS_REASON_NUMBER,line);
   if(!values[CHANNEL][0])strcpy(v.channel,"auto");else {
-   static const char *allowed[]={"auto","body","weapon","voice","item"};int found=0;for(k=0;k<5;++k)if(Cod1SS_Equal(values[CHANNEL],allowed[k])){strcpy(v.channel,allowed[k]);found=1;break;}
+   static const char *allowed[]={"auto","body","weapon","voice","item","local"};int found=0;for(k=0;k<6;++k)if(Cod1SS_Equal(values[CHANNEL],allowed[k])){strcpy(v.channel,allowed[k]);found=1;break;}
    if(!found)return Cod1SS_Fail(diag,COD1_SS_REASON_UNSUPPORTED,line);
   }
   for(j=0;j<plan.count;++j)if(plan.variants[j].sequence==v.sequence)return Cod1SS_Fail(diag,COD1_SS_REASON_DUPLICATE,line);

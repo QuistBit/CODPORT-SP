@@ -1,3 +1,4 @@
+static int ActorDismountThink(cod1ActorRecord_t *,int);
 static int ActorTransferClockAtMount(const cod1ActorLease_t*,int);
 /* Included after TurretPrepare. Fresh selected native FSM branch, not a
  * replacement combat brain. Real allocation/lease, queue and ROOT link. */
@@ -59,6 +60,11 @@ int G_Cod1TurretMountFrame(int now,int(*current)(void*),int(*notify)(void*,const
  if(!current||!notify||!startStand||!epoch||cod1TurretMountBusyEpoch||now!=level.time||!cod1EntityReady||level.spawning||level.restarted)return 0;cod1TurretMountBusyEpoch=epoch;
  for(i=0;i<COD1_ACTOR_CAPACITY;i++){
   cod1ActorRecord_t*a=&cod1Actors[i];cod1ActorLease_t lease;cod1ActorTurretMount_t before,next;cod1ActorCriticalState_t critical;cod1ActorQueuedState_t oldCritical;C1TRecord*r,oldGun,newGun;GscEntityRef actor,gun;int delivered;
+  if(a->turretMount.initialized && !a->turretMount.mounted &&
+     a->turretMount.currentTop==0 && a->turretMount.currentStack[0]==3){
+   if(current(context)!=1 || epoch!=cod1EntityEpoch || now!=level.time ||
+      !ActorDismountThink(a,now))goto done;
+  }
   if(!a->turretMount.initialized||!a->turretMount.requestedGun.epoch)continue;actor=a->owner;
   if(!TurretMountLease(&actor,&lease)){TurretMountRetire(&actor);continue;}
   before=next=a->turretMount;gun=next.requestedGun;r=TurretFind(&gun);if(!r){if(next.mounted)TurretMountRetire(&actor);memset(&a->turretMount.requestedGun,0,sizeof(GscEntityRef));continue;}

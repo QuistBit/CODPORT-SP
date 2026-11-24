@@ -164,7 +164,7 @@ static void r243_time_root_release_mains(GscRuntime *r){
  unsigned i;int n,limit,found;R243ControllerMainOwner *o;Task *t;
  if(!r||!r->r243_time_root_teardown)return;
  if(r->r243_controller_capture){rfail(r,0,"R243 MAIN transfer still owns transient storage at teardown");return;}
- limit=r->lifetime_enabled?GSC_LIFETIME_TASK_CAPACITY:MAX_THREADS;
+ limit=task_directory_limit(r);
  if(r->task_count<0||r->task_count>limit){rfail(r,0,"R243 MAIN teardown task-bank count invalid");return;}
  for(i=0;i<sizeof(r->r243_controller_main)/sizeof(r->r243_controller_main[0]);i++){
   o=r->r243_controller_main+i;if(!o->used)continue;

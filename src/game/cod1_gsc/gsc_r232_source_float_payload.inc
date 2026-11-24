@@ -2,7 +2,7 @@
  * original init/look/mg42/common modules. Each operator materializes one binary32, as
  * ENGINE4660DC/4661CF/46629D/46632D. No ambient-control-word inference. */
 static int r232_source_float_module(const char *module) {
-    return module&&(!strcmp(module,"animscripts/init")||!strcmp(module,"animscripts/look")||!strcmp(module,"animscripts/mg42/common"));
+    return module&&(!strcmp(module,"animscripts/init")||!strcmp(module,"animscripts/look")||!strcmp(module,"animscripts/combat")||!strcmp(module,"animscripts/run")||!strcmp(module,"animscripts/weaponlist")||!strcmp(module,"animscripts/stop")||!strcmp(module,"animscripts/cover_crouch")||!strcmp(module,"animscripts/wounded")||!strcmp(module,"animscripts/death")||!strcmp(module,"animscripts/mg42/common"));
 }
 static int r232_source_float_bits(uint32_t bits) {
     return (bits&UINT32_C(0x7fffffff))<=UINT32_C(0x4b800000);

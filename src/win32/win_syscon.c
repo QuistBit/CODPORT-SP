@@ -80,12 +80,56 @@ typedef struct
 
 static WinConData s_wcd;
 
+/* The hidden native Edit control still lays out text synchronously. Keep
+ * printable ASCII log text here until the console is shown. The original
+ * byte-count rollover and ANSI conversion path remain authoritative; any
+ * other byte flushes the pending text and uses that original path. This
+ * affects only the hidden Win32 console, never the game console or logfile. */
+#define CONBUF_APPEND_MESSAGE (WM_APP + 310)
+static DWORD conbufThreadId;
+static char conbufPending[32768];
+static unsigned conbufPendingLength;
+static int conbufPendingReplace;
+
+static void Conbuf_FlushPending(void) {
+ char text[32768];
+ int replace;
+ while(conbufPendingLength || conbufPendingReplace) {
+  replace=conbufPendingReplace;
+  memcpy(text,conbufPending,conbufPendingLength);
+  text[conbufPendingLength]=0;
+  conbufPendingLength=0;conbufPendingReplace=0;
+  SendMessage(s_wcd.hwndBuffer,EM_SETSEL,replace?0:0xffff,replace?-1:0xffff);
+  SendMessage(s_wcd.hwndBuffer,EM_LINESCROLL,0,0xffff);
+  SendMessage(s_wcd.hwndBuffer,EM_SCROLLCARET,0,0);
+  SendMessage(s_wcd.hwndBuffer,EM_REPLACESEL,0,(LPARAM)text);
+ }
+}
+
+static int Conbuf_QueueAscii(const char *text,unsigned length,int replace) {
+ unsigned i;
+ if(s_wcd.visLevel || !s_wcd.hwndBuffer)return 0;
+ for(i=0;i<length;i++) {
+  unsigned char c=(unsigned char)text[i];
+  if((c<32 && c!='\r' && c!='\n' && c!='\t') || c>126)return 0;
+ }
+ if(replace){conbufPendingLength=0;conbufPendingReplace=1;}
+ if(length>=sizeof(conbufPending)-conbufPendingLength)return 0;
+ memcpy(conbufPending+conbufPendingLength,text,length);
+ conbufPendingLength+=length;
+ return 1;
+}
+
+
 static LONG WINAPI ConWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam ) {
 	char *cmdString;
 	static qboolean s_timePolarity;
 
 	switch ( uMsg )
 	{
+	case CONBUF_APPEND_MESSAGE:
+		Conbuf_AppendText((const char *)lParam);
+		return 0;
 	case WM_ACTIVATE:
 		if ( LOWORD( wParam ) != WA_INACTIVE ) {
 			SetFocus( s_wcd.hwndInputLine );
@@ -140,6 +184,7 @@ static LONG WINAPI ConWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
 
 	case WM_COMMAND:
 		if ( wParam == COPY_ID ) {
+			Conbuf_FlushPending();
 			SendMessage( s_wcd.hwndBuffer, EM_SETSEL, 0, -1 );
 			SendMessage( s_wcd.hwndBuffer, WM_COPY, 0, 0 );
 		} else if ( wParam == QUIT_ID )   {
@@ -151,6 +196,7 @@ static LONG WINAPI ConWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
 				Sys_QueEvent( 0, SE_CONSOLE, 0, 0, strlen( cmdString ) + 1, cmdString );
 			}
 		} else if ( wParam == CLEAR_ID )   {
+			conbufPendingLength=0;conbufPendingReplace=0;
 			SendMessage( s_wcd.hwndBuffer, EM_SETSEL, 0, -1 );
 			SendMessage( s_wcd.hwndBuffer, EM_REPLACESEL, FALSE, ( LPARAM ) "" );
 			UpdateWindow( s_wcd.hwndBuffer );
@@ -216,6 +262,8 @@ void Sys_CreateConsole( void ) {
 	int swidth, sheight;
 	int DEDSTYLE = WS_POPUPWINDOW | WS_CAPTION | WS_MINIMIZEBOX;
 
+	conbufThreadId=GetCurrentThreadId();
+	conbufPendingLength=0;conbufPendingReplace=0;
 	memset( &wc, 0, sizeof( wc ) );
 
 	wc.style         = 0;
@@ -361,6 +409,7 @@ void Sys_ShowConsole( int visLevel, qboolean quitOnClose ) {
 		return;
 	}
 
+	if(visLevel && s_wcd.hWnd)Conbuf_FlushPending();
 	s_wcd.visLevel = visLevel;
 
 	if ( !s_wcd.hWnd ) {
@@ -411,6 +460,10 @@ void Conbuf_AppendText( const char *pMsg ) {
 	int bufLen;
 	int i = 0;
 	static unsigned long s_totalChars;
+	int replace;
+	if(conbufThreadId && GetCurrentThreadId()!=conbufThreadId && s_wcd.hWnd){
+		SendMessage(s_wcd.hWnd,CONBUF_APPEND_MESSAGE,0,(LPARAM)pMsg);return;
+	}
 
 	//
 	// if the message is REALLY long, use just the last portion of it
@@ -452,25 +505,17 @@ void Conbuf_AppendText( const char *pMsg ) {
 	*b = 0;
 	bufLen = b - buffer;
 
-	s_totalChars += bufLen;
 
-	//
-	// replace selection instead of appending if we're overflowing
-	//
-	if ( s_totalChars > 0x7fff ) {
-		SendMessage( s_wcd.hwndBuffer, EM_SETSEL, 0, -1 );
-		s_totalChars = bufLen;
-	} else {
-		// NERVE - SMF - always append at the bottom of the textbox
-		SendMessage( s_wcd.hwndBuffer, EM_SETSEL, 0xFFFF, 0xFFFF );
-	}
-
-	//
-	// put this text into the windows console
-	//
-	SendMessage( s_wcd.hwndBuffer, EM_LINESCROLL, 0, 0xffff );
-	SendMessage( s_wcd.hwndBuffer, EM_SCROLLCARET, 0, 0 );
-	SendMessage( s_wcd.hwndBuffer, EM_REPLACESEL, 0, (LPARAM) buffer );
+ s_totalChars += bufLen;
+ replace=s_totalChars>0x7fff;
+ if(replace)s_totalChars=bufLen;
+ if(Conbuf_QueueAscii(buffer,(unsigned)bufLen,replace))return;
+ if(replace){conbufPendingLength=0;conbufPendingReplace=0;}
+ else Conbuf_FlushPending();
+ SendMessage(s_wcd.hwndBuffer,EM_SETSEL,replace?0:0xffff,replace?-1:0xffff);
+ SendMessage(s_wcd.hwndBuffer,EM_LINESCROLL,0,0xffff);
+ SendMessage(s_wcd.hwndBuffer,EM_SCROLLCARET,0,0);
+ SendMessage(s_wcd.hwndBuffer,EM_REPLACESEL,0,(LPARAM)buffer);
 }
 
 /*

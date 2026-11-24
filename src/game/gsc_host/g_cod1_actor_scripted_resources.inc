@@ -33,7 +33,7 @@ static int ActorScriptedPrivate(const void*p,size_t n){C1ScriptedResources*r=&co
  return r->stage&&r->stageBytes==sizeof(*r)&&ActorScriptedDataPrivate(p,n,(const C1ScriptedResources*)r->stage);
 }
 static void ActorScriptedReset(void){ActorJumperReset();C1ScriptedResources*r=&cod1ScriptedResources;if(r->revision!=UINT64_MAX)r->revision++;C1ASB14_Free(&r->bank);r->epoch=0;/* Callback owner retains its busy/stage lease until unwind. */}
-static int ActorScriptedReady(uint64_t epoch){C1ScriptedResources*r=&cod1ScriptedResources;return epoch&&r->epoch==epoch&&!r->busy&&ActorFaceReady(epoch)&&C1ASB14_Ready(&r->bank);}
+static int ActorScriptedReady(uint64_t epoch){C1ScriptedResources*r=&cod1ScriptedResources;return epoch&&r->epoch==epoch&&!r->busy&&ActorFaceReady(epoch);}
 static int ActorScriptedIndex(unsigned ordinal){unsigned i;if(!ordinal||ordinal>=C1GA_COUNT||cod1GenericDefinitions[ordinal].children)return -1;for(i=0;i<C1ASB14_COUNT;i++)if(ordinal==c1asb14Additional[2+i].ordinal&&!strcmp(cod1GenericNames[ordinal].name,c1asb14Names[i]))return (int)i;return -1;}
 static const c1ar14Root_t*ActorScriptedRoot(unsigned ordinal){if(ordinal==892&&ActorJumperReady(cod1EntityEpoch))return cod1JumperResources.root;int i=ActorScriptedIndex(ordinal);return i>=0&&ActorScriptedReady(cod1EntityEpoch)?cod1ScriptedResources.bank.root[i]:NULL;}
 static const c1ab14Clip_t*ActorScriptedBody(unsigned ordinal){if(ordinal==892&&ActorJumperReady(cod1EntityEpoch))return cod1JumperResources.body;int i=ActorScriptedIndex(ordinal);return i>=0&&ActorScriptedReady(cod1EntityEpoch)?cod1ScriptedResources.bank.body[i]:NULL;}

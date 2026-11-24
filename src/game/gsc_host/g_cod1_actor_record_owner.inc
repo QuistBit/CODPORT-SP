@@ -8,7 +8,7 @@ typedef struct {
  uint64_t epoch,receipt,allocation,program;
  uint32_t ordinal,index;GscEntityRef entity;int state;
 } Cod1ActorRecordOwner;
-static Cod1ActorRecordOwner cod1ActorRecordOwners[GSC_AI_ARRAY_CAPACITY];
+static Cod1ActorRecordOwner cod1ActorRecordOwners[COD1_ACTOR_RECORD_CAPACITY];
 static uint64_t cod1ActorRecordSerial;
 static uint32_t cod1ActorRecordActive;
 static int cod1ActorRecordBusy;
@@ -28,7 +28,7 @@ static int Cod1ActorRecordRefuse(const char*text){
 }
 static int Cod1ActorRecordCompleted(uint32_t count){uint32_t i;
  if(cod1ActorRecordActive||cod1ActorRecordBusy)return 0;
- if(count>GSC_AI_ARRAY_CAPACITY)return 0;
+ if(count>COD1_ACTOR_RECORD_CAPACITY)return 0;
  for(i=0;i<count;i++){
   int state=cod1ActorRecordOwners[i].state;
   if(state!=COD1_RECORD_PLACED&&state!=COD1_RECORD_SPAWNER&&state!=COD1_RECORD_FILTERED&&state!=COD1_RECORD_BSP_CONSTRUCTED)return 0;
@@ -52,7 +52,7 @@ static int Cod1ActorRecordAllocationBegin(gentity_t*ent){
  G_SpawnString("classname","",&name);
  if(Q_stricmpn(name,"actor_",6))return Cod1ActorRecordPreviousComplete()?1:
   Cod1ActorRecordRefuse("non-Actor allocation followed an incomplete Actor record");
- if(!cod1ActorPrepassRecords.actors||cod1ActorPrepassRecords.actors>GSC_AI_ARRAY_CAPACITY||
+ if(!cod1ActorPrepassRecords.actors||cod1ActorPrepassRecords.actors>COD1_ACTOR_RECORD_CAPACITY||
     !Cod1ActorRecordCompleted(cod1ActorPrepassRecords.actors-1)||cod1ActorRecordSerial==UINT64_MAX)
   return Cod1ActorRecordRefuse("Actor allocation has no admitted record or receipt capacity");
  index=cod1ActorPrepassRecords.actors-1;r=&cod1ActorRecordOwners[index];
@@ -70,7 +70,7 @@ static int Cod1ActorRecordAllocationBegin(gentity_t*ent){
  cod1ActorRecordActive=index+1;return 1;
 }
 static int Cod1ActorRecordIntakeCurrent(gentity_t*ent){GscEntityRef ref;Cod1ActorRecordOwner*r;
- if(!cod1ActorRecordActive||cod1ActorRecordActive>GSC_AI_ARRAY_CAPACITY||cod1ActorRecordBusy||
+ if(!cod1ActorRecordActive||cod1ActorRecordActive>COD1_ACTOR_RECORD_CAPACITY||cod1ActorRecordBusy||
     !Cod1ActorPrefixOwner()||cod1ActorPrefix.invalid||cod1ActorPrefix.closed||!level.spawning||
     level.restarted||!G_Cod1EntityCapture(ent,&ref))
   return Cod1ActorRecordRefuse("Actor intake has no current one-record allocation owner");
@@ -101,7 +101,7 @@ static int Cod1ActorRecordAllocationEnd(gentity_t*ent,int outcome){
  if(!cod1ActorRecordActive){char*name;G_SpawnString("classname","",&name);
   return Q_stricmpn(name,"actor_",6)&&!cod1ActorPrefix.invalid?1:
    Cod1ActorRecordRefuse("Actor record has no active allocation outcome or was already closed");}
- if(cod1ActorRecordActive>GSC_AI_ARRAY_CAPACITY||cod1ActorRecordBusy||
+ if(cod1ActorRecordActive>COD1_ACTOR_RECORD_CAPACITY||cod1ActorRecordBusy||
     !Cod1ActorPrefixOwner()||cod1ActorPrefix.invalid||cod1ActorPrefix.closed||!level.spawning||
     level.restarted||!G_Cod1EntityCapture(ent,&ref))
   return Cod1ActorRecordRefuse("Actor record terminal outcome lost its actual allocation");

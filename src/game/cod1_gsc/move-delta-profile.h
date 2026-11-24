@@ -20,5 +20,6 @@ int R243MoveDeltaSessionCatalogCurrent(const R243MoveDeltaRequest*,const GscAnim
 struct GscSession;
 int gsc_session_select_r243_move_delta(struct GscSession*,const R243MoveDeltaHost*,char*,size_t);
 int R243GameMoveDeltaPrepare(void);
+int R243GameMoveDeltaPrepareMap(const GscMapExecutionCertificate*);
 const R243MoveDeltaHost*R243GameMoveDeltaHost(void);
 #endif

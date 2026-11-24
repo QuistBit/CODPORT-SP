@@ -10,6 +10,7 @@ void CL_R241TraceFrameBegin(int frame);
 void CL_R241TraceFrameEnd(void);
 void CL_R241TraceAbort(void);
 void CL_R241TraceMark(int stage);
+void CL_R241TraceServerBudget(int budget, int residual, int tickMsec);
 void CL_R241TraceCGameBegin(int stereo);
 void CL_R241TraceCGameEnd(void);
 void CL_R241TraceMapReset(void);

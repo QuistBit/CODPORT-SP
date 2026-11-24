@@ -37,6 +37,7 @@ If you have questions concerning this license or the applicable additional terms
 #include "g_cod1_entity_host.h"
 #include "g_cod1_player_lifetime.h"
 #include "g_cod1_item_lifecycle.h"
+#include "g_cod1_vehicle.h"
 
 typedef struct {
 	char oldShader[MAX_QPATH];
@@ -578,11 +579,15 @@ void G_FreeEntity( gentity_t *ed ) {
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
 	GscEntityRef cod1FreeRef;
 	int cod1HadRef = G_Cod1EntityCapture( ed, &cod1FreeRef );
+	if(cod1HadRef&&!G_Cod1VehicleFreePhase(&cod1FreeRef,0))return;
 	G_Cod1PlayerLifetimeRetire( ed );
 	/* Native46200 detaches self and incoming children before spatial unlink. */
 	if(cod1HadRef&&(!G_Cod1ItemLifecyclePreparedFreeGuard(&cod1FreeRef)||!G_Cod1EntityLinksBeforeFree(&cod1FreeRef)||!G_Cod1ItemLifecyclePreparedFreeGuard(&cod1FreeRef)))return;
 #endif
 	trap_UnlinkEntity( ed );     // unlink from world
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if(cod1HadRef&&!G_Cod1VehicleFreePhase(&cod1FreeRef,1))return;
+#endif
 
 	if ( ed->neverFree ) {
 		return;
@@ -600,11 +605,15 @@ void G_FreeEntity( gentity_t *ed ) {
     if(cod1HadRef && (!G_Cod1LoopSoundBeforeFree(&cod1FreeRef) || !G_Cod1LoopFxBeforeFree(&cod1FreeRef) ||
        !G_Cod1EntitySameAllocation(&cod1FreeRef) || ed->neverFree || !G_Cod1ItemLifecyclePreparedFreeGuard(&cod1FreeRef))) return;
 #endif
+	#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+	if(cod1HadRef&&!G_Cod1VehicleFreePhase(&cod1FreeRef,2))return;
+	#endif
 	memset( ed, 0, sizeof( *ed ) );
 	ed->classname = "freed";
 	ed->freetime = level.time;
 	ed->inuse = qfalse;
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+    if(cod1HadRef&&!G_Cod1VehicleFreePhase(&cod1FreeRef,3))return;
     if(cod1HadRef)G_Cod1LoopFxAfterFree(&cod1FreeRef);
 #endif
 }

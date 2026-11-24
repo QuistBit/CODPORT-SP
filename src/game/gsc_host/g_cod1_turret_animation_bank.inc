@@ -2,8 +2,13 @@
  * the entire source blob. No ordinal, pose, phase or completion is invented. */
 #include "../../qcommon/cod1_actor_root_group14.h"
 #include "../../qcommon/cod1_actor_bone14.h"
-static c1ar14Root_t *cod1TurretRoots[2][21],*cod1TurretGunRoots[2];
-static c1ab14Clip_t *cod1TurretBodies[2][21],*cod1TurretGunBodies[2];
+#include "g_cod1_turret_clip_storage612.h"
+static Cod1TurretClipTable cod1TurretClips;
+static Cod1SealedTurretClips *cod1SealedTurretClips;
+#define cod1TurretRoots (cod1TurretClips.roots)
+#define cod1TurretGunRoots (cod1TurretClips.gunRoots)
+#define cod1TurretBodies (cod1TurretClips.bodies)
+#define cod1TurretGunBodies (cod1TurretClips.gunBodies)
 static uint64_t cod1TurretBankEpoch,cod1TurretBankBusyEpoch;
 /* Storage is immutable from TurretBankLoad's commit until reset.  The
  * inclusive extent can reject disjoint requests; overlap still requires the
@@ -20,6 +25,11 @@ static int TurretClipRange(const void *p,size_t n,const void *owner,size_t bytes
 }
 static void TurretBankReset(void){int i,j;
  cod1TurretExtent.lo=UINTPTR_MAX;cod1TurretExtent.hi=0;
+ if(cod1SealedTurretClips){
+  Cod1SealedTurretClips *old=cod1SealedTurretClips;
+  cod1SealedTurretClips=NULL;memset(&cod1TurretClips,0,sizeof(cod1TurretClips));
+  cod1TurretBankEpoch=cod1TurretBankBusyEpoch=0;TurretClipStorageFree(old);return;
+ }
  for(i=0;i<2;i++){
   for(j=0;j<21;j++){C1AR14_Free(cod1TurretRoots[i][j]);cod1TurretRoots[i][j]=NULL;C1AB14_Free(cod1TurretBodies[i][j]);cod1TurretBodies[i][j]=NULL;}
   C1AR14_Free(cod1TurretGunRoots[i]);cod1TurretGunRoots[i]=NULL;C1AB14_Free(cod1TurretGunBodies[i]);cod1TurretGunBodies[i]=NULL;
@@ -43,6 +53,8 @@ static int TurretBankData(const void*p,size_t n,TurretClipExtent *build){int i,j
  return 0;
 }
 static int TurretBankPrivate(const void *p,size_t n){uintptr_t start=(uintptr_t)p;
+ if(ActorOverlap(p,n,&cod1SealedTurretClips,sizeof(cod1SealedTurretClips))||
+    (cod1SealedTurretClips&&ActorOverlap(p,n,cod1SealedTurretClips,cod1SealedTurretClips->bytes)))return 1;
  if(ActorOverlap(p,n,&cod1TurretExtent,sizeof(cod1TurretExtent))||ActorOverlap(p,n,cod1TurretBodies,sizeof(cod1TurretBodies))||ActorOverlap(p,n,cod1TurretGunBodies,sizeof(cod1TurretGunBodies))||ActorOverlap(p,n,cod1TurretRoots,sizeof(cod1TurretRoots))||
     ActorOverlap(p,n,cod1TurretGunRoots,sizeof(cod1TurretGunRoots))||
     ActorOverlap(p,n,&cod1TurretBankEpoch,sizeof(cod1TurretBankEpoch))||
@@ -122,8 +134,14 @@ static int TurretBankLoad(void){
  if(epoch!=cod1EntityEpoch||!level.spawning||!cod1EntityActive||cod1TurretBankEpoch)goto done;
  memcpy(cod1TurretRoots,stage,sizeof(stage));memcpy(cod1TurretGunRoots,gun,sizeof(gun));
  memcpy(cod1TurretBodies,body,sizeof(body));memcpy(cod1TurretGunBodies,gunBody,sizeof(gunBody));
- memset(body,0,sizeof(body));memset(gunBody,0,sizeof(gunBody));
- memset(stage,0,sizeof(stage));memset(gun,0,sizeof(gun));
+ cod1SealedTurretClips=TurretClipStorageCreate(&cod1TurretClips,epoch);
+ if(cod1SealedTurretClips){
+  cod1TurretClips=cod1SealedTurretClips->clips;
+  G_Printf("[612 clip storage] sealed %u bytes for current map\n",(unsigned)cod1SealedTurretClips->bytes);
+ }else{
+  memset(body,0,sizeof(body));memset(gunBody,0,sizeof(gunBody));
+  memset(stage,0,sizeof(stage));memset(gun,0,sizeof(gun));
+ }
  cod1TurretExtent.lo=UINTPTR_MAX;cod1TurretExtent.hi=0;
  TurretBankData(NULL,0,&cod1TurretExtent);cod1TurretBankEpoch=epoch;ok=1;
 done:

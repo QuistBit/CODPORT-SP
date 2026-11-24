@@ -61,6 +61,11 @@ extern int RE_AddCod1ActorAnimated( const refEntity_t *re,
                                     const cod1ActorAnimState_t *state );
 
 
+qboolean CL_CanRunLocalFrameSlice( void ) {
+	return cls.state == CA_ACTIVE && cgvm && cl.snap.valid && !cls.keyCatchers
+		&& !clc.demoplaying && !clc.demorecording && !cl_avidemo->integer;
+}
+
 /*
 ====================
 CL_GetGameState
@@ -327,6 +332,8 @@ rescan:
     if(CL_Cod1AmbientStaleCommand(serverCommandNumber))return qfalse;
 
 	if ( !strcmp( cmd, "disconnect" ) ) {
+		/* This disconnect can leave the local server running past abortframe. */
+		SV_FinishFrameSlice();
 		Com_Error( ERR_SERVERDISCONNECT,"Server disconnected\n" );
 	}
 
@@ -494,8 +501,7 @@ int CL_CgameSystemCalls( int *args ) {
 	case CG_FS_FOPENFILE:
 		return FS_FOpenFileByMode( VMA( 1 ), VMA( 2 ), args[3] );
 	case CG_FS_READ:
-		FS_Read( VMA( 1 ), args[2], args[3] );
-		return 0;
+		return FS_Read( VMA( 1 ), args[2], args[3] );
 	case CG_FS_WRITE:
 		return FS_Write( VMA( 1 ), args[2], args[3] );
 	case CG_FS_FCLOSEFILE:
@@ -796,6 +802,7 @@ int CL_CgameSystemCalls( int *args ) {
 		return 0;
 
 	case CG_SENDMOVESPEEDSTOGAME:
+		SV_FinishFrameSlice();
 		SV_SendMoveSpeedsToGame( args[1], VMA( 2 ) );
 		return 0;
 
@@ -906,6 +913,7 @@ int CL_CgameSystemCalls( int *args ) {
         return CL_Cod1KeyBindingScan(args[1],(char *)CL_Cod1KeyBindingPointer(args[2],args[3]),args[4]);
 
 	case CG_GETMODELINFO:
+		SV_FinishFrameSlice();
 		return SV_GetModelInfo( args[1], VMA( 2 ), VMA( 3 ) );
 
 	default:

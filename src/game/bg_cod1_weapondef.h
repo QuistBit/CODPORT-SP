@@ -7,7 +7,7 @@
  * subsequent inventory/viewmodel adapters without enabling them implicitly. */
 #define CW_FIELD_COUNT 248
 #define CW_TEXT_SIZE 16384
-#define CW_MAX_DEFS 32
+#define CW_MAX_DEFS 63
 typedef struct { const char *name; int type; } cwField_t;
 typedef struct {
     char name[64], text[CW_TEXT_SIZE];
@@ -18,6 +18,10 @@ typedef struct {
 } cwDef_t;
 /* Return byte count, -1 if missing, -2 if too large. No terminator required. */
 typedef int (*cwRead_t)(const char *path, char *data, int capacity);
+/* Loading invalidates previous resource receipts. The table stays unpublished
+ * until all ordered definitions and alt links have been validated. */
+typedef struct {void*user;int(*current)(void*);int(*list)(void*,char*,int);int(*read)(void*,const char*,char*,int);} cwTableHost_t;
+int CW_LoadOriginalTable(const cwTableHost_t*host);
 int CW_FieldIndex(const char *key);
 const char *CW_String(const cwDef_t *def, const char *key);
 double CW_Number(const cwDef_t *def, const char *key);
@@ -56,6 +60,7 @@ static char cwInput[CW_TEXT_SIZE];
 static int cwCount;
 static unsigned int cwRegistryRevision=1;
 static unsigned int cwRegistryMutationDepth;
+static int cwTableBusy,cwTableCancelled;
 static int cwFamilyRoot[CW_MAX_DEFS];
 static char cwError[160];
 static void CW_RegistryChanged(void) {
@@ -166,15 +171,15 @@ static void CW_LowerName(char *out,const char *in) {
     while(*in) { char c=*in++;*out++=(c>='A' && c<='Z')?c+32:c; } *out=0;
 }
 int CW_Find(const char *name) {
-    int i; char lower[64];
+    int i; char lower[64],candidate[64];
     if(!CW_NameValid(name))return -1;CW_LowerName(lower,name);
-    for(i=0;i<cwCount;i++) if(!strcmp(cwDefs[i].name,lower)) return i;
+    for(i=0;i<cwCount;i++){CW_LowerName(candidate,cwDefs[i].name);if(!strcmp(candidate,lower))return i;}
     return -1;
 }
 int CW_FamilyRoot(int index) {
     return index>=0 && index<cwCount ? cwFamilyRoot[index] : -1;
 }
-void CW_ResetRegistry(void) { CW_RegistryChanged();cwCount=0; cwError[0]=0; }
+void CW_ResetRegistry(void) { if(cwTableBusy)cwTableCancelled=1;CW_RegistryChanged();cwCount=0; cwError[0]=0; }
 static int CW_AddFamilyBody(cwRead_t readFile,const char *root) {
     char path[80];
     const char *name;
@@ -216,6 +221,7 @@ static int CW_AddFamilyBody(cwRead_t readFile,const char *root) {
 }
 int CW_AddFamily(cwRead_t readFile,const char *root) {
     int result,counted=cwRegistryMutationDepth<UINT_MAX;
+    if(cwTableBusy){cwTableCancelled=1;return CW_Fail("reentrant weapon table mutation");}
     if(counted)++cwRegistryMutationDepth;
     else cwRegistryRevision=0;
     result=CW_AddFamilyBody(readFile,root);
@@ -224,16 +230,18 @@ int CW_AddFamily(cwRead_t readFile,const char *root) {
 }
 int CW_LoadRegistry(cwRead_t readFile,const char *root) {
     int result;
+    if(cwTableBusy){cwTableCancelled=1;return CW_Fail("reentrant weapon table mutation");}
     CW_ResetRegistry();result=CW_AddFamily(readFile,root);
     return result>=0 ? 1 : (result==-2 ? 0 : -1);
 }
+#include "bg_cod1_weapon_table14.inc"
 const cwDef_t *CW_Get(int index) { return index>=0 && index<cwCount ? &cwDefs[index] : NULL; }
 int CW_Count(void) { return cwCount; }
 int BG_Cod1WeaponShotMsec(void) {
-    return cwCount ? (int)CW_Number(&cwDefs[0],"fireTime") : 86;
+    const cwDef_t*d=CW_Get(CW_Find("thompson"));return d ? (int)CW_Number(d,"fireTime") : 86;
 }
 int BG_Cod1WeaponDelayMsec(void) {
-    return cwCount ? (int)CW_Number(&cwDefs[0],"fireDelay") : 0;
+    const cwDef_t*d=CW_Get(CW_Find("thompson"));return d ? (int)CW_Number(d,"fireDelay") : 0;
 }
 #endif
 #endif

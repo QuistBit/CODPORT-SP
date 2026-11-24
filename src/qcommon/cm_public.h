@@ -64,6 +64,7 @@ qboolean CM_Cod1LightTrace(trace_t *out,const vec3_t start,const vec3_t end);
  * override and no render-triangle substitution. Unsupported shapes fail. */
 qboolean CM_HasV59(void);
 qboolean CM_Cod1PathBrushSight(const vec3_t,const vec3_t,const vec3_t,const vec3_t,const vec3_t,int,unsigned,int*);
+qboolean CM_Cod1PathNativeSight(const vec3_t,const vec3_t,const vec3_t,const vec3_t,const vec3_t,int,unsigned,int*);
 qboolean CM_Cod1NativeWorldTrace(trace_t *out, const vec3_t start, const vec3_t end,
     const vec3_t mins, const vec3_t maxs, int mask, int capsule);
 qboolean CM_PointContentsV59(const vec3_t point,int model,int *out);

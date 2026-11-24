@@ -1,3 +1,6 @@
+static void r402_source_cancel(GscRuntime*);
+static int r402_source_private(const GscRuntime*,const void*,size_t);
+static int r402_source_runtime_current(GscRuntime*);
 /* Pure private VM offer. Only actor_animation_invoke constructs this lease,
  * after its argument, certificate and host.validate callbacks have returned. */
 typedef struct {
@@ -7,13 +10,14 @@ typedef struct {
  int(*current)(void*);void*context;int phase,cancelled;
 } R243SourceAnimationDispatch;
 static int r243_source_method(int method){
- return method==GSC_ACTOR_ANIMATION_SET||method==GSC_ACTOR_ANIMATION_CLEAR||
-  method==GSC_ACTOR_ANIMATION_KNOB_ALL||method==GSC_ACTOR_ANIMATION_FLAGGED_RESTART||
+ return method==GSC_ACTOR_ANIMATION_ORIENT_MODE||method==GSC_ACTOR_ANIMATION_ORIENT_ERROR_PREFIX||method==GSC_ACTOR_ANIMATION_PRONE_NODES||method==GSC_ACTOR_ANIMATION_ENTER_PRONE||method==GSC_ACTOR_ANIMATION_UPDATE_PRONE||method==GSC_ACTOR_ANIMATION_SET||method==GSC_ACTOR_ANIMATION_CLEAR||method==GSC_ACTOR_ANIMATION_EXIT_PRONE||method==GSC_ACTOR_ANIMATION_FLAGGED_ALL||
+  method==GSC_ACTOR_ANIMATION_KNOB||method==GSC_ACTOR_ANIMATION_AIM_NODES||
+  method==GSC_ACTOR_ANIMATION_KNOB_ALL||method==GSC_ACTOR_ANIMATION_KNOB_ALL_RESTART||method==GSC_ACTOR_ANIMATION_FLAGGED_RESTART||
   method==GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART;
 }
 static int r243_source_scope(const R243SourceAnimationDispatch*d){
  GscRuntime*r=d?d->r:NULL;R232ActorAnimationLease*a=d?d->actor:NULL;
- return r&&a&&!d->cancelled&&!r->r243_source_failed&&r->r243_source_dispatch==d&&
+ return r&&a&&!r->r402_source_dispatch&&!d->cancelled&&!r->r243_source_failed&&r->r243_source_dispatch==d&&
   r->r243_source_step_active&&r->r243_source_step_owner==d->step&&r->r243_controller_busy&&
   r->r243_actor_script_scope&&r->entity_method_busy&&r->executing_task==d->task&&
   d->task&&d->task->serial==d->receipt.task_serial&&d->task->status!=TASK_DEAD&&
@@ -24,12 +28,12 @@ static int r243_source_scope(const R243SourceAnimationDispatch*d){
   !memcmp(d->input,&d->q,sizeof(d->q));
 }
 static int r243_source_fail(GscRuntime*r){
- if(r){R243SourceAnimationDispatch*d=r->r243_source_dispatch;r->r243_source_failed=1;if(d)d->cancelled=1;}return 0;
+ if(r){R243SourceAnimationDispatch*d=r->r243_source_dispatch;r->r243_source_failed=1;if(d)d->cancelled=1;r402_source_cancel(r);}return 0;
 }
 static int r243_source_begin(GscRuntime*r,R232ActorAnimationLease*a,
  const GscActorAnimationRequest*q,R243SourceAnimationDispatch*d){
  if(!r->r243_source_step_active)return 1; /* caller uses this only in selected step */
- if(r->r243_source_dispatch||r->r243_source_failed||!r->r243_source_step_owner||
+ if(r->r402_source_dispatch||r->r243_source_dispatch||r->r243_source_failed||!r->r243_source_step_owner||
     r->r243_next_source_dispatch==UINT64_MAX||!r243_source_method(q->method))
   return rfail(r,0,"source animation dispatch requires a fresh supported typed command");
  memset(d,0,sizeof(*d));d->r=r;d->actor=a;d->task=r->executing_task;
@@ -65,7 +69,7 @@ static int r243_source_end(GscRuntime*r,R243SourceAnimationDispatch*d,int accept
 }
 static int r243_source_private(const GscRuntime*r,const void*p,size_t n){
  const R243SourceAnimationDispatch*d=r?r->r243_source_dispatch:NULL;
- return r&&((r->execution_budget&&Cod1ModelStringOverlap(p,n,r->execution_budget,sizeof(*r->execution_budget)))||
+ return r&&(r402_source_private(r,p,n)||(r->execution_budget&&Cod1ModelStringOverlap(p,n,r->execution_budget,sizeof(*r->execution_budget)))||
   (r->r243_source_step_owner&&Cod1ModelStringOverlap(p,n,r->r243_source_step_owner,r->r243_source_step_owner_bytes))||
   /* Enclosing owner/API are legal inputs during initial adoption. Protect
    * their full storage once an actual source offer exists, before any query
@@ -76,4 +80,4 @@ static int r243_source_private(const GscRuntime*r,const void*p,size_t n){
        Cod1ModelStringOverlap(p,n,d->actor,sizeof(*d->actor)))));
 }
 
-static int r243_source_runtime_current(GscRuntime*r){return !r->r243_source_dispatch||r243_source_scope(r->r243_source_dispatch);}
+static int r243_source_runtime_current(GscRuntime*r){return r402_source_runtime_current(r)&&(!r->r243_source_dispatch||r243_source_scope(r->r243_source_dispatch));}

@@ -28,6 +28,7 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include "tr_local.h"
+static void R_ClearPendingActorCaptures(int);
 #include "tr_cod1_actor_capture.h"
 #include "cod1_actor_xanim14.h"
 #include "../game/bg_cod1_actor_runtime.h"
@@ -165,6 +166,7 @@ void R_ToggleSmpFrame( void ) {
 	CNS_Reset( &backEndData[tr.smpFrame]->cod1NativeArena );
 	backEndData[tr.smpFrame]->cod1NativeOverflowReported = qfalse;
 	CNS_Reset( &backEndData[tr.smpFrame]->cod1ActorArena );
+	R_ClearPendingActorCaptures(tr.smpFrame);
 	CNS_Reset( &backEndData[tr.smpFrame]->cod1TurretArena );
 	backEndData[tr.smpFrame]->cod1ActorOverflowReported = qfalse;
 
@@ -811,4 +813,5 @@ void RE_RenderScene( const refdef_t *fd ) {
 }
 
 #include "tr_cod1_turret_submission.inc"
+#define C1AA14_PARALLEL 1
 #include "tr_cod1_turret_actor_submission.inc"

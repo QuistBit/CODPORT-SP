@@ -8,7 +8,7 @@
 typedef struct {
  GscActorScriptedPrefixRequest request;cod1ActorLease_t lease;
  cod1ActorRecord_t actor;gentity_t entity;C1GARecord generic;
- const c1atl14Node_t*nodeOwner;const C1GANotifyState*notifyOwner;
+ const c1atl14Node_t*nodeOwner;const C1GANotifyState*notifyOwner;const C1GANameEntry*nameOwner;
  uint64_t epoch,receipt,lookRevision,faceRevision,scriptedRevision,jumperRevision;int dynamic;
  const void *previousRecord;
  uint64_t previousRevision;
@@ -27,7 +27,7 @@ static int FreshStoragePrivate(const void*p,size_t n){
  return ActorOverlap(p,n,&freshPrefixHost,sizeof(freshPrefixHost))||ActorOverlap(p,n,&freshOperation,sizeof(freshOperation))||
   (c&&(ActorOverlap(p,n,c,sizeof(*c))||
    ActorOverlap(p,n,c->generic.nodes,c->generic.nodes?C1GA_COUNT*sizeof(*c->generic.nodes):0)||
-   ActorOverlap(p,n,c->generic.notify,c->generic.notify?sizeof(*c->generic.notify):0)));
+   ActorGenericNamesPrivate(p,n,&c->generic)||ActorOverlap(p,n,c->generic.notify,c->generic.notify?sizeof(*c->generic.notify):0)));
 }
 static void FreshOperationCancelOwner(uint32_t i,const GscEntityRef*o){
  FreshPrefixCall*c=freshOperation.stage;
@@ -115,7 +115,7 @@ static int FreshOwnerCurrent(const FreshPrefixCall*c){
    * explicitly, then full real arrays: no shallow struct memcmp shortcut. */
   !memcmp(&cod1GenericActors[after.actorIndex].lease,&c->lease,sizeof(c->lease))&&
   cod1GenericActors[after.actorIndex].nodes==c->nodeOwner&&
-  cod1GenericActors[after.actorIndex].notify==c->notifyOwner&&
+  cod1GenericActors[after.actorIndex].notify==c->notifyOwner&&cod1GenericActors[after.actorIndex].names==c->nameOwner&&
   cod1GenericActors[after.actorIndex].used==c->generic.used&&
   cod1GenericActors[after.actorIndex].tick==c->generic.tick&&
   cod1GenericActors[after.actorIndex].runtime==c->generic.runtime&&
@@ -124,7 +124,7 @@ static int FreshOwnerCurrent(const FreshPrefixCall*c){
   !memcmp(cod1GenericActors[after.actorIndex].lookCells,c->generic.lookCells,sizeof(c->generic.lookCells))&&
   cod1GenericActors[after.actorIndex].nodes&&cod1GenericActors[after.actorIndex].notify&&
   !memcmp(c->generic.nodes,cod1GenericActors[after.actorIndex].nodes,C1GA_COUNT*sizeof(*c->generic.nodes))&&
-  !memcmp(c->generic.notify,cod1GenericActors[after.actorIndex].notify,sizeof(*c->generic.notify));
+  !memcmp(c->generic.notify,cod1GenericActors[after.actorIndex].notify,sizeof(*c->generic.notify))&&ActorGenericNamesEqual(&c->generic,cod1GenericActors+after.actorIndex);
 }
 static int TrainingRigStart(int kind,const GscActorScriptedPrefixRequest *input,
  GscEntityExecutionCertificate *out,int *admitted,int(*current)(void*),void *context){
@@ -154,7 +154,7 @@ static int TrainingRigStart(int kind,const GscActorScriptedPrefixRequest *input,
  e->s.time=level.time-p->initialStep;
  p->record=record;p->startTick=level.time;p->lastTick=e->s.time;p->running=1;strcpy(p->event,q.notify);
  memset(out,0,sizeof(*out));*admitted=2;
- G_Printf("[Training tower] start model=%s owner=%u/%u host=%d logical=%d\n",trainingRigClips[kind],q.entity.slot,q.entity.generation,level.time,q.now_ms);
+ G_Printf("[Training tower] start model=%s owner=%u/%u host=%d requestTick=%d\n",trainingRigClips[kind],q.entity.slot,q.entity.generation,level.time,q.now_ms);
  return 1;
 }
 int TrainingRigFrame(int now,int(*note)(const GscEntityRef*,const char*,const char*)){
@@ -204,7 +204,7 @@ static int FreshPrefixInvoke(void*user,const GscActorScriptedPrefixRequest*input
  c->scriptedRevision=cod1ScriptedResources.revision;
  c->actor=cod1Actors[lease.actorIndex];c->entity=g_entities[lease.entity.slot];
  c->nodeOwner=cod1GenericActors[lease.actorIndex].nodes;
- c->notifyOwner=cod1GenericActors[lease.actorIndex].notify;
+ c->notifyOwner=cod1GenericActors[lease.actorIndex].notify;c->nameOwner=cod1GenericActors[lease.actorIndex].names;
  if(!MoodyPreviousRecord(c,&c->previousRecord,&c->previousRevision,&c->previousClip))goto done;
  if(!ActorGenericClone(&c->generic,cod1GenericActors+lease.actorIndex))goto done;
  freshOperation.busy=1;freshOperation.cancelled=0;freshOperation.stage=c;
@@ -230,7 +230,7 @@ static int FreshPrefixInvoke(void*user,const GscActorScriptedPrefixRequest*input
  if(c->previousClip){
   C1GARecord *live=cod1GenericActors+lease.actorIndex;
   memcpy(live->nodes,c->generic.nodes,C1GA_COUNT*sizeof(*live->nodes));
-  memcpy(live->notify,c->generic.notify,sizeof(*live->notify));++live->revision;
+  memcpy(live->notify,c->generic.notify,sizeof(*live->notify));memcpy(live->names,c->generic.names,(size_t)c->generic.notify->nameCount*sizeof(*live->names));++live->revision;
  }
  if(c->previousRecord && g_debugMove.integer)
   G_Printf("[Training gesture replacement] owner=%u/%u now=%d old=%u next=%u op=%d state=%d\n",

@@ -793,6 +793,7 @@ void Cmd_FollowCycle_f( gentity_t *ent, int dir );
 //
 void G_CheckTeamItems( void );
 void G_RunItem( gentity_t *ent );
+int G_Cod1ScriptLaunchFrame(gentity_t *ent);
 void RespawnItem( gentity_t *ent );
 
 void UseHoldableItem( gentity_t *ent, int item );
@@ -820,6 +821,7 @@ qboolean G_Cod1RngOwnerReady(void);
 qboolean G_Cod1RngDraw15(uint32_t *out);
 qboolean G_Cod1RngDrawPair(uint32_t *pitch,uint32_t *roll);
 
+qboolean G_Cod1DeadPlayer( const gentity_t *ent );
 qboolean G_Cod1MapEntities( void );
 gentity_t *G_Cod1AimedPickupCandidate( gentity_t *player, float *score );
 qboolean G_Cod1ApplyAimedPickupCandidate( gentity_t *player, gentity_t *item, qboolean hint );
@@ -1288,17 +1290,21 @@ int G_Cod1GscTestCarbineSpawnAllowed(const char *);
 
 int trap_Cod1SpatialCapsuleTrace(const cod1SpatialTraceQuery_t *query, trace_t *results);
 int trap_Cod1SpatialPointTrace(const cod1SpatialTraceQuery_t *query, trace_t *results);
+int trap_Cod1SpatialBoxTrace(const cod1SpatialTraceQuery_t *query, trace_t *results);
 int trap_Cod1SpatialArea(const cod1SpatialAreaQuery_t *query, int *slots, int capacity, int *count);
 int trap_Cod1SpatialSight(const cod1SpatialSightQuery_t *query, int *blocked);
 int trap_Cod1SpatialActorLink(const cod1SpatialActorLink_t *request);
 int trap_Cod1SpatialActorUnlink(const cod1SpatialActorUnlink_t *request);
 int trap_Cod1PathSight(const cod1PathSightQuery_t*,int*);
+int trap_Cod1PathWorldSight(const cod1SpatialTraceQuery_t*,int*);
 int trap_Cod1SpatialActorContents(const cod1SpatialActorContents_t *request);
 int trap_Cod1SpatialSceneReset(const cod1SpatialSceneReset_t *request);
 int trap_Cod1DObjBuild(const cod1DObjBuild_t *request, cod1DObjSummary_t *out);
 int trap_Cod1DObjFree(const cod1DObjFree_t *request);
 int trap_Cod1DObjSceneReset(const cod1DObjSceneReset_t *request);
 int trap_Cod1DObjQuery(const cod1DObjQuery_t *request, cod1DObjQueryResult_t *out);
+int trap_Cod1ModelBounds(const cod1ModelResourceReference_t*,cod1ModelBounds_t*);
+int trap_Cod1ModelPartName(const cod1ModelResourceReference_t*,int32_t,cod1ModelPartNameResult_t*);
 int trap_Cod1ModelPrecache(const cod1ModelPrecache_t *request);
 int trap_Cod1ModelResourceReference(const cod1ModelResourceReference_t *request,
                                   cod1ModelResourceReference_t *out);

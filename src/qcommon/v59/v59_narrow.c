@@ -2,6 +2,7 @@
  * Capsule narrow phases reconstructed and verified against CoD1 SP.
  * Facet clipping follows the RTCW-derived reference; see LICENSE_RTCW.txt. */
 #include "v59_internal.h"
+#include "v59_box_brush.h"
 static int brush_inside(const brush*b,const trace_work*t){int k,j;float p[3],d;const brush_plane*s;
  for(k=0;k<3;k++)if(t->bmins[k]>b->maxs[k]||t->bmaxs[k]<b->mins[k])return 0;
  for(j=6;j<b->n;j++){s=&b->planes[j];d=fa(s->d,t->radius);for(k=0;k<3;k++)p[k]=dp(s->n,t->offset,1,0,2)>0?fs(t->start[k],t->offset[k]):fa(t->start[k],t->offset[k]);
@@ -95,9 +96,16 @@ static void mesh_sweep(v59_context*c,const mesh*m){
  }
 }
 void v59_narrow(v59_context*c,int kind,int index,int stationary){trace_work*t=&c->t;const surface*s;float previous;int hit,k;
- if(kind==1){const brush*b=&c->w->brushes[index];if(!stationary){brush_sweep(c->w,b,t);return;}
+ if(kind==1){const brush*b=&c->w->brushes[index];if(!stationary){if(!t->capsule&&!t->point)C1BB14_Sweep(c->w,b,t);else brush_sweep(c->w,b,t);return;}
   if(brush_inside(b,t)){t->fraction=0;t->allsolid=t->startsolid=1;t->contents=b->contents;}return;}
- s=&c->w->surfaces[index];if(stationary){hit=s->type?mesh_inside(&s->m,t):curve_inside(&s->c,t);if(hit){t->fraction=0;t->allsolid=t->startsolid=1;}return;}
+ s=&c->w->surfaces[index];
+ if(!t->capsule&&!t->point){
+  /* Only a proved miss may skip an unimplemented surface primitive. Include
+   * native contact epsilon in the conservative broadphase comparison. */
+  for(k=0;k<3;k++)if(fs(t->bmins[k],.125f)>s->bounds[k+3]||fa(t->bmaxs[k],.125f)<s->bounds[k])return;
+  c->unsupported=1;return;
+ }
+ if(stationary){hit=s->type?mesh_inside(&s->m,t):curve_inside(&s->c,t);if(hit){t->fraction=0;t->allsolid=t->startsolid=1;}return;}
  for(k=0;k<3;k++)if(t->bmins[k]>s->bounds[k+3]||t->bmaxs[k]<s->bounds[k])return;
  previous=t->fraction;if(s->type)mesh_sweep(c,&s->m);else curve_sweep(&s->c,t);
  if(t->fraction<previous){t->flags=c->w->materials[s->material].flags;t->contents=s->contents;t->material=72u*(s->material+1);}

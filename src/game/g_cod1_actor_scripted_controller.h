@@ -9,6 +9,7 @@ typedef struct {
  int initialized,entered,invalid,entered_ms;
  int timer28,timer2c,timer34,base_entered_ms;
  int force250,currentSource,currentCategory,resumed4;
+ int criticalEnteredMs;unsigned char nativeClass268;
 } cod1ActorScriptedController_t;
 enum {C1CP_NONE=0,C1CP_CLOCK_SELECT=1,C1CP_RECORD_UPDATE=2,C1CP_FRAME_ENTER=3};
 /* Internal prototypes must precede provider implementations. */

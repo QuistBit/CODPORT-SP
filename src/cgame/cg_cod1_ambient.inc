@@ -11,6 +11,12 @@ static struct {
     int last_time,have_time,have_server_id;
     uint32_t server_id;
 } cgCod1Ambient;
+/* The map can publish its first exterior while the mission diary owns the
+ * screen. Keep the resolved request until the world is first presented. */
+static struct {
+    cod1AmbientPlayback play,stop;
+    int deadline;
+} cgCod1AmbientOpening;
 static void CCA_Advance(uint64_t *value) {if(*value!=UINT64_MAX)++*value;}
 static cod1AmbientClientLease_t CCA_Lease(void) {
     cod1AmbientClientLease_t lease;
@@ -31,6 +37,7 @@ static void CCA_ResetTarget(uint64_t epoch,uint64_t floor,uint64_t operation_id)
     cgCod1Ambient.epoch=epoch;cgCod1Ambient.floor=floor;
     cgCod1Ambient.operation_id=operation_id;
     cgCod1Ambient.last_time=0;cgCod1Ambient.have_time=0;
+    memset(&cgCod1AmbientOpening,0,sizeof(cgCod1AmbientOpening));
     memset(&playback,0,sizeof(playback));playback.kind=COD1_AMBIENT_RESET;
     playback.epoch=epoch;playback.operation_id=operation_id;
     playback.client_incarnation=cgCod1Ambient.incarnation;playback.client_time=cg.time;
@@ -42,11 +49,36 @@ void CG_Cod1AmbientReset(qboolean full) {
     CCA_ResetTarget(full?0:cgCod1Ambient.epoch,full?0:cgCod1Ambient.floor,
         full?0:cgCod1Ambient.operation_id);
 }
+static int CCA_WorldVisible(void) {
+    return cg.snap && cg.clientFrame && !cg_norender.integer &&
+        !(trap_Key_GetCatcher() & KEYCATCH_UI);
+}
+static void CCA_StartOpening(void) {
+    cod1AmbientClientLease_t lease;
+    cod1AmbientPlayback play,stop;
+    if(!cgCod1AmbientOpening.play.kind)return;
+    lease=CCA_Lease();
+    if(!CCA_WorldVisible() || !CCA_Current(&lease))return;
+    play=cgCod1AmbientOpening.play;
+    stop=cgCod1AmbientOpening.stop;
+    play.transitionMs=cgCod1AmbientOpening.deadline>cg.snap->serverTime?
+        cgCod1AmbientOpening.deadline-cg.snap->serverTime:0;
+    play.client_time=stop.client_time=cg.time;
+    memset(&cgCod1AmbientOpening,0,sizeof(cgCod1AmbientOpening));
+    if(trap_Cod1ScriptAmbient(&play)!=1 && CCA_Current(&lease))
+        CG_Printf("CoD1 ambience: sound engine refused opening track\n");
+    if(stop.kind && CCA_Current(&lease))trap_Cod1ScriptAmbient(&stop);
+}
 void CG_Cod1AmbientFrame(void) {
-    if(cg.time<0 || (cgCod1Ambient.have_time && cg.time<cgCod1Ambient.last_time)) {
+    /* Resuming the diary corrects the presentation clock back to game time.
+     * Only a backward server snapshot belongs to a previous audio timeline. */
+    if(!cg.snap)return;
+    if(cg.snap->serverTime<0 || (cgCod1Ambient.have_time &&
+       cg.snap->serverTime<cgCod1Ambient.last_time)) {
         CG_Cod1AmbientReset(qfalse);return;
     }
-    cgCod1Ambient.last_time=cg.time;cgCod1Ambient.have_time=1;
+    cgCod1Ambient.last_time=cg.snap->serverTime;cgCod1Ambient.have_time=1;
+    CCA_StartOpening();
 }
 static int CCA_ModuleId(const cod1AmbientClientLease_t *lease,uint32_t *id) {
     const char *text;char copied[MAX_INFO_STRING];
@@ -145,6 +177,21 @@ void CG_Cod1AmbientCommand(void) {
     /* An import may commit before a nested lifecycle callback retires it.
      * Consume the token before entering it, and never rewind on refusal. */
     cgCod1Ambient.operation_id=event.operation_id;lease=CCA_Lease();
+    if(cgCod1AmbientOpening.play.kind ||
+       (event.kind==COD1_AMBIENT_PLAY && !CCA_WorldVisible())) {
+        if(!CCA_Current(&lease))return;
+        if(event.kind==COD1_AMBIENT_PLAY) {
+            cgCod1AmbientOpening.play=playback;
+            cgCod1AmbientOpening.deadline=event.deadline;
+            cgCod1AmbientOpening.stop.kind=0;
+        }else {
+            /* Stock ambientStop acknowledges the operation without silencing
+             * the current track. Preserve that order on leaving the diary. */
+            cgCod1AmbientOpening.stop=playback;
+        }
+        return;
+    }
+    if(!CCA_Current(&lease))return;
     result=trap_Cod1ScriptAmbient(&playback);
     if(!CCA_Current(&lease))return;
     if(result!=1)CG_Printf("CoD1 ambience: sound engine refused command\n");

@@ -12,9 +12,9 @@
 typedef struct {
     int initialized, enabled;
     qhandle_t stance[3], stanceFlash, healthBack, healthBar, healthCross, ammoBack, nameBack;
-    qhandle_t modeIcons[32], weaponIcons[32];
-    qhandle_t scopeSoftLine, scopeSoftLineH, scopeCenter[32];
-    qhandle_t hipCenter[32], hipSide[32];
+    qhandle_t modeIcons[CW_MAX_DEFS], weaponIcons[CW_MAX_DEFS];
+    qhandle_t scopeSoftLine, scopeSoftLineH, scopeCenter[CW_MAX_DEFS];
+    qhandle_t hipCenter[CW_MAX_DEFS], hipSide[CW_MAX_DEFS];
     qhandle_t compassBack, compassFace, compassHighlight, compassArrow;
     qhandle_t compassFriendly;
     qhandle_t compassObjective, compassObjectiveUp, compassObjectiveDown, compassObjectiveRing;
@@ -90,14 +90,14 @@ static int CodHud_Init(void) {
     codHud.enabled=1;
     codHud.scopeSoftLine=trap_R_RegisterShaderNoMip("hudSoftLine");
     codHud.scopeSoftLineH=trap_R_RegisterShaderNoMip("hudSoftLineH");
-    for(i=0;i<CW_Count() && i<32;i++) {
+    for(i=0;i<CW_Count() && i<CW_MAX_DEFS;i++) {
         const cwDef_t *d=CW_Get(i);
         if(CG_Cod1ReticleKind(CW_String(d,"adsOverlayReticle"))==COD1_RETICLE_CROSSHAIR &&
            *CW_String(d,"reticleCenter"))
             codHud.scopeCenter[i]=trap_R_RegisterShaderNoMip(CW_String(d,"reticleCenter"));
     }
     CG_Printf("CoD1 SHOOTING_TEST_R1: native ADS reticles and reload sound fallback\n");
-    for(i=0;i<CW_Count() && i<32;i++) {
+    for(i=0;i<CW_Count() && i<CW_MAX_DEFS;i++) {
         const cwDef_t *d=CW_Get(i);
         codHud.modeIcons[i]=CodHud_RegisterMaterial(d,"modeIcon");
         codHud.weaponIcons[i]=CodHud_RegisterMaterial(d,"hudIcon");
@@ -457,7 +457,7 @@ static void CodHud_ScopeReticle(const cwDef_t *d, float x, float y,
     root=CW_Find(d->name);
     materials[COD1_SCOPE_LINE_V]=codHud.scopeSoftLine;
     materials[COD1_SCOPE_LINE_H]=codHud.scopeSoftLineH;
-    materials[COD1_SCOPE_CENTER]=(root>=0 && root<32)?codHud.scopeCenter[root]:0;
+    materials[COD1_SCOPE_CENTER]=(root>=0 && root<CW_MAX_DEFS)?codHud.scopeCenter[root]:0;
     /* The reticle-center material must stay square. The mask and its soft
      * lines still span the physical viewport; only the center art uses the
      * 4:3 height-based scale on wider displays. */
@@ -555,8 +555,8 @@ static void CodHud_WeaponSelect(void) {
         baseRoot=d?CW_WeaponRoot(w):-1;
         if(selected && ps.weapon==w && CW_PSDef(&ps))d=CW_PSDef(&ps);
         root=d?CW_Find(d->name):-1;
-        icon=(root>=0 && root<32)?codHud.weaponIcons[root]:0;
-        if(!icon && baseRoot>=0 && baseRoot<32)icon=codHud.weaponIcons[baseRoot];
+        icon=(root>=0 && root<CW_MAX_DEFS)?codHud.weaponIcons[root]:0;
+        if(!icon && baseRoot>=0 && baseRoot<CW_MAX_DEFS)icon=codHud.weaponIcons[baseRoot];
         if(selected)codHud.selectionExpand[slot]+=step;
         else codHud.selectionExpand[slot]-=step;
         if(codHud.selectionExpand[slot]<0)codHud.selectionExpand[slot]=0;
@@ -590,7 +590,7 @@ static void CodHud_WeaponSelect(void) {
             }
             for(chainIndex=0;chainIndex<chainCount;chainIndex++) {
                 alt=chain[chainIndex];alternate=CW_Get(alt);
-                if(!alternate || alt>=32 || !codHud.weaponIcons[alt])continue;
+                if(!alternate || alt>=CW_MAX_DEFS || !codHud.weaponIcons[alt])continue;
                 color[0]=color[1]=color[2]=0.5f;
                 trap_R_SetColor(color);
                 CodHud_Pic(iconX+(iconWidth-((CW_Number(alternate,"wideListIcon")?64:32)))*.5f,
@@ -641,7 +641,7 @@ static void CodHud_Crosshair(const playerState_t *ps) {
        ps->serverCursorHint==HINT_EXIT || !d ||
        cg.refdef.fov_x<=0 || cg.refdef.fov_y<=0)return;
     definition=CW_Find(d->name);
-    if(definition<0 || definition>=32)return;
+    if(definition<0 || definition>=CW_MAX_DEFS)return;
     /* Retail 0x3001001e: fade hip art during the scope-overlay transition.
      * cg_crosshairAlpha now defaults to retail 1.0; cvar overrides apply. */
     alpha=(1-CG_Cod1ScopeAlpha(ps))*cg_crosshairAlpha.value;
@@ -839,10 +839,6 @@ static void CodHud_Draw(void) {
                     for(candidate=0;candidate<6;candidate++) {
                         command=commands[stance][action][candidate];
                         if(!command)break;
-                        /* These two native-only commands have no registered
-                         * handler in this RTCW client. */
-                        if(!Q_stricmp(command,"raisestance") ||
-                           !Q_stricmp(command,"lowerstance"))continue;
                         key=trap_Key_GetKey(command);
                         if(CG_Cod1KeyLabel(key,label,sizeof(label)))break;
                     }
@@ -1015,14 +1011,14 @@ static void CodHud_Draw(void) {
     if(cg_drawStatus.integer && !(ps->eFlags&EF_MG42_ACTIVE)) {
         const cwDef_t *modeDef=nameWeapon==weapon?CW_PSDef(ps):CW_WeaponDef(nameWeapon);
         int mode=modeDef?CW_Find(modeDef->name):-1;
-        qhandle_t icon=mode>=0 && mode<32?codHud.modeIcons[mode]:0;
+        qhandle_t icon=mode>=0 && mode<CW_MAX_DEFS?codHud.modeIcons[mode]:0;
         int age=cg.time-codHud.modeFadeTime;
         /* Enhancement over native ID 83: a 160 ms crossfade at the same
          * fixed 20x20 rect. Cancel it if the weapon, mode or clock changes. */
         if(codHud.modeFadeActive && nameWeapon==weapon &&
            weapon==codHud.modeFadeWeapon && mode==codHud.modeFadeTo &&
            age>=0 && age<160) {
-            qhandle_t previous=codHud.modeFadeFrom>=0 && codHud.modeFadeFrom<32?
+            qhandle_t previous=codHud.modeFadeFrom>=0 && codHud.modeFadeFrom<CW_MAX_DEFS?
                 codHud.modeIcons[codHud.modeFadeFrom]:0;
             float fraction=age/160.0f;
             /* With standard alpha blending, dimming both layers would

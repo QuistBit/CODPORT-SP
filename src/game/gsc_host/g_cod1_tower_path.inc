@@ -92,10 +92,10 @@ static int TowerUpdateDirection(const cod1ActorLease_t *l,uint64_t assignment,in
  return 1;
 }
 int TrainingJumperPath(const GscEntityRef*,const GscNodeRef*,float route[6][3]);
-static int MotionJumperRoute(const cod1ActorLease_t *l,const cod1ActorGoalSnapshot_t *goal,
-                            int now,int mask,const vec3_t origin,vec3_t target){
+static int MotionJumperPathBuild(const cod1ActorLease_t *l,const cod1ActorGoalSnapshot_t *goal,
+                            int now,const vec3_t origin){
  cod1LocalRoute_t *r=&cod1Actors[l->actorIndex].motion.route;cod1TowerPath_t *p=&r->tower;int i;
- (void)mask;
+ (void)now;
  if(!r->phase){
   if(!TrainingJumperPath(&l->entity,&goal->node,r->points))return -1;
   for(i=0;i<5;i++){
@@ -105,10 +105,23 @@ static int MotionJumperRoute(const cod1ActorLease_t *l,const cod1ActorGoalSnapsh
   }
   p->length=6;p->remaining=p->edgeLength[4];p->lastIndex=5;p->area=32768;
   VectorCopy(r->points[5],p->base);VectorSubtract(p->base,origin,p->aim);p->aim[2]=0;VectorNormalize(p->aim);
-  r->phase=2;r->cursor=0;
+  r->phase=1;r->cursor=0;
+ }
+ return r->phase==1||r->phase==2?1:-1;
+}
+static int MotionJumperRoute(const cod1ActorLease_t *l,const cod1ActorGoalSnapshot_t *goal,
+                            int now,int mask,const vec3_t origin,vec3_t target){
+ cod1LocalRoute_t*r=&cod1Actors[l->actorIndex].motion.route;cod1TowerPath_t*p=&r->tower;(void)mask;
+ if(MotionJumperPathBuild(l,goal,now,origin)!=1)return -1;
+ /* The VM may read the initial direction before this same movement frame.
+  * Consume only its exact tick/origin; never reuse a prior frame's rays. */
+ if(p->prepared){
+  if(p->preparedTick!=now||memcmp(p->preparedOrigin,origin,sizeof(vec3_t)))return -1;
+  p->prepared=0;p->preparedTick=0;VectorClear(p->preparedOrigin);
+ }else{
+  if(r->phase==1){r->phase=2;if(!TowerUpdateDirection(l,goal->assignment,now,r,origin))return -1;}
   if(!TowerUpdateDirection(l,goal->assignment,now,r,origin))return -1;
  }
- if(!TowerUpdateDirection(l,goal->assignment,now,r,origin))return -1;
  VectorMA(origin,p->distance,p->aim,target);target[2]=origin[2];
  if(g_debugMove.integer>1)G_Printf("[tower route] tick=%d n=%d look=%.3f axis=%.5f %.5f face=%.5f %.5f area=%.2f clear=%d\n",
     now,p->length,p->distance,p->aim[0],p->aim[1],p->face[0],p->face[1],p->area,p->lastClear);

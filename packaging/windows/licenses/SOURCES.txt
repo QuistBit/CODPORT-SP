@@ -1,0 +1,8 @@
+CODPORT-SP 724A source and license notices
+https://github.com/QuistBit/CODPORT-SP/tree/724A
+This software is based in part on the work of the Independent JPEG Group.
+
+OpenAL Soft 1.25.2, unmodified upstream Win32 binary
+https://github.com/kcat/openal-soft/releases/tag/1.25.2
+Corresponding OpenAL Soft source
+https://github.com/kcat/openal-soft/archive/refs/tags/1.25.2.zip

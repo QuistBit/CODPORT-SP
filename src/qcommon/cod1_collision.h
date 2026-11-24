@@ -23,6 +23,11 @@ qboolean COD1_BSP_FillCollisionTriangles( const cod1Bsp_t *bsp,
 										 int maxTriangles, int *written,
 										 vec3_t mins, vec3_t maxs );
 
+/* CM-owned immutable world triangles; reset before their storage retires.
+ * Failure only disables acceleration. Query semantics retain the full scan. */
+int COD1_CollisionIndexBuild(const cod1CollisionTri_t *,int);
+void COD1_CollisionIndexReset(void);
+
 /* Conservative swept AABB trace used by the first RTCW CoD1 backend. */
 void COD1_CollisionTrace( const cod1CollisionTri_t *triangles, int triangleCount,
 							 const vec3_t start, const vec3_t end,

@@ -13,7 +13,7 @@ typedef struct {
  float controls[3],arc[4];
  int animated;float phases[2],weights[2];
  c1ttConfig_t config;c1ttState_t tracking;
- c1tpStaticPose_t pose;c1tpWorldFlash_t flash;
+ c1tpStaticPose_t pose;c1tpWorldFlash_t flash;unsigned nativeContents;
 } C1TRecord;
 static int TurretAnimationGunSamples(const C1TRecord *,int,float[2],float[2]);
 static C1TRecord cod1Turrets[C1T_CAPACITY];
@@ -62,6 +62,7 @@ int G_Cod1TurretInitialMaskCurrent(const GscEntityRef *ref) {
   body.scriptStatusCurrent=m->body.scriptStatusCurrent;
  return !memcmp(&copy,&m->owner,sizeof(copy))&&!memcmp(&body,&m->body,sizeof(body));
 }
+#include "g_cod1_turret_navigation_mask.inc"
 static int TurretBlob(const char *path,void *data,int capacity) {
  fileHandle_t file=0;int bytes=trap_FS_FOpenFile(path,&file,FS_READ);
  if(bytes<=0||bytes>capacity||!file){if(file)trap_FS_FCloseFile(file);return 0;}
@@ -102,7 +103,7 @@ int G_Cod1TurretScriptModule(char *out,size_t cap) {
  memcpy(out,staged,n+sizeof("animscripts/"));return 1;
 }
 static int TurretPrepare(C1TRecord *r,int now) {
- gentity_t *e;c1tpStaticPose_t pose;c1tpWorldFlash_t flash;c1aw14Pose_t animatedPose;C1TRModel tags;
+ gentity_t *e;c1tpStaticPose_t pose;c1tpWorldFlash_t flash;unsigned nativeContents;c1aw14Pose_t animatedPose;C1TRModel tags;
  float phases[2]={0,0},weights[2]={0,0};int animated,i;
  if(!r||!r->used||now!=level.time||now<0||!G_Cod1EntitySameAllocation(&r->owner)||
     cod1TurretResourceEpoch!=r->owner.epoch)return 0;
@@ -134,6 +135,8 @@ static int TurretPrepare(C1TRecord *r,int now) {
 #include "g_cod1_actor_face_frame.inc"
 #include "g_cod1_actor_face_tags.inc"
 #include "g_cod1_actor_current_root.inc"
+#include "g_cod1_actor_locomotion_resources.inc"
+#include "g_cod1_actor_general_root_interval.inc"
 #include "g_cod1_actor_scripted_frame.inc"
 #include "g_cod1_actor_scripted_prefix.inc"
 #include "g_cod1_actor_scripted_record.inc"
@@ -162,7 +165,7 @@ int G_Cod1TurretSpawn(gentity_t *ent) {
  for(j=0;j<3;j++)if(!C1TP_Finite(ent->s.origin[j],1000000)||!C1TP_Finite(ent->s.angles[j],3600))return 0;
  model=G_ModelIndex(COD1_TURRET_MODEL_ALIAS);
  if(model<=0||model>=MAX_MODELS||!G_Cod1EntitySameAllocation(&ref))return 0;
- memset(&record,0,sizeof(record));record.owner=ref;record.used=1;record.modelIndex=model;record.mode=3;
+ memset(&record,0,sizeof(record));record.owner=ref;record.used=1;record.modelIndex=model;record.mode=3;record.nativeContents=0x200004;
  memcpy(record.arc,arcs,sizeof(arcs));
  record.config.minPitch=-arcs[2];record.config.maxPitch=arcs[3];
  record.config.minYaw=-arcs[1];record.config.maxYaw=arcs[0];
@@ -202,6 +205,68 @@ static int TurretActorCallCurrent(void *opaque){
  return cod1EntityReady&&!level.spawning&&!level.restarted&&ActorLeaseValid(&c->lease)&&!memcmp(c->input,&c->saved,sizeof(c->saved))&&c->saved.now_ms==level.time&&
   ActorGoalBuffers(c->input,sizeof(*c->input),c->out,sizeof(*c->out),c->error,c->size);
 }
+/* 68AC0 clears the request even when another actor owns the gun. Only the
+ * matching occupant runs 6BE40 and wakes turretownerchange on the gun. */
+/* State 3 Think (6CF97), queued operation 1 (4DCDC) and the
+ * no-enemy, empty-route state 4 enter (65270). State 3 exit is empty
+ * once the original request has been cleared at the script boundary. */
+static int ActorDismountThink(cod1ActorRecord_t *actor,int now){
+    cod1ActorLease_t lease;
+    cod1ActorCriticalState_t queue;
+    cod1ActorTurretMount_t *mount=&actor->turretMount;
+    GscEntityRef owner=actor->owner;
+    if(!TurretMountLease(&owner,&lease) || !TurretMountNoEnemy(&owner) ||
+       now>INT_MAX-2000 || mount->occupiedGun.epoch ||
+       actor->defaults.pathWords[(0x6f4-0x374)/4] ||
+       actor->defaults.pathWords[(0x6f8-0x374)/4]>>16 ||
+       actor->scriptedController.revision==UINT64_MAX)return 0;
+    queue=ActorStateQueueKernel(actor);
+    if(queue.command_count || queue.top || queue.stack[0]!=3 ||
+       !Cod1ActorCriticalAppend(&queue,1,4))return 0;
+    queue.stack[0]=4;
+    ActorControllerRouteEmptyEnter(actor);
+    actor->scriptedController.timer28=500;
+    actor->scriptedController.timer2c=now+50;
+    actor->scriptedController.timer34=now+2000;
+    actor->scriptedController.base_entered_ms=now;
+    actor->scriptedController.revision++;
+    mount->currentStack[0]=4;
+    queue.command_count=0;
+    ActorStateQueueCommit(actor,&queue);
+    if(g_debugMove.integer)G_Printf("[turret] dismounted actor=%u/%u time=%d state=4\n",
+                                   lease.entity.slot,lease.entity.generation,now);
+    return 1;
+}
+static int TurretActorStop(const cod1ActorLease_t *lease,int now,GscTurretReply *reply){
+ cod1ActorTurretMount_t *mount=&cod1Actors[lease->actorIndex].turretMount;
+ C1TRecord *gun;
+ GscEntityRef occupant;
+ if(cod1TurretMountBusyEpoch)return 0;
+ reply->kind=GSC_TURRET_RESULT_VOID;
+ if(mount->requestedGun.epoch){
+    gun=TurretFind(&mount->requestedGun);
+    if(!gun)return 0;
+    if(ActorRefEqual(&gun->actor,&lease->entity)){
+        if(!TurretMountOwnerCurrent(gun,now,&occupant) || !ActorRefEqual(&occupant,&lease->entity))return 0;
+        reply->kind=GSC_TURRET_RESULT_OWNER_RELEASED;
+        reply->entity=gun->owner;
+        if(!ActorDismountTransfer(lease,gun,now))return 0;
+        gun->tracking.flags &= ~0x200u;
+        memset(&gun->actor,0,sizeof(gun->actor));
+        /* Release just the mounted pose/parent. The actor, its VM threads,
+         * state stack, allocation serial and claimed-node state stay live. */
+        TurretActorPublisherRetire(&lease->entity);
+        TurretMountedRetire(&lease->entity);
+        TurretFitRetire(&lease->entity);
+        TurretAnimationRetire(&lease->entity);
+        memset(&mount->occupiedGun,0,sizeof(mount->occupiedGun));
+        mount->mounted=0;
+        mount->pendingOwnerNotify=mount->pendingStateNotify=mount->pendingStand=0;
+    }
+ }
+ memset(&mount->requestedGun,0,sizeof(mount->requestedGun));
+ return 1;
+}
 static int TurretActorControl(const GscTurretRequest*input,GscTurretReply*out,char*error,size_t size,int(*current)(void*),void*context){
  C1TActorCall call;GscTurretReply reply;cod1ActorTurretMount_t mount;C1TRecord*r;GscEntityRef owner;int accepted;
  if(!input||!out||!current||!ActorGoalBuffers(input,sizeof(*input),out,sizeof(*out),error,size))return 0;
@@ -211,6 +276,8 @@ static int TurretActorControl(const GscTurretRequest*input,GscTurretReply*out,ch
  if(call.saved.kind==GSC_TURRET_USE){
   if(!G_Cod1TurretMountRequest(&call.saved.entity,&call.saved.argument,call.saved.now_ms,TurretActorCallCurrent,&call,&accepted))return 0;
   reply.kind=GSC_TURRET_RESULT_BOOL;reply.boolean=accepted;
+ }else if(call.saved.kind==GSC_TURRET_STOP_USE){
+  if(!TurretActorStop(&call.lease,call.saved.now_ms,&reply))return 0;
  }else if(call.saved.kind==GSC_TURRET_GET){
   if(!G_Cod1TurretMountRead(&call.saved.entity,&mount))return 0;
   reply.kind=GSC_TURRET_RESULT_UNDEFINED;
@@ -232,7 +299,7 @@ static int TurretControlInvoke(void *unused,const GscTurretRequest *input,GscTur
  if(q.kind!=GSC_TURRET_GET&&q.kind!=GSC_TURRET_IS_FIRING&&(r=TurretFind(&q.entity)))
   cod1TurretMasks[r-cod1Turrets].valid=0;
  if(q.kind==GSC_TURRET_SHOOT)return TurretShotInvoke(input,out,error,size,current,context);
- if(q.kind==GSC_TURRET_USE||q.kind==GSC_TURRET_GET)return TurretActorControl(input,out,error,size,current,context);
+ if(q.kind==GSC_TURRET_USE||q.kind==GSC_TURRET_GET||q.kind==GSC_TURRET_STOP_USE)return TurretActorControl(input,out,error,size,current,context);
  if(!cod1EntityReady||level.spawning||level.restarted||q.now_ms!=level.time||current(context)!=1||
     !(r=TurretFind(&q.entity)))goto refused;
  before=*r;next=before;memset(&reply,0,sizeof(reply));reply.kind=GSC_TURRET_RESULT_VOID;
@@ -242,6 +309,9 @@ static int TurretControlInvoke(void *unused,const GscTurretRequest *input,GscTur
   next.mode=bits;break;
  case GSC_TURRET_START_FIRING:next.firingRequested=1;break;
  case GSC_TURRET_STOP_FIRING:next.firingRequested=0;break;
+ /* Original 33669 clears turret+10 only. Tracking state and the request
+  * to fire belong to separate native cells. */
+ case GSC_TURRET_CLEAR_TARGET:memset(&next.target,0,sizeof(next.target));break;
  case GSC_TURRET_SET_TARGET_ENTITY:
   if(!G_Cod1EntitySameAllocation(&q.argument)||!g_entities[q.argument.slot].classname||
      strcmp(g_entities[q.argument.slot].classname,"script_origin"))goto refused;
@@ -362,7 +432,7 @@ static int FoleyDispatchFrame(const GscEntityRef *ref,int now,uint64_t generatio
     memcmp(&lease,&f->lease,sizeof(lease)) || owner->runtime!=f->runtime || owner->catalog!=f->catalog ||
     f->poisoned || f->count)return 0;
  if(prepared){
-    if(!beforeVm||memcmp(prepared,&lease,sizeof(lease))||(!ActorRunnerFaceOwner(cod1GenericActors+lease.actorIndex)&&!TrainingJumperAllocation(ref)&&!MoodyIdleTree(cod1GenericActors+lease.actorIndex))||
+    if(!beforeVm||memcmp(prepared,&lease,sizeof(lease))||(!ActorStandingBody(cod1GenericActors+lease.actorIndex)&&!ActorRunnerFaceOwner(cod1GenericActors+lease.actorIndex)&&!ActorOrdinaryClockOwner(cod1GenericActors+lease.actorIndex)&&!TrainingJumperAllocation(ref)&&!MoodyIdleTree(cod1GenericActors+lease.actorIndex))||
        !f->open||f->done||f->frame!=generation||f->tick!=now||cod1GenericActors[lease.actorIndex].tick!=now)return 0;
  }else if(f->open)return 0;
  if(f->frame==generation && f->tick==now && f->done && cod1GenericActors[lease.actorIndex].tick==now){
@@ -399,18 +469,16 @@ int FoleyPrivateDispatch(const GscEntityRef *ref,int now,uint64_t generation,int
  return FoleyDispatchFrame(ref,now,generation,current,ctx,0,NULL);
 }
 
-/* The original run::main enters utility::initialize("run"), whose
- * initAnimTree clears the outgoing body over .3 seconds. Commit the
- * finished jump leaf on the same leased tree its notetracks used. */
-int TrainingJumperRunBlend(const GscEntityRef *ref,int now,float rate,int(*current)(void*),void *ctx){
+/* The original run::main now owns body clearing and animation selection.
+ * This retains only the existing motion controller's rate receipt, with the
+ * same closed-frame lease. It does not mutate the animation tree. */
+int TrainingJumperRunRate(const GscEntityRef *ref,int now,float rate,int(*current)(void*),void *ctx){
  C1FaceFrameCall *c;int ok=0;
  if(!(rate>=.8f&&rate<=1.2f)||!TrainingJumperAllocation(ref)||cod1Actors[trainingJumperOwner.actorIndex].courseRunRate)return 0;
- c=ActorFaceFrameEnter(ref,now,current,ctx);if(!c)return 0;
- if(c->frame.open||!c->frame.done||c->stage.tick!=now||c->stage.nodes[892].phase<1)goto done;
- if(!C1AGT14_Clear(cod1GenericDefinitions,c->stage.nodes,C1GA_COUNT,892,.3f))goto done;
- ActorGenericNamedCancelSubtree(&c->stage,892);
- ok=ActorFaceFrameCommit(c,&c->frame);
- if(ok)cod1Actors[c->lease.actorIndex].courseRunRate=rate;
+ c=ActorFaceFrameAcquire(ref,now,current,ctx,0);if(!c)return 0;
+ if(c->frame.open||!c->frame.done||c->saved.tick!=now||c->baseline.nodes[892].phase<1)goto done;
+ if(current(ctx)!=1||!ActorFaceFrameFence(c))goto done;
+ cod1Actors[c->lease.actorIndex].courseRunRate=rate;ok=1;
  done:ActorFaceFrameLeave(c);return ok;
 }
 int TrainingJumperClock(int now,uint64_t generation,int prepare,int(*current)(void*),void *ctx){
@@ -428,16 +496,15 @@ int TrainingMoodyFrame(const GscEntityRef *ref,int now,uint64_t generation,int p
  cod1ActorLease_t lease;const C1FaceFrame *f;
  if(!ActorGoalLease(ref,&lease)||now!=level.time||current(ctx)!=1)return 0;
  if(!ActorScriptedClockSelected(lease.actorIndex))return 1;
- if(!MoodyIdleTree(cod1GenericActors+lease.actorIndex))return 0;
+ if(!MoodyIdleTree(cod1GenericActors+lease.actorIndex)){G_Printf("[382 frame] MoodyIdleTree refused tick=%d prepare=%d\n",now,prepare);return 0;}
  f=cod1FaceFrames+lease.actorIndex;
  if(f->tick==now&&!f->frame&&!f->open)return 1;
  if(prepare)return G_Cod1ActorFaceFrameBegin(ref,now,generation,current,ctx);
- return FoleyDispatchFrame(ref,now,generation,current,ctx,1,&lease);
+ {int ok=FoleyDispatchFrame(ref,now,generation,current,ctx,1,&lease);if(!ok)G_Printf("[382 frame] dispatch refused tick=%d prepare=%d\n",now,prepare);return ok;}
 }
-int FoleyPrivateSelectedBeforeVm(const GscEntityRef *ref,int now,uint64_t generation,int (*current)(void*),void *ctx){
- cod1ActorLease_t lease;
- if(!ActorGoalLease(ref,&lease) || current(ctx)!=1 || now!=level.time)return 0;
- if(!ActorScriptedClockSelected(lease.actorIndex))return 1;
+static int FoleyPrivateSelectedBeforeVm(const GscEntityRef *ref,int now,uint64_t generation,int (*current)(void*),void *ctx,cod1ActorLease_t *lease){
+ if(!ActorGoalLease(ref,lease) || current(ctx)!=1 || now!=level.time)return 0;
+ if(!ActorScriptedClockSelected(lease->actorIndex))return 1;
  return FoleyDispatchFrame(ref,now,generation,current,ctx,1,NULL);
 }
 
@@ -449,6 +516,8 @@ int FoleyPrivateQueuedController(const GscEntityRef *ref,int now,uint64_t frame,
  if(cod1Actors[lease.actorIndex].scriptedAux.prefix!=FRESH_PREFIX_QUEUE_COMMITTED){
   const cod1ActorRecord_t *a=cod1Actors+lease.actorIndex;
   if(!a->scriptedController.selectionSerial)return 0;
+  if(a->scriptedController.currentSource==1||a->scriptedController.currentSource==2)
+   return ActorLocomotionControllerCurrent(a,lease.serial)?0:-1;
   if(!a->scriptedController.entered||a->scriptedController.invalid||a->scriptedController.resumed4||
      a->scriptedController.actorSerial!=lease.serial||a->scriptedController.currentSource!=4||
      a->turretMount.currentTop!=1||a->turretMount.currentStack[0]!=4||a->turretMount.currentStack[1]!=9)return -1;
@@ -535,36 +604,93 @@ static int ActorHasNormalRecord(unsigned index){return index<COD1_ACTOR_CAPACITY
 /* Only the unmounted runner's real INIT can install this clock. A GetEye
  * request may then arrive every VM bucket. Tick once before that bucket,
  * under the live level/Session lease, without advancing AI state or notes. */
-int TrainingCourseClocksBeforeVm(const GscEntityRef *instructor,int now,uint64_t frame,int (*current)(void*),void *ctx){
- unsigned i;
- cod1ActorLease_t speaking={0};
- if(!frame||now!=level.time||!current||current(ctx)!=1)return 0;
- for(i=0;i<COD1_ACTOR_CAPACITY;i++){
+typedef struct {
+ unsigned next,count,stage;
+ GscEntityRef instructor;
+ cod1ActorLease_t instructorLease,speaking[COD1_ACTOR_CAPACITY];
+} CourseClockCursor;
+
+static int CourseClockRunner(CourseClockCursor *cursor,unsigned i,int now,uint64_t frame,
+                             int (*current)(void*),void *ctx){
   const C1FaceFrame *f=cod1FaceFrames+i;
   cod1ActorLease_t lease;
   const cod1ActorRecord_t *a;
-  if(!f->selected||!f->scripted)continue;
   lease=f->lease;
-  if(lease.actorIndex!=i||!ActorLeaseValid(&lease))return 0;
-  if(!g_entities[lease.entity.slot].targetname||strcmp(g_entities[lease.entity.slot].targetname,"runner"))continue;
+  if(lease.actorIndex!=i||!ActorLeaseValid(&lease)){G_Printf("[474C course boundary] tick=%d line=%d\n",now,__LINE__);return 0;}
+  if(!g_entities[lease.entity.slot].targetname||strcmp(g_entities[lease.entity.slot].targetname,"runner"))return 1;
   a=cod1Actors+i;
-  if(!a->scriptedController.entered||a->scriptedController.invalid||a->scriptedController.selectionSerial||
-     a->turretMount.mounted||a->turretMount.currentTop||a->turretMount.currentStack[0]!=4||
-     cod1NormalRecords[i]||a->scriptedAux.record!=FRESH_AUX_EMPTY||a->scriptedAux.prefix!=FRESH_PREFIX_UNUSED||
-     !cod1GenericActors[i].notify||f->count||f->open||f->poisoned)return 0;
+  /* Native ordinary MAIN now has an explicit retained selection. Advance
+   * its canonical prepared tree before VM just as the initial standing
+   * owner, including a genuine critical8 transition. No second clock. */
+  if((!ActorOrdinaryClockOwner(cod1GenericActors+i)&&
+     (!a->scriptedController.entered||a->scriptedController.invalid||a->scriptedController.selectionSerial||
+      a->turretMount.mounted||a->turretMount.currentTop||a->turretMount.currentStack[0]!=4||
+      cod1NormalRecords[i]||a->scriptedAux.record!=FRESH_AUX_EMPTY||a->scriptedAux.prefix!=FRESH_PREFIX_UNUSED))||
+     !cod1GenericActors[i].notify||f->count||f->open||f->poisoned){G_Printf("[474C course boundary] tick=%d line=%d\n",now,__LINE__);return 0;}
   if(ActorGenericNamedActive(cod1GenericActors+i)){
-   if(speaking.serial||!ActorRunnerFaceOwner(cod1GenericActors+i)||!ActorFaceFrameClosure(cod1GenericActors+i))return 0;
-   speaking=lease;
-  }else if(!FoleyPrivateDispatch(&lease.entity,now,frame,current,ctx)||!ActorLeaseValid(&lease))return 0;
+   if((!ActorStandingBody(cod1GenericActors+i)&&!ActorRunnerFaceOwner(cod1GenericActors+i)&&!ActorOrdinaryClockOwner(cod1GenericActors+i))||
+      !ActorFaceFrameClosure(cod1GenericActors+i)){G_Printf("[474C course boundary] tick=%d line=%d\n",now,__LINE__);return 0;}
+   cursor->speaking[cursor->count++]=lease;
+  }else if(!FoleyPrivateDispatch(&lease.entity,now,frame,current,ctx)||!ActorLeaseValid(&lease)){G_Printf("[474C course boundary] tick=%d line=%d\n",now,__LINE__);return 0;}
+ return 1;
+}
+static int TrainingCourseClockSteps(CourseClockCursor *cursor,const GscEntityRef *instructor,
+    int now,uint64_t frame,int (*current)(void*),void *ctx,int (*expired)(void)){
+ if(!frame||now!=level.time||!current||current(ctx)!=1)return 0;
+ if(cursor->stage==0){
+  if(instructor)cursor->instructor=*instructor;
+  cursor->stage=1;
+ }else if(!instructor||instructor->epoch!=cursor->instructor.epoch||
+          instructor->slot!=cursor->instructor.slot||instructor->generation!=cursor->instructor.generation)return 0;
+ while(cursor->stage==1 && cursor->next<COD1_ACTOR_CAPACITY){
+  unsigned i=cursor->next++;
+  if(!cod1FaceFrames[i].selected||!cod1FaceFrames[i].scripted)continue;
+  if(!CourseClockRunner(cursor,i,now,frame,current,ctx))return 0;
+  if(expired && expired())return 2;
  }
+ if(cursor->stage==1){cursor->stage=2;cursor->next=0;}
  /* An actual notetrack can wake scripts that read either actor's eye tag.
   * Make Elder's current tick available before Foley can wake a waiter. Then
   * finish Elder's already-open frame after the other actor poses are current. */
- if(speaking.serial && !G_Cod1ActorFaceFrameBegin(&speaking.entity,now,frame,current,ctx))return 0;
- if(!FoleyPrivateSelectedBeforeVm(instructor,now,frame,current,ctx)||current(ctx)!=1)return 0;
- if(!speaking.serial)return 1;
- if(!ActorLeaseValid(&speaking))return G_Cod1EntityDeleteRetiredIdentity(&speaking.entity,&speaking);
- return FoleyDispatchFrame(&speaking.entity,now,frame,current,ctx,1,&speaking)&&current(ctx)==1;
+ while(cursor->stage==2 && cursor->next<cursor->count){
+  const cod1ActorLease_t *l=&cursor->speaking[cursor->next++];
+  if(!G_Cod1ActorFaceFrameBegin(&l->entity,now,frame,current,ctx))return 0;
+  if(expired && expired())return 2;
+ }
+ if(cursor->stage==2){
+  if(!FoleyPrivateSelectedBeforeVm(instructor,now,frame,current,ctx,&cursor->instructorLease)||current(ctx)!=1){G_Printf("[474C course boundary] tick=%d line=%d\n",now,__LINE__);return 0;}
+  cursor->stage=3;cursor->next=0;
+  if(cursor->count && expired && expired())return 2;
+ }
+ while(cursor->next<cursor->count){
+  const cod1ActorLease_t *l=&cursor->speaking[cursor->next++];
+  if(!ActorLeaseValid(l)){if(!G_Cod1EntityDeleteRetiredIdentity(&l->entity,l)){G_Printf("[474C course boundary] tick=%d line=%d\n",now,__LINE__);return 0;}continue;}
+  if(!FoleyDispatchFrame(&l->entity,now,frame,current,ctx,1,l)||current(ctx)!=1){G_Printf("[474C course boundary] tick=%d line=%d\n",now,__LINE__);return 0;}
+  /* A note can retire the whole course. Once the last actor finishes,
+   * return completion before the outer scheduler checks its deadline. */
+  if(cursor->next < cursor->count && expired && expired())return 2;
+ }
+ return 1;
+}
+int TrainingCourseClocksBeforeVm(const GscEntityRef *instructor,int now,uint64_t frame,
+                                 int (*current)(void*),void *ctx){
+ CourseClockCursor cursor;
+ cursor.stage=cursor.next=cursor.count=0;
+ return TrainingCourseClockSteps(&cursor,instructor,now,frame,current,ctx,NULL);
+}
+int FoleySameBucketRetirement(const GscEntityRef *,const cod1ActorLease_t *);
+int TrainingCourseClocksBeforeVmSlice(const GscEntityRef *instructor,int now,uint64_t frame,
+    int (*current)(void*),void *ctx,int resume,int (*expired)(void)){
+ static CourseClockCursor cursor;
+ if(!resume)cursor.stage=cursor.next=cursor.count=0;
+ /* After Foley's step, the remaining runners own their individual leases.
+  * A note can commit the original instructor's deletion before we resume. */
+ if(!G_Cod1EntitySameAllocation(instructor)){
+  if(!resume || cursor.stage!=3 || !FoleySameBucketRetirement(instructor,&cursor.instructorLease))return 0;
+  if(g_debugMove.integer)G_Printf("[Training course] resumed after committed instructor retirement tick=%d remaining=%u\n",
+                                  now,cursor.count-cursor.next);
+ }
+ return TrainingCourseClockSteps(&cursor,instructor,now,frame,current,ctx,expired);
 }
 
 /* A real idle face may span a new body request. Before the normal record
@@ -599,7 +725,22 @@ static int MoodyStopped(const C1GARecord *tree){
 }
 static int MoodyNamedIdle(const C1GARecord *tree){
  return MoodyIdleTree(tree) && tree->notify->flags[889].token==890 && tree->notify->generation[889] &&
-    !strcmp(tree->notify->names[889],"idleanim");
+    !strcmp(ActorGenericName(tree,889),"idleanim");
+}
+/* The original scripted prefix queues row9 before constructing its body
+ * record. The existing idle tree remains owned during that exact queue state.
+ * This predicate permits observation/clock closure, never queue consumption. */
+static int MoodyQueuedIdle(const C1GARecord *tree){
+ const cod1ActorRecord_t *a;
+ if(!MoodyNamedIdle(tree))return 0;a=cod1Actors+tree->lease.actorIndex;
+ return ActorControllerFreshDomain(a)&&!a->scriptedController.selectionSerial&&
+  !a->scriptedController.resumed4&&!a->turretMount.currentTop&&a->turretMount.currentStack[0]==4&&
+  !cod1NormalRecords[tree->lease.actorIndex]&&a->critical.command_count==1&&
+  a->critical.top==1&&a->critical.stack[0]==4&&a->critical.stack[1]==9&&
+  a->critical.commands[0].operation==2&&a->critical.commands[0].state==9&&
+  a->scriptedAux.actorSerial==tree->lease.serial&&a->scriptedAux.revision&&
+  a->scriptedAux.revision<UINT64_MAX&&a->scriptedAux.admitted==1&&
+  a->scriptedAux.record==FRESH_AUX_EMPTY&&a->scriptedAux.prefix==FRESH_PREFIX_QUEUE_COMMITTED;
 }
 int G_Cod1MoodyIdleNeeded(const GscEntityRef *ref,int *needed){
  cod1ActorLease_t lease;
@@ -630,7 +771,7 @@ static int FoleyConstructingIdleOwner(const C1GARecord *tree){
   if(op->frame!=cod1FaceFrameOperation||tree!=&op->frame->stage||
      !op->record->present||op->record->revision!=1||op->record->value.clip!=clip||
      !tree->notify||tree->notify->flags[clip].token!=clip+1||
-     strcmp(tree->notify->names[clip],op->q.notify))return 0;
+     strcmp(ActorGenericName(tree,clip),op->q.notify))return 0;
  }else if(tree!=live||op->record->present||op->record->revision)return 0;
  for(j=0;j<C1ASB14_COUNT;j++){
   unsigned n=c1asb14Additional[2+j].ordinal;
@@ -688,7 +829,7 @@ static int ActorOwnedEyeResetBody(const C1GARecord *tree,unsigned *body){
   }
  }
  if(clip>=C1GA_COUNT||tree->notify->flags[clip].token!=clip+1||
-    !tree->notify->generation[clip]||strcmp(tree->notify->names[clip],"single anim"))return 0;
+    !tree->notify->generation[clip]||strcmp(ActorGenericName(tree,clip),"single anim"))return 0;
  *body=clip;
  return 1;
 }

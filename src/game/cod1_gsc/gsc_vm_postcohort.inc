@@ -1,7 +1,14 @@
 typedef struct {GscRuntime*r;PlacedCohortWitness*w;const void*authority;uint64_t owner;uint32_t rows;} PlacedLateScope;
-static int placed_late_current(void*ctx){PlacedLateScope*c=ctx;return c&&c->r&&c->r->placed_cohort==c->w&&
- c->w->phase==PLACED_COHORT_LATE&&c->w->storage&&placed_cohort_same(c->r,c->w,0,1)&&
- gsc_session_postcohort_scope(c->authority,c->r,c->owner,c->rows);}
+static int placed_late_bound(const PlacedLateScope*c){return c&&c->r&&c->r->placed_cohort==c->w&&
+ c->w->phase==PLACED_COHORT_LATE&&c->w->storage;}
+static int placed_late_grant(const PlacedLateScope*c){return gsc_session_postcohort_scope(c->authority,c->r,c->owner,c->rows);}
+static int placed_late_current(void*ctx){PlacedLateScope*c=ctx;
+ return placed_late_bound(c)&&placed_cohort_same(c->r,c->w,0,1)&&placed_late_grant(c);}
+/* native_begin pairs its callback with gsc_placed_postcohort_current.
+ * The grant binds this runtime and owner to the active Session. Both checks
+ * read the same live witness, with no foreign call between them. */
+static int placed_late_session_current(void*ctx){PlacedLateScope*c=ctx;
+ return placed_late_bound(c)&&placed_late_grant(c);}
 int gsc_placed_postcohort_current(GscRuntime*r,uint64_t owner){PlacedCohortWitness*w=r?r->placed_cohort:NULL;
  return w&&w->owner==owner&&w->phase==PLACED_COHORT_LATE&&w->storage&&placed_cohort_same(r,w,0,1);
 }
@@ -22,7 +29,7 @@ int gsc_execute_placed_postcohort(GscRuntime*r,const void*authority,uint64_t own
  /* Keep all mutating/entry/free APIs fenced while GAME/Session validates its
   * own providers. Pure node cache and frozen-witness queries remain legal. */
  r->entity_certificate_busy=1;begun=1;w->late_call=1;
- ok=gsc_session_postcohort_native_begin(authority,r,owner,rows,placed_late_current,&scope,error,cap)==1&&r->entity_certificate_busy==1&&placed_late_current(&scope);
+ ok=gsc_session_postcohort_native_begin(authority,r,owner,rows,placed_late_session_current,&scope,error,cap)==1&&r->entity_certificate_busy==1&&placed_late_current(&scope);
  w->late_call=0;r->entity_certificate_busy=0;
  if(ok)ok=placed_cohort_liveness(r,w,0,1)&&placed_late_current(&scope);
  r->entity_certificate_busy=1;
@@ -33,4 +40,22 @@ int gsc_execute_placed_postcohort(GscRuntime*r,const void*authority,uint64_t own
  ok=ok&&finished==1&&r->entity_certificate_busy==1&&placed_cohort_same(r,w,0,1);r->entity_certificate_busy=0;
  if(!ok)return placed_cohort_fail(r,error,cap,"post-cohort native owner phase failed or changed retained state");
  w->phase=PLACED_COHORT_LATE_DONE;return 1;
+}
+
+int gsc_start_configured_main_after_cohort(GscRuntime *r,const GscMapExecutionCertificate *input,
+ uint64_t owner,uint32_t rows){
+ PlacedCohortWitness *w=r?r->placed_cohort:NULL;GscMapExecutionCertificate map;
+ if(!w||!rows||!input||!gsc_runtime_storage_separate(r,input,sizeof(*input))||
+    w->owner!=owner||w->row!=rows-1||w->phase!=PLACED_COHORT_LATE_DONE||
+    r->configured_main_attempted||!r->bootstrap_started||!r->bootstrap_returned||
+    r->now_ms||!r->r237_frame_buckets_enabled||!r->r243_thread_start_enabled||
+    !placed_cohort_quiet(r)||memcmp(input,&w->map,sizeof(*input))||
+    !runtime_start_capabilities(r)||!placed_cohort_liveness(r,w,0,1))
+    return rfail(r,0,"cached map entry requires the completed placed cohort and retained tasks");
+ r->expand_map_tasks=1;
+ map=w->map;
+ /* Consume the exact continuation once. A child belongs to the runtime.
+  * Only the separately allocated witness copies are released here. */
+ r->placed_cohort=NULL;placed_cohort_free(r,w);
+ return runtime_start_configured_main(r,&map,1);
 }

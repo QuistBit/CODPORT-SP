@@ -59,7 +59,12 @@ int G_Cod1TurretMountFit(const GscEntityRef*gun,int now,int(*provider)(void*,con
  if(!TurretFitCurrent(&guard))goto lost;r=TurretFind(&guard.gun);next.blocked=0;next.lastTime=now;cod1TurretFits[lease.actorIndex]=next;r->tracking.flags=flags;r->tracking.pitchLimit=limit.pitchLimit;
  G_SetOrigin(&g_entities[actor.slot],ground);G_SetAngle(&g_entities[actor.slot],motion.angles);g_entities[actor.slot].s.pos.trType=TR_INTERPOLATE;g_entities[actor.slot].s.apos.trType=TR_INTERPOLATE;
  VectorCopy(ground,cod1Actors[lease.actorIndex].nativeData.entity.origin);VectorCopy(ground,cod1Actors[lease.actorIndex].nativeData.entity.originTrajectory);VectorCopy(motion.angles,cod1Actors[lease.actorIndex].nativeData.entity.angles);VectorCopy(motion.angles,cod1Actors[lease.actorIndex].nativeData.entity.angleTrajectory);cod1Actors[lease.actorIndex].nativeData.orientation.yaw=motion.angles[1];cod1Actors[lease.actorIndex].nativeData.orientation.yawCopy=motion.angles[1];
- if(!TurretMountRefreshRoot(r,now))goto lost;trap_LinkEntity(&g_entities[actor.slot]);
+ if(!TurretMountRefreshRoot(r,now))goto lost;
+ /* Ordinary SV_LinkEntity unlinks first and discards the keyed actor's
+  * spatial registration. Keep the current DObj across both mount states. */
+ if(cod1Actors[lease.actorIndex].motion.active && !cod1Actors[lease.actorIndex].motion.model){
+  if(!MotionLink(&lease))goto lost;
+ }else trap_LinkEntity(&g_entities[actor.slot]);
  if(current(ctx)!=1||!TurretFitCapsuleCurrent(&guard)||!ActorGoalBuffers(gun,sizeof(*gun),NULL,0,NULL,0)||memcmp(gun,&guard.gun,sizeof(guard.gun))||guard.epoch!=cod1EntityEpoch||now!=level.time||!ActorLeaseValid(&lease)||!(r=TurretFind(&guard.gun))||!TurretMountOwnerCurrent(r,now,&actor))goto lost;goto done;
  blocked:if(!TurretFitCurrent(&guard))goto lost;next.blocked=1;next.lastTime=now;cod1TurretFits[lease.actorIndex]=next;r=TurretFind(&guard.gun);r->tracking.flags=flags;r->tracking.pitchLimit=limit.pitchLimit;
  done:if(cod1TurretFitBusyEpoch==guard.epoch)cod1TurretFitBusyEpoch=0;return 1;

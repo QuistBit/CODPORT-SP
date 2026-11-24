@@ -37,6 +37,7 @@ If you have questions concerning this license or the applicable additional terms
 #include "g_local.h"
 #if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
 #include "g_cod1_yaw_motion.h"
+#include "g_cod1_entity_host.h"
 #endif
 
 char *hintStrings[] = {
@@ -665,6 +666,7 @@ void G_RunMover( gentity_t *ent ) {
 		G_MoverTeam( ent );
 	}
 #if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+	if(G_Cod1ScriptMotionFrame(ent)==2)return;
 	G_Cod1YawMotionFinish(ent);
 #endif
 

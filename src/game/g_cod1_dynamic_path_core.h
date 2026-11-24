@@ -2,6 +2,7 @@
 #define G_COD1_DYNAMIC_PATH_CORE_H
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 /* Private DATA candidate operations, not a GAME/native capability or proof of
  * a live graph. Callers must supply finalized native-order nodes/12-byte links.
@@ -66,5 +67,35 @@ static int C1DP_CandidateTransition(C1DPState*s,unsigned owner,int disconnect,in
  if(!C1DP_Layout(s)||owner>=s->owner_count||(disconnect!=0&&disconnect!=1))return C1DP_BAD_DATA;
  if(!(s->owners[owner].flags&0x1000u))return C1DP_METHOD_REFUSED;
  return disconnect?C1DP_Disconnect(s,owner,time,trace,ctx):C1DP_Reconnect(s,owner);
+}
+/* A malformed owner ring may fail after several edits. Run the existing
+ * transition on scratch arrays and publish only a completely valid result. */
+static int C1DP_ConnectOwned(C1DPState *live,unsigned index){
+    C1DPState next;
+    int result=C1DP_BAD_DATA;
+    if(!C1DP_Layout(live)||index>=live->owner_count)return C1DP_BAD_DATA;
+    if(!(live->owners[index].flags&0x1000u))return C1DP_METHOD_REFUSED;
+    if(!live->owners[index].head)return C1DP_Reconnect(live,index);
+    next=*live;
+    next.nodes=malloc(sizeof(*next.nodes)*next.node_count);
+    next.links=malloc(sizeof(*next.links)*next.link_count);
+    next.records=malloc(sizeof(*next.records)*next.record_count);
+    next.owners=malloc(sizeof(*next.owners)*next.owner_count);
+    if(next.nodes&&next.links&&next.records&&next.owners){
+        memcpy(next.nodes,live->nodes,sizeof(*next.nodes)*next.node_count);
+        memcpy(next.links,live->links,sizeof(*next.links)*next.link_count);
+        memcpy(next.records,live->records,sizeof(*next.records)*next.record_count);
+        memcpy(next.owners,live->owners,sizeof(*next.owners)*next.owner_count);
+        result=C1DP_CandidateTransition(&next,index,0,0,NULL,NULL);
+        if(result==C1DP_OK && !C1DP_Layout(&next))result=C1DP_BAD_DATA;
+        if(result==C1DP_OK){
+            memcpy(live->nodes,next.nodes,sizeof(*next.nodes)*next.node_count);
+            memcpy(live->links,next.links,sizeof(*next.links)*next.link_count);
+            memcpy(live->records,next.records,sizeof(*next.records)*next.record_count);
+            live->owners[index]=next.owners[index];
+        }
+    }
+    free(next.nodes);free(next.links);free(next.records);free(next.owners);
+    return result;
 }
 #endif

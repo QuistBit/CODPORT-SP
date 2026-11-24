@@ -37,9 +37,11 @@ static int array_new(GscRuntime *r,int line,Value *out) {
 static int array_key(GscRuntime *r,const Value *value,int line,ArrayKey *out) {
     memset(out,0,sizeof(*out));
     if(value->kind==V_NUMBER) {
+        int maxKey=r->node_queries_enabled?GSC_NODE_QUERY_CAPACITY-1:
+            r->vehicle_nodes_enabled?GSC_VEHICLE_NODE_CAPACITY-1:GSC_ARRAY_NUMERIC_KEY_MAX;
         if(!isfinite(value->number)||value->number<0||
-           value->number>(r->node_queries_enabled?GSC_NODE_QUERY_CAPACITY-1:GSC_ARRAY_NUMERIC_KEY_MAX)||truncf(value->number)!=value->number)
-            return rfail(r,line,r->node_queries_enabled?"array numeric key must be an integer 0..4095":"array numeric key must be an integer 0..255");
+           value->number>maxKey||truncf(value->number)!=value->number)
+            return rfail(r,line,"array numeric key must be an integer 0..%d",maxKey);
         out->kind=V_NUMBER;out->number=(int)value->number;return 1;
     }
     if(value->kind!=V_STRING||!memchr(value->str,0,sizeof(value->str)))
@@ -64,6 +66,17 @@ static int array_read_key(GscRuntime *r,uint32_t owner,const ArrayKey *key,int l
 }
 static int array_index_read(GscRuntime *r,const Value *base,const Value *key,int line,Value *out) {
     ArrayKey converted;
+    if(base->kind==V_STRING){
+        int32_t index;
+        char character;
+        if(key->kind!=V_NUMBER || !key->integer)return rfail(r,line,"string index requires an integer");
+        if(!scalar_get_integer(r,key,line,&index))return 0;
+        if(index<0 || (size_t)index>=strlen(base->str))return rfail(r,line,"string index %d out of range",index);
+        /* ENGINE 45FEAA copies one byte into a new ordinary string. */
+        character=base->str[index];
+        memset(out,0,sizeof(*out));out->kind=V_STRING;out->str[0]=character;
+        return 1;
+    }
     if(base->kind==V_VECTOR) {
         if(key->kind!=V_NUMBER||!isfinite(key->number)||key->number<0||key->number>2||
            truncf(key->number)!=key->number)return rfail(r,line,"vector read index must be 0..2");
@@ -74,7 +87,13 @@ static int array_index_read(GscRuntime *r,const Value *base,const Value *key,int
     if(!array_key(r,key,line,&converted))return 0;
     return array_read_key(r,base->array,&converted,line,out);
 }
+static int string_size_field(const Value *base,const char *name){
+    return base->kind==V_STRING && control_field_equal(name,"size");
+}
 static int array_field_read(GscRuntime *r,const Value *base,const char *name,int line,Value *out) {
+    if(string_size_field(base,name)){
+        scalar_integer(out,(int32_t)strlen(base->str));return 1;
+    }
     if(array_value_valid(r,base->array)&&r->keybinding_enabled&&r->arrays[base->array-1].keybinding&&
        (!strcmp(name,"key1")||!strcmp(name,"key2")||!strcmp(name,"count"))) {
         ArrayKey key;memset(&key,0,sizeof(key));key.kind=V_STRING;str_copy(key.string,sizeof(key.string),name);
@@ -216,6 +235,7 @@ static int array_lvalue_commit(GscRuntime *r,Task *task,Frame *f,const ArrayLval
     if(value->kind==V_FUNCTION&&!function_value_valid(r,value))return rfail(r,line,"invalid function reference array member");
     if(value->kind==V_STRUCT&&!struct_value_valid(r,value))return rfail(r,line,"invalid structure array member");
     if(value->kind==V_HUDELEM&&!hud_value_valid(r,value))return rfail(r,line,"invalid HUD element array member");
+    if(value->kind==V_VEHICLE_NODE&&!vehicle_node_value_valid(r,value))return rfail(r,line,"invalid vehicle-node array identity");
     if(value->kind==V_NODE&&!node_value_valid(r,value))return rfail(r,line,"invalid node reference array member");
     if(value->kind==V_UNDEFINED&&!r->owned_numeric_delete_enabled)return rfail(r,line,"indexed undefined writes are unsupported");
     if(clear&&value->kind!=V_UNDEFINED)return rfail(r,line,"literal undefined clear result changed");
@@ -350,6 +370,8 @@ static int array_assign(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int op
     result=arg;
     if(r->integer_bitwise_enabled&&integer_bitwise_mutation_op(op)) {
         if(!integer_bitwise_mutation(r,op,&current,&arg,line,&result))return 0;
+    } else if(op==GSC_MUT_ADD&&string_vector_concat_pair(r,&current,&arg)) {
+        if(!string_vector_concat(r,&current,&arg,line,&result))return 0;
     } else if(op&&r->vector_arithmetic_enabled&&(current.kind==V_VECTOR||arg.kind==V_VECTOR)) {
         if(!vector_arithmetic_mutation(r,op,&current,&arg,line,&result))return 0;
     } else if(op) {
@@ -440,7 +462,7 @@ static int array_runtime_preflight(const GscProgram *g,const GscEntityCollection
         if(e->kind==E_INDEX) {
             int type=known_value_kind(g,e->b);const Expr *key=&g->expr[e->b];
             if((type>=0&&type!=V_NUMBER&&type!=V_STRING)||
-               (key->kind==E_NUMBER&&(key->number<0||key->number>(g->node_queries_selected?GSC_NODE_QUERY_CAPACITY-1:GSC_ARRAY_NUMERIC_KEY_MAX)||
+               (key->kind==E_NUMBER&&(key->number<0||key->number>(g->node_queries_selected?GSC_NODE_QUERY_CAPACITY-1:g->vehicle_nodes_selected?GSC_VEHICLE_NODE_CAPACITY-1:GSC_ARRAY_NUMERIC_KEY_MAX)||
                 truncf(key->number)!=key->number))||
                (key->kind==E_UNARY&&key->op=='-'&&g->expr[key->a].kind==E_NUMBER&&
                 g->expr[key->a].number!=0))

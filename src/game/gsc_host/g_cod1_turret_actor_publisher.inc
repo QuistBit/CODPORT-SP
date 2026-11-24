@@ -138,8 +138,11 @@ static int TurretActorPublish(const GscEntityRef*gun,int now,int(*current)(void*
  }
  ActorHudPublish(&wire,&next,&c.lease);
  if(!C1TAW_Valid(&wire,now)||!TurretActorPublishFence(&c)||memcmp(&cod1TurretPublished[index],&saved,sizeof(saved)))return 0;
- wire.eFlags&=~EF_NODRAW;e->s=wire;e->flags&=~FL_NODRAW;e->r.svFlags&=~SVF_NOCLIENT;cod1TurretPublished[index]=next;
- c.entity=wire;c.flags=e->flags;c.svFlags=e->r.svFlags;trap_LinkEntity(e);
+ wire.eFlags&=~EF_NODRAW;e->s=wire;e->flags&=~FL_NODRAW;if(!cod1Actors[c.lease.actorIndex].motion.active || cod1Actors[c.lease.actorIndex].motion.model)
+   e->r.svFlags&=~SVF_NOCLIENT;
+ cod1TurretPublished[index]=next;
+ c.entity=wire;c.flags=e->flags;c.svFlags=e->r.svFlags;
+ if(!(e->r.svFlags&SVF_NOCLIENT))trap_LinkEntity(e);
  return TurretActorPublishFence(&c)&&!memcmp(&cod1TurretPublished[index],&next,sizeof(next));
  failedConfig:if(cod1TurretActorConfigBusy==c.actor.epoch)cod1TurretActorConfigBusy=0;return 0;
 }

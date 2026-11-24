@@ -10,11 +10,19 @@ static GscTestClientStartup gscTestClientStartup;
 static void GscTestStartPrepared(int);
 static void GscTestDrop(void);
 static void GscTestLeave(void);
+/* Map/script pairing is rechecked at every startup lease boundary. */
+static int GscTestBriefingSelection(void){
+ char map[MAX_QPATH],path[MAX_QPATH];
+ trap_Cvar_VariableStringBuffer("mapname",map,sizeof(map));
+ trap_Cvar_VariableStringBuffer("g_cod1GscTestScript",path,sizeof(path));
+ return !gscTestStopRequested&&((!strcmp(map,"us_intro")&&!strcmp(path,"maps/us_intro.gsc"))||(!strcmp(map,"pathfinder")&&!strcmp(path,"maps/pathfinder.gsc")));
+}
 static int GscTestClientStartupOptions(void){
  if(trap_Cvar_VariableIntegerValue("g_cod1GscGraphStartup")==1)return GscTestGraphClientOptions();
  static const char*names[]={"g_cod1GscClientStartup","g_cod1GscTest","g_cod1GscEntityTest","savegame_loading","g_cod1GscActorPrefix","g_cod1GscAiArrays","g_cod1GscDeleteTransactions","g_cod1GscTrainingGrenades","g_cod1GscTrainingCarbine","g_cod1GscR232Turret","g_cod1GscSoundNotify","g_cod1GscStreamedVoice","g_cod1GscTrainingFinale"};
- static const int values[]={1,1,43,0,0,0,0,0,0,0,0,0,0};unsigned i;
- for(i=0;i<sizeof(values)/sizeof(values[0]);i++)if(gscTestStopRequested||trap_Cvar_VariableIntegerValue(names[i])!=values[i]||gscTestStopRequested)return 0;
+ static const int values[]={1,1,43,0,0,0,0,0,0,0,0,0,0};unsigned i;int briefing=GscTestBriefingSelection();char map[MAX_QPATH];
+ trap_Cvar_VariableStringBuffer("mapname",map,sizeof(map));
+ for(i=0;i<sizeof(values)/sizeof(values[0]);i++)if(gscTestStopRequested||trap_Cvar_VariableIntegerValue(names[i])!=((briefing&&(i==10||i==11||((i==5||i==6)&&!strcmp(map,"pathfinder"))))?1:values[i])||gscTestStopRequested)return 0;
  return 1;
 }
 static int GscTestClientStartupIdentity(const GscTestClientStartup*p){

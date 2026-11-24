@@ -3,7 +3,7 @@
  * catalog, revision and staged commit; this sidecar follows that ownership. */
 static int ActorGenericNamedActive(const C1GARecord*r){unsigned i;if(!r->notify)return 0;for(i=0;i<C1GA_COUNT;i++)if(r->notify->flags[i].token)return 1;return 0;}
 static void ActorGenericNamedCancelSubtree(C1GARecord*r,unsigned root){unsigned i;if(!r->notify)return;for(i=0;i<C1GA_COUNT;i++)if(C1AGT14_Descendant(cod1GenericDefinitions,i,root)){
- memset(r->notify->flags+i,0,sizeof(r->notify->flags[i]));r->notify->flags[i].cursor=-1;memset(r->notify->names[i],0,64);r->notify->generation[i]=0;r->notify->pending[i]=0;r->notify->pendingTick[i]=0;
+ memset(r->notify->flags+i,0,sizeof(r->notify->flags[i]));r->notify->flags[i].cursor=-1;(void)ActorGenericNameSet(r,i,NULL,0);r->notify->generation[i]=0;r->notify->pending[i]=0;r->notify->pendingTick[i]=0;
 }}
 static int ActorGenericNamedLeafStage(C1GARecord*stage,void*user){
  const GscActorAnimationRequest*q=user;unsigned i,n=q->animation[0].ordinal;const char*end;float f[3];
@@ -14,15 +14,15 @@ static int ActorGenericNamedLeafStage(C1GARecord*stage,void*user){
     !(end=memchr(q->notify,0,sizeof(q->notify)))||end==q->notify)return 0;
  memcpy(f,q->scalar_bits,sizeof(f));
  if(!C1AFL14_Select(cod1GenericDefinitions,stage->nodes,stage->notify->flags,C1GA_COUNT,n,q->animation[1].ordinal,n+1,f[0],f[1],f[2],q->method==GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART))return 0;
- for(i=0;i<C1GA_COUNT;i++)if(!stage->notify->flags[i].token){memset(stage->notify->names[i],0,64);stage->notify->generation[i]=0;stage->notify->pending[i]=0;stage->notify->pendingTick[i]=0;}
- memset(stage->notify->names[n],0,64);memcpy(stage->notify->names[n],q->notify,(size_t)(end-q->notify));
+ for(i=0;i<C1GA_COUNT;i++)if(!stage->notify->flags[i].token){(void)ActorGenericNameSet(stage,i,NULL,0);stage->notify->generation[i]=0;stage->notify->pending[i]=0;stage->notify->pendingTick[i]=0;}
+ if(!ActorGenericNameSet(stage,n,q->notify,(size_t)(end-q->notify)))return 0;
  stage->notify->pending[n]=0;stage->notify->pendingTick[n]=0;stage->notify->generation[n]=++stage->notify->serial;return 1;
 }
 
 static int ActorGenericNamedPending(const C1GARecord*r){unsigned i;if(!r->notify)return 0;for(i=0;i<C1GA_COUNT;i++)if(r->notify->pending[i])return 1;return 0;}
 static int ActorGenericNamedAdvance(C1GARecord*r,unsigned ordinal,const c1ar14Root_t*root,float dt,int now){
  c1atl14Node_t next;unsigned event=0;int ok;float frequency;
- if(!r->notify||ordinal>=C1GA_COUNT||!root||root->noteCount||root->intervals>4095||!root->fps||root->fps>120||r->notify->pending[ordinal]||!r->notify->generation[ordinal]||!r->notify->names[ordinal][0])return 0;
+ if(!r->notify||ordinal>=C1GA_COUNT||!root||root->noteCount||root->intervals>4095||!root->fps||root->fps>120||r->notify->pending[ordinal]||!r->notify->generation[ordinal]||!ActorGenericName(r,ordinal)[0])return 0;
  next=r->nodes[ordinal];
 #if defined(_MSC_VER)&&defined(_M_IX86)
  {unsigned char saved[108];uint32_t mx,nearest=0x1f80;const unsigned short cw=0x027f;
@@ -52,8 +52,8 @@ int G_Cod1ActorGenericNotifyDrain(const GscEntityRef*input,int now,int(*current)
  epoch=cod1GenericEpoch;identity=r->notify->ownerIdentity;revision=r->revision;cod1GenericOperation.busy=1;cod1GenericOperation.cancelled=0;
  if(current(ctx)!=1||memcmp(input,&owner,sizeof(owner))||!ActorGenericNotifyOwnerCurrent(r,&owner,&lease,epoch,identity,revision,now))goto done;
  for(i=1;i<C1GA_COUNT;i++)if(r->notify->pending[i]){
-  if(r->notify->pending[i]!=r->notify->generation[i]||r->notify->flags[i].token!=i+1||!r->notify->names[i][0]||r->notify->pendingTick[i]>now)goto done;
-  memset(&packet,0,sizeof(packet));packet.entity=owner;packet.runtime=r->runtime;packet.catalog=r->catalog;packet.owner_identity=identity;packet.generation=r->notify->pending[i];packet.ordinal=i;packet.produced_ms=r->notify->pendingTick[i];memcpy(packet.event,r->notify->names[i],64);strcpy(packet.payload,"end");copy=packet;
+  if(r->notify->pending[i]!=r->notify->generation[i]||r->notify->flags[i].token!=i+1||!ActorGenericName(r,i)[0]||r->notify->pendingTick[i]>now)goto done;
+  memset(&packet,0,sizeof(packet));packet.entity=owner;packet.runtime=r->runtime;packet.catalog=r->catalog;packet.owner_identity=identity;packet.generation=r->notify->pending[i];packet.ordinal=i;packet.produced_ms=r->notify->pendingTick[i];memcpy(packet.event,ActorGenericName(r,i),64);strcpy(packet.payload,"end");copy=packet;
   if(current(ctx)!=1||memcmp(input,&owner,sizeof(owner))||!ActorGenericNotifyOwnerCurrent(r,&owner,&lease,epoch,identity,revision,now))goto done;
   accepted=deliver(ctx,&packet);
   if(!ActorGenericNotifyOwnerCurrent(r,&owner,&lease,epoch,identity,revision,now)||memcmp(&packet,&copy,sizeof(packet))||memcmp(input,&owner,sizeof(owner)))goto done;

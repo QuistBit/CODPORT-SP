@@ -8,12 +8,12 @@ static int GscTestNativeQueryEmpty(const char *value,size_t size) {
     size_t n;for(n=0;n<size;n++)if(value[n])return 0;return 1;
 }
 static int GscTestNativeQuerySame(GscSession *session,uint64_t id,uint64_t epoch,int mode,int now,int hostTime) {
-    GscSessionSnapshot view;
+    GscSessionTiming view;
     return session && session==gscTestSession && id && id==gscTestId && epoch &&
         epoch==G_Cod1EntityMapEpoch() && mode==gscTestEntityMode &&
         (mode==29||(mode==30 || (mode==31 || (mode==32 || (mode==33 || (mode==34 || mode==35 || mode==36 || mode==37 || mode==38 || mode==39 || (mode==40||(mode==41||(mode==42||mode==43))))))))) && now>=0 &&
         !gscTestStopRequested && !gscTestCompleted && level.time==hostTime &&
-        gsc_session_snapshot(session,&view) &&
+        gsc_session_timing(session,&view) &&
         view.state==GSC_SESSION_RUNNING && view.session_id==id &&
         view.logical_ms==now && G_Cod1MapEntities() &&
         g_gametype.integer==GT_SINGLE_PLAYER && !level.restarted;

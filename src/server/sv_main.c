@@ -28,6 +28,7 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include "server.h"
+#include "../qcommon/cod1_client_trace_r241.h"
 #include <stdint.h>
 
 serverStatic_t svs;                 // persistant server info
@@ -822,9 +823,80 @@ Player movement occurs as a result of packet events, which
 happen before SV_Frame is called
 ==================
 */
+cvar_t *sv_frameSmoothing;
+static struct {
+	qboolean supported;
+	qboolean running;
+	int pendingStep;
+	int elapsedGameMsec;
+	unsigned started, yielded, finished;
+} svFrameSlice;
+/* Retain wall time across an early CGame/lifecycle barrier until the owner
+ * Com_Frame has attributed it, even if that barrier replaced the game VM. */
+static int svFrameSliceDrainMsec;
+
+int SV_FrameSliceDrainMsec( void ) {
+	return svFrameSliceDrainMsec;
+}
+
+qboolean SV_FrameSlicePending( void ) {
+	return svFrameSlice.pendingStep != 0;
+}
+
+void SV_SetFrameSliceSupport( qboolean supported ) {
+	svFrameSlice.supported = supported;
+}
+
+void SV_ResetFrameSlices( void ) {
+	if ( svFrameSlice.started || ( svFrameSlice.supported && sv_frameSmoothing->integer ) ) {
+		Com_Printf( "[frame smoothing] started=%u yielded=%u finished=%u aborted=%u\n",
+			svFrameSlice.started, svFrameSlice.yielded, svFrameSlice.finished,
+			(unsigned)( SV_FrameSlicePending() || svFrameSlice.running ) );
+	}
+	memset( &svFrameSlice, 0, sizeof( svFrameSlice ) );
+}
+
+static void SV_PublishFrame( void ) {
+	SV_CheckTimeouts();
+	SV_SendClientMessages();
+	SV_MasterHeartbeat();
+}
+
+void SV_FinishFrameSlice( void ) {
+	int step = svFrameSlice.pendingStep;
+	unsigned start;
+	if ( !step ) {
+		return;
+	}
+	/* A nested VM/service boundary must never enter the same drain twice. */
+	svFrameSlice.pendingStep = 0;
+	svFrameSlice.running = qtrue;
+	start = (unsigned)Sys_Milliseconds();
+	VM_Call( gvm, GAME_RUN_FRAME, svs.time );
+	while ( sv.timeResidual >= step ) {
+		sv.timeResidual -= step;
+		svs.time += step;
+		VM_Call( gvm, GAME_RUN_FRAME, svs.time );
+	}
+	if ( com_speeds->integer ) {
+		time_game = svFrameSlice.elapsedGameMsec + (int)( (unsigned)Sys_Milliseconds() - start );
+	}
+	svFrameSlice.running = qfalse;
+	svFrameSlice.finished++;
+	SV_PublishFrame();
+	svFrameSliceDrainMsec = (int)( (unsigned)Sys_Milliseconds() - start );
+}
+
 void SV_Frame( int msec ) {
+	SV_FrameWithBudget( msec, 0 );
+}
+
+void SV_FrameWithBudget( int msec, int sliceBudgetMsec ) {
 	int frameMsec;
 	int startTime;
+	unsigned sliceStart = sliceBudgetMsec > 0 ? (unsigned)Sys_Milliseconds() : 0;
+
+	SV_FinishFrameSlice();
 
 	// the menu kills the server with this cvar
 	if ( sv_killserver->integer ) {
@@ -906,6 +978,36 @@ void SV_Frame( int msec ) {
 		SV_BotFrame( svs.time );
 	}
 
+	/* The first due tick may yield to exactly one ordinary local draw.
+	 * Boot, fast-restart and legacy callers retain GAME_RUN_FRAME. */
+	if ( sliceBudgetMsec > 0 ) {
+		unsigned elapsed = (unsigned)Sys_Milliseconds() - sliceStart;
+		sliceBudgetMsec = elapsed < (unsigned)sliceBudgetMsec ? sliceBudgetMsec - (int)elapsed : 0;
+	}
+	CL_R241TraceServerBudget( sliceBudgetMsec, sv.timeResidual, frameMsec );
+	if ( sliceBudgetMsec > 0 && svFrameSlice.supported && sv.state == SS_GAME &&
+		!sv.restarting && !sv.restartTime && sv_gametype->integer == GT_SINGLE_PLAYER &&
+		svs.clients && svs.clients[0].state == CS_ACTIVE &&
+		svs.clients[0].netchan.remoteAddress.type == NA_LOOPBACK &&
+		sv.timeResidual >= frameMsec ) {
+		int result;
+		sv.timeResidual -= frameMsec;
+		svs.time += frameMsec;
+		svFrameSlice.started++;
+		svFrameSlice.running = qtrue;
+		result = VM_Call( gvm, GAME_RUN_FRAME_SLICE, svs.time, sliceBudgetMsec );
+		svFrameSlice.running = qfalse;
+		if ( result == 0 ) {
+			svFrameSliceDrainMsec = 0;
+			svFrameSlice.pendingStep = frameMsec;
+			svFrameSlice.elapsedGameMsec = com_speeds->integer ? Sys_Milliseconds() - startTime : 0;
+			svFrameSlice.yielded++;
+			return;
+		}
+		if ( result != 1 ) {
+			Com_Error( ERR_DROP, "GAME_RUN_FRAME_SLICE returned %d", result );
+		}
+	}
 	// run the game simulation in chunks
 	while ( sv.timeResidual >= frameMsec ) {
 		sv.timeResidual -= frameMsec;
@@ -919,14 +1021,7 @@ void SV_Frame( int msec ) {
 		time_game = Sys_Milliseconds() - startTime;
 	}
 
-	// check timeouts
-	SV_CheckTimeouts();
-
-	// send messages back to the clients
-	SV_SendClientMessages();
-
-	// send a heartbeat to the master if needed
-	SV_MasterHeartbeat();
+	SV_PublishFrame();
 }
 
 //============================================================================

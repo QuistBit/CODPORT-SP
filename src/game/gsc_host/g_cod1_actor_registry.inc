@@ -12,16 +12,21 @@ typedef char cod1ActorFloatMustBe32[sizeof(float) == sizeof(uint32_t) ? 1 : -1];
 #define COD1_LOCAL_POINTS 24
 typedef struct {
     int length,lastIndex,lastClear;
+    int prepared,preparedTick;vec3_t preparedOrigin;
     vec3_t edge[6],base,aim,face;
     float edgeLength[6],area,back,remaining,distance;
 } cod1TowerPath_t;
 typedef struct {
     cod1TowerPath_t tower;
+    int headingValid;vec2_t heading;
     vec3_t points[COD1_LOCAL_POINTS];
     float cost[COD1_LOCAL_POINTS];
     int parent[COD1_LOCAL_POINTS],visited[COD1_LOCAL_POINTS],path[COD1_LOCAL_POINTS];
     int phase,count,from,next,length,cursor,atTraversalStart;
     int diveArmed,diveTime;
+    /* The Begin waiter may complete while the runner is still on the ground path. */
+    int approachingLadder,approachingStand;
+    vec3_t standPoint;
     vec3_t diveStart;
     float divePhase;
     int ladderReady,ladderFrame;
@@ -42,6 +47,7 @@ typedef struct {
 } cod1LocalRoute_t;
 typedef struct {
     cod1LocalRoute_t route;
+    vec3_t velocity;
     int active,busy,model,lastTime,moving,blocked,arrived;
     uint64_t assignment,notified;float travelled,standingTop;
     entityState_t oldState;int oldFlags,oldSvFlags,oldContents;
@@ -68,6 +74,7 @@ typedef struct {
     c1per14Memory_t observations;
     Cod1ObservationTarget observationTargets[C1PER14_SLOTS];
     cod1ActorMotion_t motion;
+    GscNodeRef standingNode;
     float courseRunRate;
     int towerGoalTick;
     struct {GscEntityRef brush;uint64_t frame;int tick;} towerTouch;
@@ -81,6 +88,25 @@ typedef struct {
     /* Actual4C4FC clears122C bytes: F0 is the visibility-query counter,
      * 7C8 the native threat-entry count. Never interpret either as readiness.
      * General visibility/threat writers remain unsupported in this profile. */
+    /* Actor field table899A4: type6, pointer1164. C4FC allocation clears
+     * all122C bytes. The Actor record's existing reserve/reset/retire owns
+     * the null cell. No grenade acquisition/throwback writer is admitted. */
+    /* Native allocator-owned readonly damageDir. Unknown input never falls back to0. */
+    uint32_t desiredAngle148;int desiredAngleUnavailable;
+    /* Native C4C4FC allocation-zero cells138/13C/140. Only admitted
+     * OrientMode writers update them; never reconstruct from body angles. */
+    uint32_t orientAngles138[3];int orientBodyTick;
+    /* GAME66CF0 stores six GetAnim results at154..168. Real allocation
+     * reserve/reset clears this record. Catalog identity is port ownership,
+     * not native aim readiness; aimAtPos remains a separate consumer. */
+    uint32_t aimNodes154[6];uint64_t aimNodesRuntime,aimNodesCatalog;
+    int aimNodesSet;
+    int32_t damageTaken21c,damageYaw220;uint32_t damageDirection224[3];int damageStateUnavailable;
+    /* Native allocator C4FC clears actor+778. Own an Actor reference, not a
+     * reusable slot/pointer. General avoidance-chain writers53420/53E.. are
+     * not implemented; this profile retains the actual allocation-null cell. */
+    Cod1ObservationTarget avoidance778;
+    GscEntityRef grenade1164;
     GscEntityRef favoriteEnemy10f8;
     uint32_t nativeVisibilityQueriesF0,nativeThreatCount7c8;
     cod1ActorNativeData_t nativeData;
@@ -100,7 +126,7 @@ typedef struct {
     cod1ActorScriptedController_t scriptedController;
     /* Native allocation cells cleared by the existing whole-record lifetime.
      * positionPostinit records only739A0+107D0, never full postinit readiness. */
-    uint32_t rawGoalCell07e4;unsigned char rawGoalCell078f;
+    uint32_t rawGoalCell07e4,goalObservationTail[4];unsigned char rawGoalCell078f;
     /* Vector goals do not occupy a path-node receipt. Cleared with this
      * allocation or by the next successful path-node assignment. */
     int stationaryGoal,stationaryGoalTick,courseRestSampled;
@@ -253,6 +279,23 @@ static int32_t ActorRetirementStamp( int32_t *counter ) {
 }
 static void ActorRetireSentient( uint32_t index ) {
     cod1SentientRecord_t *s = &cod1Sentients[index];
+    unsigned i;
+    /* 73031..73068. Teammates inherit the retiring Sentient's target.
+     * Row retirement in 4D9D0 clears its first word, preserving the tail. */
+    for(i=0;i<COD1_SENTIENT_CAPACITY;i++){
+        cod1SentientRecord_t *other=cod1Sentients+i;
+        if(i==index || other->activation<0)continue;
+        if(ActorRefEqual(&other->rawGoal.entityGoal,&s->owner)){
+            if(other->defaults.team==s->defaults.team)
+                other->rawGoal.entityGoal=s->rawGoal.entityGoal;
+            else memset(&other->rawGoal.entityGoal,0,sizeof(other->rawGoal.entityGoal));
+        }
+        if(other->kind==COD1_ACTOR_LEASE_ACTOR && other->actorIndex<COD1_ACTOR_CAPACITY){
+            cod1ActorRecord_t *observer=cod1Actors+other->actorIndex;
+            observer->observations.row[index].word[0]=0;
+            memset(observer->observationTargets+index,0,sizeof(observer->observationTargets[index]));
+        }
+    }
     if ( s->owner.slot < MAX_GENTITIES &&
          cod1SentientByEntity[s->owner.slot] == index + 1 )
         cod1SentientByEntity[s->owner.slot] = 0;
@@ -396,11 +439,10 @@ int G_Cod1ActorReserve( const GscEntityRef *entity, cod1ActorLease_t *out,
     char *error, size_t size ) { return ActorReserve( entity, out, 0, error, size ); }
 int G_Cod1PlayerSentientReserve( const GscEntityRef *entity, cod1ActorLease_t *out,
     char *error, size_t size ) { return ActorReserve( entity, out, 1, error, size ); }
-static int ActorLeaseValid( const cod1ActorLease_t *lease ) {
+static int ActorLeaseRecordsValid( const cod1ActorLease_t *lease ) {
     const cod1SentientRecord_t *s;
     const cod1ActorRecord_t *a;
-    if ( !lease || !ActorMapAvailable() ||
-         !G_Cod1EntitySameAllocation( &lease->entity ) || !lease->serial ||
+    if ( !lease->serial ||
          lease->sentientIndex >= COD1_SENTIENT_CAPACITY ) return 0;
     s = &cod1Sentients[lease->sentientIndex];
     if ( s->activation < 0 || s->serial != lease->serial ||
@@ -417,10 +459,20 @@ static int ActorLeaseValid( const cod1ActorLease_t *lease ) {
         a->sentientIndex == lease->sentientIndex &&
         cod1ActorByEntity[lease->entity.slot] == lease->actorIndex + 1;
 }
+static int ActorLeaseValid( const cod1ActorLease_t *lease ) {
+    return lease && ActorMapAvailable() && G_Cod1EntitySameAllocation(&lease->entity) &&
+           ActorLeaseRecordsValid(lease);
+}
 #include "g_cod1_actor_observation.inc"
 
 int G_Cod1ActorLeaseCurrent( const cod1ActorLease_t *lease ) {
     return ActorLeaseValid( lease );
+}
+int G_Cod1ActorLinkedAndAlive(const cod1ActorLease_t *lease){
+    const cod1ActorRecord_t *actor;
+    if(!ActorLeaseValid(lease) || lease->actorIndex>=COD1_ACTOR_CAPACITY)return 0;
+    actor=&cod1Actors[lease->actorIndex];
+    return actor->alive && actor->nativeDataInitialized && actor->spatial.linked;
 }
 int G_Cod1ActorReadLease( const cod1ActorLease_t *input,
     cod1ActorLeaseSnapshot_t *out, char *error, size_t size ) {

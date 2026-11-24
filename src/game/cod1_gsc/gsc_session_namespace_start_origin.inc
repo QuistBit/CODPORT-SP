@@ -1,3 +1,12 @@
+/* Map queries use the same copied typed transport and lifetime fences. */
+int gsc_session_select_map_start_pose(GscSession*s,const GscStartOriginHost*input,char*error,size_t cap){
+ GscStartOriginHost copy;
+ if(!s||!input||(cap&&!error)||session_animation_namespace_private(s,input,sizeof(*input))||session_animation_namespace_private(s,error,cap)||session_animation_namespace_overlap(input,sizeof(*input),error,cap))return 0;
+ copy=*input;if(!session_enter(s,error,cap))return 0;
+ if(!copy.query||s->view.state!=GSC_SESSION_EMPTY||s->program||s->runtime||!s->animation_namespace_enabled||!s->map_animation_names.count||s->namespace_start_origin_enabled||s->start_origin_enabled||!s->root_map_enabled)return session_leave_rejected(s,"map pose requires idle map namespace and real provider",error,cap);
+ if(!session_animation_namespace_map_current(s)||s->view.state!=GSC_SESSION_EMPTY||s->program||s->runtime||s->namespace_start_origin_enabled||memcmp(input,&copy,sizeof(copy)))return session_leave_rejected(s,"map pose selection retired",error,cap);
+ s->namespace_start_origin_host=copy;s->namespace_start_origin_enabled=1;s->map_start_pose_enabled=1;s->busy=0;return 1;
+}
 /* R212 optional query after immutable R211 namespace configuration. */
 int gsc_session_select_r212_namespace_start_origin(GscSession *s,
     const GscStartOriginHost *input,char *error,size_t cap) {
@@ -81,8 +90,10 @@ static int session_namespace_start_origin_query(void *user,const GscStartOriginR
     memcpy(lease.ordinals,s->namespace_start_origin_ordinals,sizeof(lease.ordinals));
     if(!memchr(copy.tree,0,sizeof(copy.tree))||!memchr(copy.name,0,sizeof(copy.name)))
         return session_reject(error,cap,"namespace query name is not bounded");
-    for(i=0;i<2;++i)if(!strcmp(copy.tree,trees[i])&&!strcmp(copy.name,names[i]))match=i;
-    if(match<0||copy.flags||copy.ordinal!=lease.ordinals[match]||
+    if(s->map_start_pose_enabled){GscAnimationCatalogEntry entry;
+        if((copy.query_kind==1||copy.query_kind==2)&&copy.ordinal)for(i=0;i<(int)s->map_animation_names.count;i++)if(!strcmp(copy.tree,s->map_animation_names.names[i])&&gsc_animation_catalog_entry(s->animation_namespace_catalogs[i],copy.ordinal-1,&entry)&&!entry.flags&&entry.ordinal==copy.ordinal&&!strcmp(entry.name,copy.name))match=i;
+    }else{if(copy.query_kind)return session_reject(error,cap,"legacy pose kind refused");for(i=0;i<2;++i)if(!strcmp(copy.tree,trees[i])&&!strcmp(copy.name,names[i]))match=i;}
+    if(match<0||copy.flags||(!s->map_start_pose_enabled&&copy.ordinal!=lease.ordinals[match])||
        copy.runtime_identity!=lease.instance||!copy.catalog_identity||copy.now_ms!=lease.now||
        !session_start_origin_float3(copy.origin,0)||!session_start_origin_float3(copy.angles,1)||
        !session_namespace_start_origin_current(&lease))

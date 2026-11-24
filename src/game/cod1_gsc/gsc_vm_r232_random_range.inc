@@ -13,11 +13,11 @@ static int random_range_scope(const R232RangeLease*l){GscRuntime*r=l->r;
     return r&&!r->error[0]&&r->random_range_enabled&&r->randomfloat_enabled&&r->dynamic_randomfloat_enabled&&
         r->entity_method_busy&&r->executing_task==l->task&&l->task&&l->task->serial==l->serial&&l->task->status!=TASK_DEAD&&
         r->array_token==l->instance&&r->animation_namespace.identity==l->catalog&&r->now_ms==l->now&&
-        animation_namespace_scope(r)&&!memcmp(&r->randomfloat,&l->host,sizeof(l->host));
+        (r->map_source_float_enabled?(l->task->map_certificate.receipt&&l->task->map_certificate.current):animation_namespace_scope(r))&&!memcmp(&r->randomfloat,&l->host,sizeof(l->host));
 }
 static int random_range_current(R232RangeLease*l){int ok;
     if(!random_range_scope(l))return 0;if(l->checking)return rfail(l->r,0,"randomFloatRange current reentered");l->checking=1;
-    ok=entity_task_current(l->r)&&random_range_scope(l)&&anim_data_current(l->r,l->task)&&random_range_scope(l)&&entity_task_current(l->r)&&random_range_scope(l);
+    ok=entity_task_current(l->r)&&random_range_scope(l)&&(l->r->map_source_float_enabled?entity_task_current(l->r):anim_data_current(l->r,l->task))&&random_range_scope(l)&&entity_task_current(l->r)&&random_range_scope(l);
     l->checking=0;return ok;
 }
 static int random_range_call(GscRuntime*r,const Value*args,int argc,int line,Value*out){

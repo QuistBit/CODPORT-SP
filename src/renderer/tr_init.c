@@ -499,10 +499,71 @@ static void R_ModeList_f( void ) {
 R_TakeScreenshot
 ==================
 */
-void R_TakeScreenshot( int x, int y, int width, int height, char *fileName ) {
+/* Console screenshots run on the front end. Only requesting a screenshot
+ * synchronizes with the renderer and reacquires the drawable. */
+static qboolean R_ScreenshotContextReady( void ) {
+	if ( !glConfig.smpActive ) return qtrue;
+	if ( tr.registered ) {
+		R_SyncRenderThread();
+		if ( qglGetString( GL_VERSION ) ) return qtrue;
+	}
+	ri.Printf( PRINT_WARNING, "Screenshot: no current renderer context\n" );
+	return qfalse;
+}
+
+static qboolean R_ReadScreenshotPixels( int x, int y, int width, int height,
+		GLenum format, byte *pixels ) {
+	GLint savedRead = -1;
+	GLenum error, restore;
+	int i;
+	if ( !glConfig.smpActive ) {
+		qglReadPixels( x, y, width, height, format, GL_UNSIGNED_BYTE, pixels );
+		return qtrue;
+	}
+	/* On the private desktop a portion of the front buffer can be unavailable.
+	 * No unfilled byte in an image should come from a previous hunk user. */
+	memset( pixels, 0, (size_t)width * height * (format == GL_RGBA ? 4 : 3) );
+	/* OpenGL error flags belong to the context. Report prior drawing errors
+	 * separately so a successful read can still publish its image. */
+	for ( i = 0; i < 8; ++i ) {
+		error = qglGetError();
+		if ( error == GL_NO_ERROR ) break;
+		ri.Printf( PRINT_WARNING, "Screenshot: preceding OpenGL error 0x%x\n", error );
+	}
+	qglGetIntegerv( GL_READ_BUFFER, &savedRead );
+	error = qglGetError();
+	if ( error != GL_NO_ERROR || savedRead < 0 ) {
+		ri.Printf( PRINT_WARNING, "Screenshot: OpenGL read state unavailable (0x%x)\n", error );
+		return qfalse;
+	}
+	qglPushClientAttrib( GL_CLIENT_PIXEL_STORE_BIT );
+	error = qglGetError();
+	if ( error != GL_NO_ERROR ) {
+		ri.Printf( PRINT_WARNING, "Screenshot: cannot save pixel pack state (0x%x)\n", error );
+		return qfalse;
+	}
+	qglPixelStorei( GL_PACK_ALIGNMENT, 1 );
+	qglPixelStorei( GL_PACK_ROW_LENGTH, 0 );
+	qglPixelStorei( GL_PACK_SKIP_ROWS, 0 );
+	qglPixelStorei( GL_PACK_SKIP_PIXELS, 0 );
+	qglReadBuffer( GL_FRONT );
+	qglReadPixels( x, y, width, height, format, GL_UNSIGNED_BYTE, pixels );
+	error = qglGetError();
+	qglReadBuffer( (GLenum)savedRead );
+	qglPopClientAttrib();
+	restore = qglGetError();
+	if ( error != GL_NO_ERROR || restore != GL_NO_ERROR ) {
+		ri.Printf( PRINT_WARNING, "Screenshot: read error 0x%x, restore error 0x%x\n", error, restore );
+		return qfalse;
+	}
+	return qtrue;
+}
+
+static qboolean R_TakeScreenshot( int x, int y, int width, int height, char *fileName ) {
 	byte        *buffer;
 	int i, c, temp;
 
+	if ( !R_ScreenshotContextReady() ) return qfalse;
 	buffer = ri.Hunk_AllocateTempMemory( glConfig.vidWidth * glConfig.vidHeight * 3 + 18 );
 
 	memset( buffer, 0, 18 );
@@ -513,7 +574,7 @@ void R_TakeScreenshot( int x, int y, int width, int height, char *fileName ) {
 	buffer[15] = height >> 8;
 	buffer[16] = 24;    // pixel size
 
-	qglReadPixels( x, y, width, height, GL_RGB, GL_UNSIGNED_BYTE, buffer + 18 );
+	if ( !R_ReadScreenshotPixels( x, y, width, height, GL_RGB, buffer + 18 ) ) { ri.Hunk_FreeTempMemory( buffer ); return qfalse; }
 
 	// swap rgb to bgr
 	c = 18 + width * height * 3;
@@ -531,6 +592,7 @@ void R_TakeScreenshot( int x, int y, int width, int height, char *fileName ) {
 	ri.FS_WriteFile( fileName, buffer, c );
 
 	ri.Hunk_FreeTempMemory( buffer );
+	return qtrue;
 }
 
 /*
@@ -538,12 +600,13 @@ void R_TakeScreenshot( int x, int y, int width, int height, char *fileName ) {
 R_TakeScreenshotJPEG
 ==============
 */
-void R_TakeScreenshotJPEG( int x, int y, int width, int height, char *fileName ) {
+static qboolean R_TakeScreenshotJPEG( int x, int y, int width, int height, char *fileName ) {
 	byte        *buffer;
 
+	if ( !R_ScreenshotContextReady() ) return qfalse;
 	buffer = ri.Hunk_AllocateTempMemory( glConfig.vidWidth * glConfig.vidHeight * 4 );
 
-	qglReadPixels( x, y, width, height, GL_RGBA, GL_UNSIGNED_BYTE, buffer );
+	if ( !R_ReadScreenshotPixels( x, y, width, height, GL_RGBA, buffer ) ) { ri.Hunk_FreeTempMemory( buffer ); return qfalse; }
 
 	// gamma correct
 	if ( ( tr.overbrightBits > 0 ) && glConfig.deviceSupportsGamma ) {
@@ -554,6 +617,7 @@ void R_TakeScreenshotJPEG( int x, int y, int width, int height, char *fileName )
 	SaveJPG( fileName, 95, glConfig.vidWidth, glConfig.vidHeight, buffer );
 
 	ri.Hunk_FreeTempMemory( buffer );
+	return qtrue;
 }
 
 /*
@@ -624,6 +688,7 @@ void R_LevelShot( void ) {
 	float xScale, yScale;
 	int xx, yy;
 
+	if ( !tr.world || !R_ScreenshotContextReady() ) return;
 	sprintf( checkname, "levelshots/%s.tga", tr.world->baseName );
 
 	source = ri.Hunk_AllocateTempMemory( glConfig.vidWidth * glConfig.vidHeight * 3 );
@@ -635,7 +700,9 @@ void R_LevelShot( void ) {
 	buffer[14] = 128;
 	buffer[16] = 24;    // pixel size
 
-	qglReadPixels( 0, 0, glConfig.vidWidth, glConfig.vidHeight, GL_RGB, GL_UNSIGNED_BYTE, source );
+	if ( !R_ReadScreenshotPixels( 0, 0, glConfig.vidWidth, glConfig.vidHeight, GL_RGB, source ) ) {
+		ri.Hunk_FreeTempMemory( buffer ); ri.Hunk_FreeTempMemory( source ); return;
+	}
 
 	// resample from source
 	xScale = glConfig.vidWidth / 512.0f;
@@ -731,7 +798,7 @@ void R_ScreenShot_f( void ) {
 	}
 
 
-	R_TakeScreenshot( 0, 0, glConfig.vidWidth, glConfig.vidHeight, checkname );
+	if ( !R_TakeScreenshot( 0, 0, glConfig.vidWidth, glConfig.vidHeight, checkname ) ) return;
 
 	if ( !silent ) {
 		ri.Printf( PRINT_ALL, "Wrote %s\n", checkname );
@@ -786,7 +853,7 @@ void R_ScreenShotJPEG_f( void ) {
 	}
 
 
-	R_TakeScreenshotJPEG( 0, 0, glConfig.vidWidth, glConfig.vidHeight, checkname );
+	if ( !R_TakeScreenshotJPEG( 0, 0, glConfig.vidWidth, glConfig.vidHeight, checkname ) ) return;
 
 	if ( !silent ) {
 		ri.Printf( PRINT_ALL, "Wrote %s\n", checkname );

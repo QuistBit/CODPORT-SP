@@ -55,23 +55,30 @@ static int delete_transaction_death(void *context,char *error,size_t cap) {
     DeleteTransactionLease *l=context;GscRuntime *r=l?l->runtime:NULL;
     /* Deletion selects lifetime storage. A waiter can occupy any of its
      * stable slots, including slots beyond the legacy embedded task array. */
-    uint64_t waiters[GSC_LIFETIME_TASK_CAPACITY];
+    uint64_t local_waiters[GSC_LIFETIME_TASK_CAPACITY], *waiters=local_waiters;
     int n,matched,slots;
     if(!l||!r||!delete_transaction_external(l,error,cap))return 0;
     if(!delete_transaction_current(l))return 0;
     if(l->notified)return rfail(r,l->line,"delete death notification already attempted");
     slots=r->task_count;
-    if(slots<0||slots>GSC_LIFETIME_TASK_CAPACITY)return rfail(r,l->line,"invalid delete task count");
+    if(slots<0||slots>task_directory_limit(r))return rfail(r,l->line,"invalid delete task count");
     l->notified=1;
     if(delete_transaction_owner_live(l)!=1)return rfail(r,l->line,"delete death owner is stale or missing");
-    memset(waiters,0,sizeof(waiters));
+    if(slots>GSC_LIFETIME_TASK_CAPACITY){
+        if((size_t)slots>SIZE_MAX/sizeof(*waiters))return rfail(r,l->line,"death waiter count overflow");
+        waiters=GSC_RUNTIME_CALLOC((size_t)slots,sizeof(*waiters));
+        if(!waiters)return rfail(r,l->line,"death waiter allocation failed");
+    }else memset(waiters,0,(size_t)slots*sizeof(*waiters));
     for(n=0;n<slots;n++) {
         Task *t=task_at(r,n);
         if(payload_matches(t,&l->owner,"death")&&!endon_matches(r,t,&l->owner,"death")&&
            waittillmatch_matches(t,NULL,0))waiters[n]=t->serial;
     }
     matched=entity_notify_internal(r,&l->owner,"death");
-    if(matched<0||r->error[0])return 0;
+    if(matched<0||r->error[0]){
+        if(waiters!=local_waiters)GSC_RUNTIME_FREE(waiters);
+        return 0;
+    }
     /* Delivery has copied its payload and ended the wait. Consume only these
      * matched registrations, preserving each Task execution certificate. A
      * level observer may resume after free; owner-bound tasks still retire. */
@@ -81,6 +88,7 @@ static int delete_transaction_death(void *context,char *error,size_t cap) {
            t->event_scope==EVENT_ENTITY&&entity_ref_equal(&t->event_owner,&l->owner)&&
            !strcmp(t->event,"death"))clear_wait_owner(t);
     }
+    if(waiters!=local_waiters)GSC_RUNTIME_FREE(waiters);
     if(!delete_transaction_current(l))return 0;
     if(error&&cap)error[0]=0;return 1;
 }

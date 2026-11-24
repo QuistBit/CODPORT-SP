@@ -8,6 +8,11 @@ static int C1AI14_OrientDefault(const uint32_t before[5],uint32_t after[5]) {
     uint32_t copy[5];if(!before||!after)return 0;memcpy(copy,before,sizeof(copy));
     copy[4]=0;copy[0]=0;memcpy(after,copy,sizeof(copy));return 1;
 }
+/* GAME68DAD: preserve look angles, copy the stored desired body yaw. */
+static int C1AI14_OrientCurrent(const uint32_t before[5],uint32_t desired,uint32_t after[5]) {
+ uint32_t copy[5];if(!before||!after)return 0;memcpy(copy,before,sizeof(copy));
+ copy[0]=1;copy[3]=desired;copy[4]=0;memcpy(after,copy,sizeof(copy));return 1;
+}
 /* GAME68D30 face-angle ->54AA0. Selected finite normal/zero input,
  * magnitude <=1e6; exact binary product/truncate/16-bit wrap at native53-bit
  * precision. Integer-only implementation preserves the caller's FP state. */

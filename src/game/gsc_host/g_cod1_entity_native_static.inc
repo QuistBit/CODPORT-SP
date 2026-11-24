@@ -109,6 +109,28 @@ int G_Cod1EntityCaptureNativeStaticSource(const GscEntityRef *input,
     if(!NativeStaticCaptureLive(&g_entities[ref.slot],&copy,error,size))return 0;
     *out=copy;return 1;
 }
+int G_Cod1EntityReadNoteworthy(const GscEntityRef *ref,GscStringCastValue *out,char *error,size_t size) {
+    const cod1EntityNativeStaticRecord_t *record;
+    const cod1NativeStaticText_t *text;
+    GscStringCastValue result={0};
+    if(!ref || !out || !ActorArguments(ref,sizeof(*ref),out,sizeof(*out),error,size) ||
+       ActorOverlap(ref,sizeof(*ref),out,sizeof(*out)) || !EntityValidate(NULL,ref))return 0;
+    record=NativeStaticFind(ref);
+    if(!record || !record->extrasPresent){
+        EntityError(error,size,"script_noteworthy requires captured or projected entity fields");
+        return 0;
+    }
+    /* The generic native type4 getter returns undefined for token zero. */
+    text=&record->stored.scriptNoteworthy;
+    if(!NativeStaticTextValid(text))return 0;
+    if(text->present){
+        if(strlen(text->text)>=sizeof(result.string))return 0;
+        result.type=1;
+        strcpy(result.string,text->text);
+    }
+    *out=result;
+    return 1;
+}
 static void NativeStaticDetachAndRetire(const GscEntityRef *ref) {
     cod1EntityNativeStaticRecord_t *record;gentity_t *e;
     if(!ref||ref->slot>=MAX_GENTITIES)return;

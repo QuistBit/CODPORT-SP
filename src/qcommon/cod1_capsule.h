@@ -56,13 +56,17 @@ static float C26Distance(const vec3_t a,const vec3_t b,const cod1CollisionTri_t*
  return f;
 }
 void COD1_CollisionTraceShape(const cod1CollisionTri_t*tris,int count,const vec3_t start,const vec3_t end,const vec3_t mins,const vec3_t maxs,trace_t*out,int capsule){
- vec3_t center,delta,extent,low,high,a,b,normal,p;float radius,half,dist,closing,time,step;int i,j,it;
+ vec3_t center,delta,extent,low,high,a,b,normal,p;float radius,half,dist,closing,time,step;int i,j,it;const c1cb583Bounds *blocks;
  if(!capsule){COD1_CollisionTrace(tris,count,start,end,mins,maxs,out);return;}
  for(j=0;j<3;j++){extent[j]=(maxs[j]-mins[j])*.5f;center[j]=start[j]+(maxs[j]+mins[j])*.5f;delta[j]=end[j]-start[j];low[j]=center[j]+(delta[j]<0?delta[j]:0)-extent[j]-.125f;high[j]=center[j]+(delta[j]>0?delta[j]:0)+extent[j]+.125f;}
  radius=extent[0];if(extent[1]<radius)radius=extent[1];if(extent[2]<radius)radius=extent[2];
  if(radius<=0){COD1_CollisionTrace(tris,count,start,end,mins,maxs,out);return;}
  half=extent[2]-radius;memset(out,0,sizeof(*out));out->fraction=1;VectorCopy(end,out->endpos);
+ blocks=C1CB583_Select(tris,count,low,high);
  for(i=0;i<count;i++){
+  if(blocks && !(i%C1CB583_SIZE) && C1CB583_Outside(blocks,i,low,high)){
+   i+=(count-i<C1CB583_SIZE?count-i:C1CB583_SIZE)-1;continue;
+  }
   const cod1CollisionTri_t*t=&tris[i];
   for(j=0;j<3;j++)if(high[j]<t->mins[j]||low[j]>t->maxs[j])break;if(j!=3)continue;
   time=0;

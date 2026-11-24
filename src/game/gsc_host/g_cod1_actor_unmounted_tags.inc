@@ -1,3 +1,4 @@
+#include "g_cod1_actor_tag_matrix584.h"
 /* Include after actual generic owner. No gun, no bind/current fallback. */
 #include "../../qcommon/cod1_actor_tags14.h"
 #include "../../qcommon/cod1_actor_unmounted_tree14.h"
@@ -18,9 +19,29 @@ static C1UActorTagResource*ActorUnmountedTagResource(C1UActorTagCall*c){C1UActor
  if(!C1AD14_Create(input,c->composition.descriptorCount,&staged.full)||!ActorUnmountedTagFence(c)||slot->full)goto done;*slot=staged;staged.full=NULL;ok=1;
  done:for(i=0;i<8;i++){free(models[i]);free(parts[i]);}C1AD14_Free(staged.full);return ok?slot:NULL;
 }
-int G_Cod1ActorUnmountedTagMatrix(const GscEntityRef*actor,const char*name,int now,float out[16],int(*current)(void*),void*context){C1UActorTagCall c;C1UActorTagResource*r;c1ast14Bank_t bank;c1ast14Node_t nodes[50];c1ab14Accumulator_t accum[128];c1aw14Pose_t pose,placed;float matrix[16];int bone,ok=0;
+static int ActorUnmountedPose(const C1UActorTagCall *call,
+                    const c1ad14Resource_t *resource,c1aw14Pose_t *pose){
+    c1ast14Bank_t bank;
+    c1ast14Node_t nodes[C1ALT14_NODES];
+    c1ab14Accumulator_t accumulated[128];
+    unsigned group,j,count;
+    if(cod1GenericActors[call->lease.actorIndex].detachedMG){
+        const c1ab14Clip_t *mg[2][21];
+        for(group=0;group<2;group++)for(j=0;j<21;j++)mg[group][j]=cod1TurretBodies[group][20-j];
+        if(!C1ALT14_Bank(resource,mg,&cod1GenericLookBank,&bank) ||
+           !C1ALT14_Nodes(call->weights,call->phases,nodes))return 0;
+        count=C1ALT14_NODES;
+    }else{
+        if(!C1AUT14_Bank(resource,&cod1GenericUnmountedBank,&bank) ||
+           !C1AUT14_Nodes(call->weights,call->phases,nodes))return 0;
+        count=C1AUT14_NODES;
+    }
+    return C1AST14_Sample(&bank,nodes,count,accumulated,128) &&
+           C1AD14_Build(resource,accumulated,bank.bones,pose);
+}
+int G_Cod1ActorUnmountedTagMatrix(const GscEntityRef*actor,const char*name,int now,float out[16],int(*current)(void*),void*context){C1UActorTagCall c;C1UActorTagResource*r;c1aw14Pose_t pose;float matrix[16];int bone,ok=0;
  if(!actor||!name||!out||!current||cod1UnmountedTagBusy||now!=level.time||!C1DT_String(name)||!name[0]||!ActorGoalBuffers(actor,sizeof(*actor),out,64,NULL,0)||!ActorGoalBuffers(name,strlen(name)+1,out,64,NULL,0)||ActorUnmountedTagPrivate(out,64))return 0;{cod1ActorLease_t faceLease;if(ActorGoalLease(actor,&faceLease)&&ActorFaceClockSelected(faceLease.actorIndex))return G_Cod1ActorFaceTagMatrix(actor,name,now,out,current,context);}memset(&c,0,sizeof(c));c.serial=cod1UnmountedTagSerial;c.borrowed=actor;c.actor=*actor;c.name=name;strcpy(c.copiedName,name);c.now=now;c.current=current;c.context=context;if(!ActorGoalLease(actor,&c.lease)||cod1Actors[c.lease.actorIndex].turretMount.mounted)return 0;c.actorBefore=cod1Actors[c.lease.actorIndex];c.entityBefore=g_entities[actor->slot];c.composition=c.actorBefore.modelComposition;memcpy(c.origin,c.entityBefore.r.currentOrigin,12);memcpy(c.angles,c.entityBefore.r.currentAngles,12);cod1UnmountedTagBusy=c.actor.epoch;if(!G_Cod1ActorUnmountedSample(actor,now,c.weights,c.phases,ActorUnmountedTagUninterrupted,NULL)||!ActorUnmountedTagFence(&c))goto done;
- r=ActorUnmountedTagResource(&c);if(!r||!ActorUnmountedTagFence(&c)||(bone=C1AT14_Find(r->full->assembly,c.copiedName))<0||!C1AUT14_Bank(r->full,&cod1GenericUnmountedBank,&bank)||!C1AUT14_Nodes(c.weights,c.phases,nodes)||!C1AST14_Sample(&bank,nodes,50,accum,128)||!C1AD14_Build(r->full,accum,bank.bones,&pose)||!C1AW14_Place(&pose,c.origin,c.angles,&placed)||(unsigned)bone>=placed.bones)goto done;memcpy(matrix,placed.matrix[bone],64);if(!ActorUnmountedTagFence(&c)||!ActorGoalBuffers(actor,sizeof(*actor),out,64,NULL,0)||!ActorGoalBuffers(name,strlen(c.copiedName)+1,out,64,NULL,0)||ActorUnmountedTagPrivate(out,64))goto done;memcpy(out,matrix,64);ok=1;
+ r=ActorUnmountedTagResource(&c);if(!r||!ActorUnmountedTagFence(&c)||(bone=C1AT14_Find(r->full->assembly,c.copiedName))<0||!ActorUnmountedPose(&c,r->full,&pose)||!C1AW584_TagMatrix(&pose,c.origin,c.angles,(unsigned)bone,matrix))goto done;if(!ActorUnmountedTagFence(&c)||!ActorGoalBuffers(actor,sizeof(*actor),out,64,NULL,0)||!ActorGoalBuffers(name,strlen(c.copiedName)+1,out,64,NULL,0)||ActorUnmountedTagPrivate(out,64))goto done;memcpy(out,matrix,64);ok=1;
  done:if(cod1UnmountedTagBusy==c.actor.epoch)cod1UnmountedTagBusy=0;return ok;
 }
 int G_Cod1ActorUnmountedTagWorld(const GscEntityRef*actor,const char*name,int now,float origin[3],float angles[3],int(*current)(void*),void*context){float matrix[16],a[3];size_t n;if(!actor||!name||!origin||!angles||!C1DT_String(name))return 0;n=strlen(name)+1;if(!ActorGoalBuffers(actor,sizeof(*actor),origin,12,NULL,0)||!ActorGoalBuffers(actor,sizeof(*actor),angles,12,NULL,0)||!ActorGoalBuffers(name,n,origin,12,NULL,0)||!ActorGoalBuffers(name,n,angles,12,NULL,0)||ActorOverlap(origin,12,angles,12)||ActorUnmountedTagPrivate(origin,12)||ActorUnmountedTagPrivate(angles,12))return 0;if(!G_Cod1ActorUnmountedTagMatrix(actor,name,now,matrix,current,context)||!C1AT14_MatrixAngles(matrix,a))return 0;memcpy(origin,matrix+12,12);memcpy(angles,a,12);return 1;}

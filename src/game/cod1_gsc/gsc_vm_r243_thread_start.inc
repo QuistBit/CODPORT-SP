@@ -69,7 +69,7 @@ static int r243_thread_target(GscRuntime*r,Task*parent,const GscEntityRef*target
   return rfail(r,line,"R243 thread target returned invalid allocation authority");
  *out=result;return 1;
 }
-static int r243_spawn_initial(GscRuntime*r,int fn,const Value*args,int argc,const Value*self,int line){
+static int r243_spawn_initial(GscRuntime*r,int fn,const Value*args,int argc,const Value*self,int line,Value *initial_result){
  Task*parent=r->executing_task,*child=NULL;Value owned_args[MAX_PARAMS],owned_self;
  GscMapExecutionCertificate map;GscEntityExecutionCertificate entity;
  unsigned joined=0;int ok=0,ran=0;uint64_t time_root=r237_owner_stamp(r);
@@ -107,7 +107,9 @@ static int r243_spawn_initial(GscRuntime*r,int fn,const Value*args,int argc,cons
  if(!push_frame(r,child,fn,owned_args,argc,&owned_self,line))goto child_done;
  if(!r237_owner_current(r,time_root)){rfail(r,line,"R243 time-root changed during child formal binding");goto child_done;}
  joined=configured_precache_child_begin(r,parent,child);
+ child->initial_thread_result=initial_result;
  ran=1;ok=run_task_results(r,child,r->execution_budget);
+ child->initial_thread_result=NULL;
  if(!r237_owner_current(r,time_root))rfail(r,line,"R243 time-root changed during child source");
 child_done:
  if(child->context_retired&&r->configured_precache_phase==CONFIGURED_PRECACHE_ACTIVE)configured_precache_close(r);

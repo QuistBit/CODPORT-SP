@@ -63,3 +63,11 @@ int G_Cod1ActorJumperScriptedResourcesLoad(void){
 }
 
 int TrainingJumperOwnerIs(const GscEntityRef*ref){return TrainingJumperAllocation(ref);}
+
+/* Resource membership is bound to the exact factory-owned tree. Loading892
+ * into the general clock bank must not admit it for another Actor lease. */
+static int ActorJumperTreeLeaf(const C1GARecord*r,unsigned n){
+ return r&&n==892&&r->lease.serial&&
+  !memcmp(&r->lease,&trainingJumperOwner,sizeof(r->lease))&&
+  TrainingJumperAllocation(&r->lease.entity)&&ActorJumperReady(cod1EntityEpoch);
+}

@@ -7,6 +7,8 @@
  * require their own confirmed contracts. */
 #include "../g_local.h"
 #include "../g_cod1_entity_host.h"
+#include "../g_cod1_vehicle.h"
+#include "../g_cod1_turret_factory.h"
 #include "../g_cod1_player_lifetime.h"
 #include "../g_cod1_path_entity_host.h"
 #include "../g_cod1_node_host.h"
@@ -33,6 +35,7 @@ static int cod1EntityReady, cod1EntityActive;
 static int WeaponClassnamePrivate(const void*,size_t);
 static int EntityLinkPrivate(const void*,size_t);
 static void EntityLinksReset(void);
+static void ModelPartReset(void);
 static int EntityLinksRetire(const GscEntityRef*,int);
 static int ActorFactoryPrivate(const void*,size_t);
 static void ActorFactoryReset(void);
@@ -72,6 +75,8 @@ static int ActorFaceTagPrivate(const void *,size_t);
 static void ActorFaceTagReset(void);
 static int ActorGenericPrivate(const void *,size_t);
 static void ActorGenericReset(void);
+static void ActorLocomotionReset(void);
+static int ActorLocomotionPrivate(const void*,size_t);
 static int FreshStoragePrivate(const void*,size_t);
 static int ActorNormalPrivate(const void*,size_t);
 static void ActorGenericRetire(uint32_t,const GscEntityRef*);
@@ -153,6 +158,7 @@ static void EntityError( char *error, size_t size, const char *text ) {
 }
 
 #include "g_cod1_actor_registry.inc"
+#include "g_cod1_script_model_thread.inc"
 #include "g_cod1_actor_critical.inc"
 #include "g_cod1_actor_scripted_queue.inc"
 #include "g_cod1_actor_presence.inc"
@@ -204,6 +210,7 @@ static int ActorEngineSceneCleanup( void ) {
 }
 
 void G_Cod1EntityMapBegin( void ) {
+    if(!G_Cod1TurretFactoryMapCleanup()||!G_Cod1VehicleMapCleanup()){G_Error("vehicle cleanup refused at map boundary");return;}
     MoveDeltaBankReset();
     G_Cod1PlayerLifetimeMapReset();
     if(!G_Cod1LoopSoundMapCleanup()||!G_Cod1LoopFxMapCleanup()){G_Error("R243 loop FX owner cleanup refused before map boundary");return;}
@@ -212,7 +219,8 @@ void G_Cod1EntityMapBegin( void ) {
     int cleaned = ActorEngineSceneCleanup();
     if ( cod1EntityEpoch != previousEpoch || cod1EntityActive != previousActive ) return;
     if ( !cleaned ) { G_Error( "R146: native entity scene cleanup failed before map begin" ); return; }
-    EntityLinksReset();
+    EntityLinksReset();ModelPartReset();
+    memset(scriptModelThreads,0,sizeof(scriptModelThreads));
     ActorPoolReset();
     TurretReset();
     StartOriginResourcesReset();
@@ -240,6 +248,7 @@ void G_Cod1EntityMapReady( void ) {
 }
 
 void G_Cod1EntityMapEnd( void ) {
+    if(!G_Cod1TurretFactoryMapCleanup()||!G_Cod1VehicleMapCleanup()){G_Error("vehicle cleanup refused at map boundary");return;}
     MoveDeltaBankReset();
     G_Cod1PlayerLifetimeMapReset();
     if(!G_Cod1LoopSoundMapCleanup()||!G_Cod1LoopFxMapCleanup()){G_Error("R243 loop FX owner cleanup refused before map boundary");return;}
@@ -249,7 +258,8 @@ void G_Cod1EntityMapEnd( void ) {
     if ( cod1EntityEpoch != previousEpoch || cod1EntityActive != previousActive ) return;
     if ( !cleaned ) { G_Error( "R146: native entity scene cleanup failed before map end" ); return; }
     G_Cod1NodeRegistryClear();
-    EntityLinksReset();
+    EntityLinksReset();ModelPartReset();
+    memset(scriptModelThreads,0,sizeof(scriptModelThreads));
     ActorPoolReset();
     TurretReset();
     StartOriginResourcesReset();
@@ -272,6 +282,7 @@ void G_Cod1EntityBorn( gentity_t *ent ) {
     previous.epoch = cod1EntityEpoch;
     previous.slot = (uint32_t)slot;
     previous.generation = cod1EntityGeneration[slot];
+    if(!G_Cod1TurretFactoryBeforeFree(&previous)||!G_Cod1VehicleBeforeFree(&previous)){G_Error("vehicle cleanup refused before allocation birth");return;}
     G_Cod1PlayerLifetimeBeforeBirth(ent,&previous);
     {
         int previousActive = cod1EntityActive;
@@ -307,6 +318,7 @@ int G_Cod1EntityFree( const GscEntityRef *input ) {
     entity = *input;
     if(G_Cod1EntitySameAllocation(&entity))G_Cod1PlayerLifetimeRetire(g_entities+entity.slot);
     if ( !G_Cod1EntitySameAllocation( &entity ) || !DeleteTransactionFreeGuard(&entity) ||
+         !G_Cod1TurretFactoryBeforeFree(&entity) || !G_Cod1VehicleBeforeFree(&entity) ||
          !G_Cod1EntityLinksBeforeFree(&entity) ||
          !ActorDObjFreeOwner( &entity ) ||
          !G_Cod1EntitySameAllocation( &entity ) ||
@@ -703,6 +715,7 @@ static int EntitySpawnWithFlags( void *user, const char *classname,
         EntityError( error, size, "spawned entity retired during initialization" );
         return 0;
     }
+    ScriptModelThreadBorn(&ref); /* both real supported script class allocations */
     *out = ref;
     if ( EntityDiagnosticsEnabled() ) {
         G_Printf( "[GSC R84] spawn class=%s entity=%u generation=%u xyz=%.9g,%.9g,%.9g\n",
@@ -884,6 +897,8 @@ const GscEntityAccessHost *G_Cod1EntityAccessHost( void ) {
 }
 
 #include "g_cod1_actor_script_state.inc"
+#include "g_cod1_actor_desired_angle.inc"
+#include "g_cod1_actor_damage_direction.inc"
 #include "g_cod1_actor_script_fields.inc"
 #include "g_cod1_actor_attachment_queries.inc"
 #include "g_cod1_actor_model_read.inc"
@@ -906,7 +921,9 @@ int G_Cod1LateDisconnectInputsPrivate(const void*p,size_t n){
 }
 int G_Cod1EntityStorageProtected(const void *pointer,size_t size) {
     if (!size) return 0;
-    if(G_Cod1LateDisconnectPrivate(pointer,size)||G_Cod1PlayerLifetimePrivate(pointer,size)||WeaponClassnamePrivate(pointer,size)||EntityLinkPrivate(pointer,size)||ActorFactoryPrivate(pointer,size))return 1;
+    if(PlacedFieldProofPrivate(pointer,size)||G_Cod1Bsp592SealPrivate(pointer,size))return 1;
+    if(ActorOverlap(pointer,size,scriptModelThreads,sizeof(scriptModelThreads)))return 1;
+    if(G_Cod1TurretFactoryPrivate(pointer,size)||G_Cod1LateDisconnectPrivate(pointer,size)||G_Cod1PlayerLifetimePrivate(pointer,size)||WeaponClassnamePrivate(pointer,size)||EntityLinkPrivate(pointer,size)||ActorFactoryPrivate(pointer,size))return 1;
     if(ActorModelReadStoragePrivate(pointer,size)||ActorAttachmentStoragePrivate(pointer,size)||DeleteStoragePrivate(pointer,size)||RuntimeActorDeletePrivate(pointer,size)||TurretStoragePrivate(pointer,size)||G_Cod1DroppedItemStorageProtected(pointer,size))return 1;
     if(ActorControllerPrivate(pointer,size)||ActorNormalPrivate(pointer,size)||ActorScriptStatePrivate(pointer,size)||EntityHintStoragePrivate(pointer,size)||FreshStoragePrivate(pointer,size))return 1;
     return ActorOverlap(pointer,size,&cod1CarbineSpawn,sizeof(cod1CarbineSpawn)) ||
@@ -1014,6 +1031,35 @@ static int EntityVisibilityEligible( const gentity_t *ent ) {
             EntityControlInlineModel( ent );
     }
     return 0;
+}
+
+int G_Cod1EntityReadModelField(const GscEntityRef *input,GscStringCastValue *out,char *error,size_t size) {
+    GscEntityRef ref;
+    GscStringCastValue result = {0};
+    char text[MAX_STRING_CHARS];
+    gentity_t *ent;
+    int index;
+    if (!input || !out || !ActorArguments(input,sizeof(*input),out,sizeof(*out),error,size) ||
+        ActorOverlap(input,sizeof(*input),out,sizeof(*out))) return 0;
+    ref = *input;
+    if (!EntityValidate(NULL,&ref)) return 0;
+    ent = &g_entities[ref.slot];
+    if (!ent->classname || strcmp(ent->classname,"script_model"))
+        return G_Cod1ActorReadModelField(input,out,error,size);
+    if (!EntityVisibilityEligible(ent)) return 0;
+    index = ent->s.modelindex;
+    if (index < 0 || index >= MAX_MODELS) return 0;
+    /* GAME 41C42 reads the current model configstring, including slot zero. */
+    memset(text,0xa5,sizeof(text));
+    trap_GetConfigstring(CS_MODELS+index,text,sizeof(text));
+    if (!EntityValidate(NULL,&ref) || memcmp(input,&ref,sizeof(ref)) ||
+        !ent->classname || strcmp(ent->classname,"script_model") ||
+        !EntityVisibilityEligible(ent) || ent->s.modelindex != index ||
+        !memchr(text,0,sizeof(text)) || strlen(text) >= sizeof(result.string)) return 0;
+    result.type = 1;
+    strcpy(result.string,text);
+    *out = result;
+    return 1;
 }
 
 #include "g_cod1_entity_hints.inc"
@@ -1172,7 +1218,8 @@ static int EntityLookupArray( void *user, const char *name, const char *field,
     GscEntityRef snapshot[MAX_GENTITIES];
     uint64_t epoch;
     char copiedName[128];
-    int entityCount, useClassname, i, success = 0, overlappingError, capturedMode = 0;
+    size_t fieldOffset;
+    int entityCount, i, success = 0, overlappingError, capturedMode = 0;
     size_t length, matches = 0, seen = 0, outputBytes;
     const char *failure = "collection requires a ready selected collection mode on a CoD SP map";
     (void)user;
@@ -1200,11 +1247,13 @@ static int EntityLookupArray( void *user, const char *name, const char *field,
         return 0;
     }
     if ( !strcmp( field, "classname" ) ) {
-        useClassname = 1;
+        fieldOffset = offsetof(gentity_t,classname);
     } else if ( !strcmp( field, "targetname" ) ) {
-        useClassname = 0;
+        fieldOffset = offsetof(gentity_t,targetname);
+    } else if ( !strcmp( field, "target" ) ) {
+        fieldOffset = offsetof(gentity_t,target);
     } else {
-        EntityError( error, size, "getentarray supports only targetname and classname" );
+        EntityError( error, size, "getentarray supports classname, targetname and target" );
         return 0;
     }
     for ( length = 0; length < sizeof( copiedName ) && name[length]; ++length ) {}
@@ -1220,7 +1269,7 @@ static int EntityLookupArray( void *user, const char *name, const char *field,
     if ( !EntityCollectionContext( epoch, entityCount ) ) goto done;
     for ( i = 0; i < entityCount; ++i ) {
         const gentity_t *ent = &g_entities[i];
-        const char *value = useClassname ? ent->classname : ent->targetname;
+        const char *value = *(char * const *)((const char *)ent + fieldOffset);
         if ( !ent->inuse || !value || strcmp( value, copiedName ) ) continue;
         if ( matches == capacity ) {
             failure = "entity collection exceeds output capacity";
@@ -1242,7 +1291,7 @@ static int EntityLookupArray( void *user, const char *name, const char *field,
      * Validation and publication below have no engine callbacks between them. */
     for ( i = 0; i < entityCount; ++i ) {
         const gentity_t *ent = &g_entities[i];
-        const char *value = useClassname ? ent->classname : ent->targetname;
+        const char *value = *(char * const *)((const char *)ent + fieldOffset);
         if ( !ent->inuse || !value || strcmp( value, copiedName ) ) continue;
         if ( seen >= matches || snapshot[seen].slot != (uint32_t)i ||
              !EntityValidate( NULL, &snapshot[seen] ) ) {
@@ -1404,6 +1453,7 @@ const GscEntityPredicateHost *G_Cod1EntityPredicateHost( void ) {
 #include "g_cod1_entity_delete.inc"
 #include "g_cod1_entity_links.inc"
 #include "g_cod1_weapon_classname.inc"
+#include "g_cod1_model_part.inc"
 #include "g_cod1_entity_delete_transaction.inc"
 #include "g_cod1_spatial_natives.inc"
 #include "g_cod1_turret_host.inc"
@@ -1431,11 +1481,13 @@ static int ScriptThreadTurretCurrent(const GscEntityRef *ref,uint64_t birth){
 
 #include "g_cod1_actor_placed_init.inc"
 #include "g_cod1_actor_look_host.inc"
+#include "g_cod1_actor_active_prone.inc"
 #include "g_cod1_actor_immediate_host.inc"
 #include "g_cod1_entity_delete_runtime_actor.inc"
 #include "g_cod1_dropped_item.inc"
 #include "g_cod1_actor_spawn_factory.inc"
 #include "g_cod1_move_delta.inc"
+#include "g_cod1_navigation_actor_input.inc"
 #else
 typedef int cod1_entity_host_disabled_translation_unit;
 #endif

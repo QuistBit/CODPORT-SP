@@ -549,7 +549,7 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 	// remove powerups
 	memset( self->client->ps.powerups, 0, sizeof( self->client->ps.powerups ) );
 
-	if ( g_gametype.integer == GT_SINGLE_PLAYER ) {
+	if ( g_gametype.integer == GT_SINGLE_PLAYER && !G_Cod1DeadPlayer( self ) ) {
 		trap_SendServerCommand( -1, "mu_play sound/music/l_failed_1.wav 0\n" );
 		trap_SetConfigstring( CS_MUSIC_QUEUE, "" );  // clear queue so it'll be quiet after hit
 		trap_SendServerCommand( -1, "cp missionfail0" );
@@ -1366,6 +1366,7 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
 		/* take is the same adjusted integer committed to health, not the
 		 * incoming weapon damage. Matching tasks still resume on advance. */
+		if (ticket.tracked && !G_Cod1ActorRecordDamageState(&ticket.owner,dir,take,targ->health<=0)) return;
 		if ( !G_Cod1GscTestCombatDamageEvent( &ticket, take ) ) return;
 #endif
 

@@ -8,6 +8,7 @@ typedef struct { unsigned int rowCount;cod1WeaponModelRow_t rows[COD1_WEAPON_MOD
  * absent model is held, whereas a present empty model is an owned empty result.
  * Index0 is the explicit semantic none row. No native index/resource parity. */
 int G_Cod1SelectWeaponModelTable(const cod1WeaponModelHost_t *,char *,size_t);
+int G_Cod1SelectWeaponModelTableForProgram(const cod1WeaponModelHost_t *,const GscMapExecutionCertificate *,char *,size_t);
 int G_Cod1QueryWeaponModel(const char *,char [128],char *,size_t);
 const GscWeaponModelHost *G_Cod1WeaponModelHost(void);
 #endif

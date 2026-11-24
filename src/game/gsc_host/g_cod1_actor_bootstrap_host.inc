@@ -10,13 +10,18 @@ static cod1ActorBootstrapSnapshot_t cod1ActorPrefix;
 static GscSessionActorBootstrapHost cod1ActorPrefixHost;
 static GscSessionActorProgramPlan cod1ActorProgramPlan;
 static cod1EarlyProgramDeclarations_t cod1EarlyProgram;
+#include "../../qcommon/cod1_exact_bytes_r242.h"
+#include "g_cod1_atr_seal.h"
+#include "g_cod1_bsp_pages592.h"
 #define COD1_EARLY_ATR_MAX 131072u
 static struct {uint64_t epoch,receipt,prepass;int ready,developer,busy,cancelled;size_t sizes[2];
  unsigned char bytes[2][COD1_EARLY_ATR_MAX],reference[2][COD1_EARLY_ATR_MAX];
 } cod1EarlyTurretResources;
+static Cod1ATRSeal cod1EarlyTurretSeals[2];
 static uint64_t cod1EarlyTurretSerial;
 static int Cod1EarlyTurretLoad(void);
 static void Cod1EarlyTurretReset(void){
+ unsigned i;for(i=0;i<2;i++)Cod1ATRSealFree(cod1EarlyTurretSeals+i);
  cod1EarlyTurretResources.cancelled=cod1EarlyTurretResources.busy?1:0;
  cod1EarlyTurretResources.ready=0;cod1EarlyTurretResources.epoch=cod1EarlyTurretResources.receipt=cod1EarlyTurretResources.prepass=0;
  memset(cod1EarlyTurretResources.sizes,0,sizeof(cod1EarlyTurretResources.sizes));
@@ -28,9 +33,24 @@ static struct {int armed,invoked,body,finished,completed,checking,cancelled;cons
 /* Tokenized authored records, not entity handles or execution certificates.
  * The parser already bounds each key/value record; retain exact bytes including
  * duplicate keys/order and the BSP ordinal, without lossy hashes. */
-typedef struct {uint32_t ordinal;int pairs,bytes;char text[MAX_SPAWN_VARS_CHARS];} Cod1ActorPrepassRecord;
-static struct {uint32_t records,seen,actors;int complete;Cod1ActorPrepassRecord rows[GSC_AI_ARRAY_CAPACITY];} cod1ActorPrepassRecords;
+/* BSP declarations include deferred spawners; they do not consume the32 live Actor slots. */
+#define COD1_ACTOR_RECORD_CAPACITY MAX_GENTITIES
+typedef struct {C1BSP592_ALIGN uint32_t ordinal;int pairs,bytes;unsigned short keyOffset[MAX_SPAWN_VARS], valueOffset[MAX_SPAWN_VARS];char text[MAX_SPAWN_VARS_CHARS];} Cod1ActorPrepassRecord;
+static struct {uint32_t records,seen,actors;int complete;Cod1ActorPrepassRecord rows[COD1_ACTOR_RECORD_CAPACITY];} cod1ActorPrepassRecords;
 
+static unsigned char cod1PrepassFieldSealed[COD1_ACTOR_RECORD_CAPACITY];
+_Static_assert(sizeof(Cod1ActorPrepassRecord)%4096==0,"isolated prepass BSP pages");
+int G_Cod1Bsp592SealPrivate(const void*p,size_t n){return Cod1AiOverlap(p,n,cod1PrepassFieldSealed,sizeof(cod1PrepassFieldSealed));}
+static void Cod1ClearCohortPlan(void);
+static int Cod1CohortPlanPrivate(const void *,size_t);
+static int Cod1PrepassFieldsUnsealAll(void){unsigned i;
+ Cod1ClearCohortPlan();
+ for(i=0;i<COD1_ACTOR_RECORD_CAPACITY;i++)if(cod1PrepassFieldSealed[i]){
+  if(!C1Bsp592Pages(&cod1ActorPrepassRecords.rows[i],sizeof(Cod1ActorPrepassRecord),1))return 0;
+  cod1PrepassFieldSealed[i]=0;
+ }
+ return 1;
+}
 #define COD1_EARLY_RECORD_CAPACITY 256u
 static struct {uint32_t count,seen;Cod1ActorPrepassRecord rows[COD1_EARLY_RECORD_CAPACITY];} cod1EarlyRecords;
 typedef struct { cod1ActorDeleteReceipt_t receipt;int state,notified; } Cod1ActorDeleteRecord;
@@ -47,7 +67,10 @@ static int Cod1ActorDeleteAuthorized(uint32_t i) {
 }
 static int Cod1ActorRecordPrivate(const void *,size_t);
 static int Cod1ActorPrefixPrivate(const void *p,size_t n){
-    return G_Cod1NodeGraphPostCohortPrivate(p,n)||Cod1AiOverlap(p,n,&cod1ActorLate,sizeof(cod1ActorLate))||Cod1ActorRecordPrivate(p,n)||Cod1AiOverlap(p,n,&cod1EarlyTurretResources,sizeof(cod1EarlyTurretResources))||Cod1AiOverlap(p,n,&cod1EarlyTurretSerial,sizeof(cod1EarlyTurretSerial))||Cod1AiOverlap(p,n,&cod1EarlyProgram,sizeof(cod1EarlyProgram))||Cod1AiOverlap(p,n,&cod1EarlyRecords,sizeof(cod1EarlyRecords))||Cod1AiOverlap(p,n,&cod1ActorProgramPlan,sizeof(cod1ActorProgramPlan))||Cod1AiOverlap(p,n,&cod1ActorPrepassRecords,sizeof(cod1ActorPrepassRecords))||Cod1AiPrivate(p,n)||Cod1AiOverlap(p,n,&cod1ActorPrefix,sizeof(cod1ActorPrefix))||
+    unsigned i;
+    if(Cod1AiOverlap(p,n,cod1EarlyTurretSeals,sizeof(cod1EarlyTurretSeals)))return 1;
+    for(i=0;i<2;i++)if(cod1EarlyTurretSeals[i].base && Cod1AiOverlap(p,n,cod1EarlyTurretSeals[i].base,2*cod1EarlyTurretSeals[i].length))return 1;
+    return Cod1CohortPlanPrivate(p,n)||G_Cod1Bsp592SealPrivate(p,n)||G_Cod1NodeGraphPostCohortPrivate(p,n)||Cod1AiOverlap(p,n,&cod1ActorLate,sizeof(cod1ActorLate))||Cod1ActorRecordPrivate(p,n)||Cod1AiOverlap(p,n,&cod1EarlyTurretResources,sizeof(cod1EarlyTurretResources))||Cod1AiOverlap(p,n,&cod1EarlyTurretSerial,sizeof(cod1EarlyTurretSerial))||Cod1AiOverlap(p,n,&cod1EarlyProgram,sizeof(cod1EarlyProgram))||Cod1AiOverlap(p,n,&cod1EarlyRecords,sizeof(cod1EarlyRecords))||Cod1AiOverlap(p,n,&cod1ActorProgramPlan,sizeof(cod1ActorProgramPlan))||Cod1AiOverlap(p,n,&cod1ActorPrepassRecords,sizeof(cod1ActorPrepassRecords))||Cod1AiPrivate(p,n)||Cod1AiOverlap(p,n,&cod1ActorPrefix,sizeof(cod1ActorPrefix))||
         Cod1AiOverlap(p,n,&cod1ActorPrefixHost,sizeof(cod1ActorPrefixHost))||
         Cod1AiOverlap(p,n,&cod1ActorPrefixSerial,sizeof(cod1ActorPrefixSerial))||
         Cod1AiOverlap(p,n,&cod1ActorPrefixBusy,sizeof(cod1ActorPrefixBusy))||
@@ -57,10 +80,14 @@ static int Cod1ActorPrefixPrivate(const void *p,size_t n){
 
 static int Cod1ActorPrefixOwner(void){return cod1ActorPrefix.epoch&&cod1ActorPrefix.receipt&&
     cod1ActorPrefix.epoch==G_Cod1EntityMapEpoch()&&G_Cod1MapEntities()&&g_gametype.integer==GT_SINGLE_PLAYER;}
-static int Cod1ActorPrefixCurrent(uint64_t receipt){uint32_t i;
+static int Cod1ActorPrefixHeaderCurrent(uint64_t receipt){
     if(!Cod1ActorPrefixOwner()||receipt!=cod1ActorPrefix.receipt||!cod1ActorPrefix.enabled||
        !cod1ActorPrefix.declarationsReady||!cod1ActorPrefix.sealed||cod1ActorPrefix.closed||
        cod1ActorPrefix.invalid||!cod1ActorPrepassRecords.complete||level.spawning||level.restarted)return 0;
+    return 1;
+}
+static int Cod1ActorPrefixCurrent(uint64_t receipt){uint32_t i;
+    if(!Cod1ActorPrefixHeaderCurrent(receipt))return 0;
     for(i=0;i<cod1ActorPrefix.placedRows;++i){cod1ActorBootstrapRow_t *row=&cod1ActorPrefix.rows[i];
         if(Cod1ActorDeleteAuthorized(i))continue;
         if(cod1ActorDeletes[i].state==COD1_ACTOR_DELETE_FAILED)return 0;
@@ -85,6 +112,7 @@ static void Cod1ActorPrefixBegin(void){
     Cod1ActorRecordReset();
     memset(&cod1ActorPrefix,0,sizeof(cod1ActorPrefix));memset(&cod1ActorPrefixHost,0,sizeof(cod1ActorPrefixHost));
     memset(cod1ActorDeletes,0,sizeof(cod1ActorDeletes));
+    if(!Cod1PrepassFieldsUnsealAll()){G_Error("BSP prepass protection could not be released");return;}
     memset(&cod1ActorPrepassRecords,0,sizeof(cod1ActorPrepassRecords));
     memset(&cod1ActorProgramPlan,0,sizeof(cod1ActorProgramPlan));
     memset(&cod1EarlyProgram,0,sizeof(cod1EarlyProgram));memset(&cod1EarlyRecords,0,sizeof(cod1EarlyRecords));
@@ -311,7 +339,7 @@ static int Cod1ActorPrefixRun(void *user,const GscActorBootstrapServices *servic
      if(cod1ActorLate.service==api.context)memset(&cod1ActorLate,0,sizeof(cod1ActorLate));
      if(epoch!=cod1ActorPrefix.epoch||receipt!=cod1ActorPrefix.receipt){ok=0;goto done;}
      if(!ok||!completed){ok=0;Cod1ActorPrefixFail(error,size,"post-cohort actual late native owner phase refused");goto done;}
-     ok=0;Cod1ActorPrefixFail(error,size,"placed post-cohort6FAD0 completed; cached map-main/export7/later child frames remain open");goto done;
+     G_Printf("[Training startup] completed late path scan after %u placed actors\n",cod1ActorPrefix.returnedRows);
     }
     ok=Cod1ActorPrefixAccounting(epoch)&&api.current(api.context)==1&&
         cod1ActorPrefix.returnedRows==cod1ActorPrefix.placedRows;
@@ -424,12 +452,31 @@ static int Cod1EarlyRecordAdmit(const char *name){
 }
 static int Cod1ActorPrepassRecordSave(void){
  Cod1ActorPrepassRecord *r;
- if(cod1ActorPrefix.prepassRows>=GSC_AI_ARRAY_CAPACITY||level.numSpawnVars<1||
+ if(cod1ActorPrefix.prepassRows>=COD1_ACTOR_RECORD_CAPACITY||level.numSpawnVars<1||
     level.numSpawnVarChars<1||level.numSpawnVarChars>MAX_SPAWN_VARS_CHARS)
   return Cod1ActorPrepassRefuse("early Actor record exceeds selected parser capacity");
  r=&cod1ActorPrepassRecords.rows[cod1ActorPrefix.prepassRows];
  r->ordinal=cod1ActorPrepassRecords.records;r->pairs=level.numSpawnVars;r->bytes=level.numSpawnVarChars;
- memcpy(r->text,level.spawnVarChars,(size_t)r->bytes);return 1;
+ /* Parse the independently retained prepass once. Keep exact boundaries
+  * alongside its bytes; intake builds its own offsets from the live spawn. */
+ if(r->pairs>MAX_SPAWN_VARS)return Cod1ActorPrepassRefuse("too many Actor fields");
+ {
+  size_t cursor=0;int p;
+  for(p=0;p<r->pairs;p++){
+   const char *end;
+   r->keyOffset[p]=(unsigned short)cursor;
+   end=memchr(level.spawnVarChars+cursor,0,(size_t)r->bytes-cursor);
+   if(!end)return Cod1ActorPrepassRefuse("unterminated Actor field key");
+   cursor=(size_t)(end-level.spawnVarChars)+1;
+   r->valueOffset[p]=(unsigned short)cursor;
+   end=memchr(level.spawnVarChars+cursor,0,(size_t)r->bytes-cursor);
+   if(!end)return Cod1ActorPrepassRefuse("unterminated Actor field value");
+   cursor=(size_t)(end-level.spawnVarChars)+1;
+  }
+  if(cursor!=(size_t)r->bytes)return Cod1ActorPrepassRefuse("trailing Actor fields");
+ }
+ memcpy(r->text,level.spawnVarChars,(size_t)r->bytes);
+ cod1PrepassFieldSealed[cod1ActorPrefix.prepassRows]=(unsigned char)C1Bsp592Pages(r,sizeof(*r),0);return 1;
 }
 /* Called by the actual spawn loop BEFORE G_SpawnGEntityFromSpawnVars/G_Spawn. */
 static int Cod1ActorPrepassRecordAdmit(void){
@@ -515,37 +562,109 @@ const GscSessionActorProgramPlan *G_Cod1ActorProgramPlan(void){
 /* Separate already-constructed cohort lane. Ordinary late intake keeps its
  * unaccounted/unconsumed admission rules. This receipt authorizes adoption,
  * while later script entries still obtain fresh native certificates. */
+/* Only actual protected prepass storage can authorize comparison reuse.
+ * Foreign buffers, wrong bounds and a replaced map retain the full scan. */
+uint64_t G_Cod1Bsp592FieldsSealed(const char *bytes,size_t size,size_t pairs,const unsigned short *keys,const unsigned short *values){
+ uintptr_t first=(uintptr_t)cod1ActorPrepassRecords.rows[0].text,address=(uintptr_t)bytes,offset;
+ size_t index;const Cod1ActorPrepassRecord *row;
+ if(!bytes||address<first||!Cod1ActorPrefixOwner()||!cod1ActorPrefix.receipt)return 0;
+ offset=address-first;if(offset%sizeof(Cod1ActorPrepassRecord))return 0;index=offset/sizeof(Cod1ActorPrepassRecord);
+ if(index>=COD1_ACTOR_RECORD_CAPACITY||index>=cod1ActorPrepassRecords.actors||!cod1PrepassFieldSealed[index])return 0;
+ row=cod1ActorPrepassRecords.rows+index;
+ return row->bytes>0&&size==(size_t)row->bytes&&row->pairs>0&&pairs==(size_t)row->pairs&&keys==row->keyOffset&&values==row->valueOffset?cod1ActorPrefix.receipt:0;
+}
 static int Cod1ActorBspRecordRetained(const Cod1ActorRecordOwner*r,const cod1ActorBootstrapRow_t*row){
- const Cod1ActorPrepassRecord*saved;cod1PlacedActorSnapshot_t snapshot;int i,offset=0;char key[MAX_SPAWN_VARS_CHARS],value[MAX_SPAWN_VARS_CHARS];size_t n;
+ const Cod1ActorPrepassRecord *saved;
  if(!r||!row||r->index!=row->actorRecord||r->ordinal!=row->bspOrdinal||r->index>=cod1ActorPrepassRecords.actors)return 0;
  saved=&cod1ActorPrepassRecords.rows[r->index];
- if(saved->ordinal!=r->ordinal||saved->bytes<=0||saved->bytes>MAX_SPAWN_VARS_CHARS||saved->pairs<=0||
-    !G_Cod1PlacedActorRead(&row->entity,&snapshot,NULL,0)||snapshot.rawFieldCount!=(uint32_t)saved->pairs)return 0;
- for(i=0;i<saved->pairs;i++){
-  if(!G_Cod1PlacedActorRawField(&row->entity,(size_t)i,key,sizeof(key),value,sizeof(value),NULL,0))return 0;
-  n=strlen(key)+1;if(n>(size_t)(saved->bytes-offset)||memcmp(saved->text+offset,key,n))return 0;offset+=(int)n;
-  n=strlen(value)+1;if(n>(size_t)(saved->bytes-offset)||memcmp(saved->text+offset,value,n))return 0;offset+=(int)n;
- }return offset==saved->bytes;
+ return saved->ordinal==r->ordinal && saved->bytes>0 && saved->bytes<=MAX_SPAWN_VARS_CHARS &&
+    saved->pairs>0 && G_Cod1PlacedActorMatchesFields(&row->entity,saved->text,saved->bytes,saved->pairs,saved->keyOffset,saved->valueOffset);
 }
-static int Cod1ActorBspCohortCurrent(uint64_t receipt){uint32_t i;uint64_t program=0;
- cod1ActorLeaseSnapshot_t actor;cod1PlacedActorSnapshot_t placed;
- if(!Cod1ActorPrefixCurrent(receipt)||!cod1ActorPrefix.prepassReady||!cod1ActorPrefix.placedRows||
+/* The original proof establishes the relationships among bootstrap rows
+ * and construction records. Reuse them only on exact equality of both spans.
+ * Every call still examines the live world, leases, deletion status and both
+ * seals. Unprotecting prepass memory invalidates the plan before any write. */
+typedef struct {
+    uint64_t epoch,receipt;
+    unsigned count,first,span,prepassCount;
+    cod1ActorBootstrapRow_t rows[COD1_ACTOR_CAPACITY];
+    Cod1ActorRecordOwner owners[COD1_ACTOR_CAPACITY];
+    cod1BspLiveRow_t live[COD1_ACTOR_CAPACITY];
+} Cod1CohortPlan;
+static Cod1CohortPlan cod1CohortPlan;
+static void Cod1ClearCohortPlan(void){cod1CohortPlan.receipt=0;}
+static int Cod1CohortPlanPrivate(const void *p,size_t n){
+    return Cod1AiOverlap(p,n,&cod1CohortPlan,sizeof(cod1CohortPlan));
+}
+static int Cod1CohortHeader(uint64_t receipt){
+ if(!Cod1ActorPrefixHeaderCurrent(receipt)||!cod1ActorPrefix.prepassReady||!cod1ActorPrefix.placedRows||
     cod1AiDomain.invalid||!cod1AiDomain.sealed||cod1AiDomain.unaccountedRows||
     cod1ActorPrefix.accountedRows!=cod1ActorPrefix.placedRows||
     cod1ActorPrefix.prepassRows!=cod1AiDomain.constructorRows)return 0;
+ return 1;
+}
+static int Cod1CohortRowsFull(uint64_t receipt){uint32_t i;uint64_t program=0;
  for(i=0;i<cod1ActorPrefix.placedRows;i++){
   const cod1ActorBootstrapRow_t*row=&cod1ActorPrefix.rows[i];const Cod1ActorRecordOwner*r;
   if(row->actorRecord>=cod1ActorPrepassRecords.actors)return 0;r=&cod1ActorRecordOwners[row->actorRecord];
-  if(r->state!=COD1_RECORD_BSP_CONSTRUCTED||r->epoch!=cod1ActorPrefix.epoch||r->receipt!=receipt||
-     !r->program||!r->allocation||r->allocation!=row->allocationReceipt||!Cod1AiRefEqual(&r->entity,&row->entity)||
-     !Cod1ActorBspRecordRetained(r,row)||!row->accounted||!row->startupConsumed||row->retired||
-     row->stage<COD1_ACTOR_ENTRY_LINKED||row->stage>COD1_ACTOR_ENTRY_ENTERED||
-     !G_Cod1PlacedActorRead(&row->entity,&placed,NULL,0)||!placed.startupConsumed||
-     !placed.privateFieldsAvailable||!placed.nativeStaticAvailable||
-     !G_Cod1ActorReadLease(&row->lease,&actor,NULL,0)||!actor.alive||!actor.nativeDataInitialized||!actor.spatial.linked||
-     !Cod1AiRefEqual(&actor.lease.entity,&row->entity))return 0;
-  if(i&&r->program!=program)return 0;program=r->program;
+  if(r->state!=COD1_RECORD_BSP_CONSTRUCTED||r->index!=row->actorRecord||r->ordinal!=row->bspOrdinal||
+     r->epoch!=cod1ActorPrefix.epoch||r->receipt!=receipt||!r->program||!r->allocation||
+     r->allocation!=row->allocationReceipt||!Cod1AiRefEqual(&r->entity,&row->entity)||
+     !row->accounted||!row->startupConsumed||row->stage<COD1_ACTOR_ENTRY_LINKED||
+     row->stage>COD1_ACTOR_ENTRY_ENTERED||(i&&r->program!=program))return 0;
+  program=r->program;
+  /* A script delete commits the bootstrap row only after proving native
+   * free of the original generation. The constructor record remains part
+   * of this map, including across subsequent reuse of its entity slot. */
+  if(Cod1ActorDeleteAuthorized(i))continue;
+  /* The retained BSP comparison resolves row->entity through PlacedFind.
+     * The linked/alive check verifies the complete lease through ActorLeaseValid.
+     * These pure reads subsume the prefix's separate live-row scan. */
+  if(cod1ActorDeletes[i].state==COD1_ACTOR_DELETE_FAILED||row->retired||!Cod1ActorBspRecordRetained(r,row)||
+     !Cod1AiRefEqual(&row->lease.entity,&row->entity)||!G_Cod1ActorLinkedAndAlive(&row->lease))return 0;
  }return 1;
+}
+static void Cod1RememberCohort(uint64_t receipt){
+    Cod1CohortPlan *plan=&cod1CohortPlan;
+    unsigned i,first=COD1_ACTOR_RECORD_CAPACITY,last=0,count=cod1ActorPrefix.placedRows;
+    Cod1ClearCohortPlan();
+    if(!count || count>COD1_ACTOR_CAPACITY)return;
+    for(i=0;i<count;i++){
+        const cod1ActorBootstrapRow_t *row=cod1ActorPrefix.rows+i;
+        unsigned index=row->actorRecord;
+        const Cod1ActorPrepassRecord *saved;
+        cod1BspLiveRow_t *live=plan->live+i;
+        if(row->retired || index>=COD1_ACTOR_RECORD_CAPACITY || !cod1PrepassFieldSealed[index])return;
+        if(index<first)first=index;
+        if(index>last)last=index;
+        saved=cod1ActorPrepassRecords.rows+index;
+        live->lease=row->lease;live->bytes=saved->text;live->size=saved->bytes;live->pairs=saved->pairs;
+        live->keys=saved->keyOffset;live->values=saved->valueOffset;
+    }
+    if(last-first>=COD1_ACTOR_CAPACITY || !G_Cod1BspLiveRows(plan->live,count,receipt))return;
+    plan->count=count;plan->first=first;plan->span=last-first+1;
+    plan->prepassCount=cod1ActorPrepassRecords.actors;plan->epoch=cod1ActorPrefix.epoch;
+    memcpy(plan->rows,cod1ActorPrefix.rows,count*sizeof(plan->rows[0]));
+    memcpy(plan->owners,cod1ActorRecordOwners+first,plan->span*sizeof(plan->owners[0]));
+    plan->receipt=receipt;
+}
+static int Cod1CohortPlanCurrent(uint64_t receipt){
+    const Cod1CohortPlan *plan=&cod1CohortPlan;
+    unsigned i;
+    if(plan->receipt!=receipt || plan->epoch!=cod1ActorPrefix.epoch ||
+       plan->count!=cod1ActorPrefix.placedRows || plan->prepassCount!=cod1ActorPrepassRecords.actors ||
+       !R242ExactATRBytesEqual(plan->rows,cod1ActorPrefix.rows,plan->count*sizeof(plan->rows[0])) ||
+       !R242ExactATRBytesEqual(plan->owners,cod1ActorRecordOwners+plan->first,plan->span*sizeof(plan->owners[0])))return 0;
+    for(i=0;i<plan->count;i++)
+        if(cod1ActorDeletes[i].state==COD1_ACTOR_DELETE_FAILED || !cod1PrepassFieldSealed[plan->rows[i].actorRecord])return 0;
+    return G_Cod1BspLiveRows(plan->live,plan->count,receipt);
+}
+static int Cod1ActorBspCohortCurrent(uint64_t receipt){
+    if(!Cod1CohortHeader(receipt))return 0;
+    if(Cod1CohortPlanCurrent(receipt))return 1;
+    if(!Cod1CohortRowsFull(receipt))return 0;
+    Cod1RememberCohort(receipt);
+    return 1;
 }
 static int Cod1ActorPrefixAdoptBsp(void*user,const GscActorBootstrapServices*services,char*error,size_t size){
  GscActorBootstrapServices api;cod1AitypeResourceSelection_t selection;uint32_t i,j;uint64_t epoch,receipt,program;int ok=0;

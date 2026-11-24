@@ -3053,7 +3053,7 @@ static qboolean CG_WeaponHasAmmo( int i ) {
 CG_WeaponSelectable
 ===============
 */
-static qboolean CG_WeaponSelectable( int i ) {
+static qboolean CG_WeaponCanSelect( int i, qboolean requireAmmo ) {
 
 	// allow the player to unselect all weapons
 //	if(i == WP_NONE)
@@ -3094,11 +3094,15 @@ static qboolean CG_WeaponSelectable( int i ) {
 		return qfalse;
 	}
 
-	if ( !CG_WeaponHasAmmo( i ) ) {
+	if ( requireAmmo && !CG_WeaponHasAmmo( i ) ) {
 		return qfalse;
 	}
 
 	return qtrue;
+}
+
+static qboolean CG_WeaponSelectable( int i ) {
+	return CG_WeaponCanSelect( i, qtrue );
 }
 
 
@@ -4062,14 +4066,19 @@ void CG_WeaponSlot_f( void ) {
     const char *arg;playerState_t ps;int slot=0,i,w;
     if(!cg.snap || cg.snap->ps.aiChar || (cg.snap->ps.pm_flags&PMF_FOLLOW))return;
     if(cg.time-cg.weaponSelectTime<cg_weaponCycleDelay.integer)return;
-    if(cg.snap->ps.weaponstate==WEAPON_RELOADING)return;
     arg=CG_Argv(1);
     for(i=1;i<CW_SLOT_COUNT;i++)if(!Q_stricmp(arg,names[i])){slot=i;break;}
     if(!slot && arg[0]>='1' && arg[0]<='5' && !arg[1])slot=arg[0]-'0';
     if(!slot)return;
     ps=cg.snap->ps;CW_SyncSlots(&ps);w=ps.cod1Slots[slot];
-    if(w>WP_NONE && w<WP_NUM_WEAPONS && CG_WeaponSelectable(w))
-        CG_FinishWeaponChange(cg.weaponSelect,w);
+    if (w > WP_NONE && w < WP_NUM_WEAPONS) {
+        qboolean primary = (slot == 1 || slot == 2) && CW_Active(&ps) && CW_SlotCompatible(slot,w);
+        /* A direct request for an owned CoD primary weapon interrupts
+         * reloading. PM_BeginWeaponChange handles the interrupted reload. */
+        if (!primary && ps.weaponstate == WEAPON_RELOADING) return;
+        if (CG_WeaponCanSelect(w, !primary))
+            CG_FinishWeaponChange(cg.weaponSelect,w);
+    }
 }
 
 void CG_WeaponBank_f( void ) {

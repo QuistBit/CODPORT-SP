@@ -5,7 +5,7 @@
 static struct {
     uint64_t epoch,floor,sequence,incarnation;
     int last_snapshot,have_time;
-    qhandle_t face,needle,black;
+    qhandle_t face,needle,black,material[COD1_SCRIPT_HUD_CAPACITY];
     cod1ScriptHud_t slot[COD1_SCRIPT_HUD_CAPACITY];
 } cgCod1HudElements;
 static void CHF_Reset(void);
@@ -40,10 +40,12 @@ void CG_Cod1HudElementsCommand(void){
     if(cgCod1HudElements.slot[state.index].generation>state.generation||
        (cgCod1HudElements.slot[state.index].owner&&cgCod1HudElements.slot[state.index].owner!=state.owner))return;
     cgCod1HudElements.sequence=state.sequence; /* Consume before resource callbacks. */
-    if(state.alive&&state.content==1&&!cgCod1HudElements.black){
-        qhandle_t black=trap_R_RegisterShaderNoMip("black");
-        if(!CHC_Current(incarnation,epoch,time)||cgCod1HudElements.sequence!=state.sequence||!black)return;
-        cgCod1HudElements.black=black;
+    if(state.alive&&state.content==1){
+        qhandle_t material=cgCod1HudElements.material[state.index];
+        if(!material||strcmp(state.text,cgCod1HudElements.slot[state.index].text))material=trap_R_RegisterShaderNoMip(state.text);
+        if(!CHC_Current(incarnation,epoch,time)||cgCod1HudElements.sequence!=state.sequence||!material)return;
+        cgCod1HudElements.material[state.index]=material;
+        if(!strcmp(state.text,"black"))cgCod1HudElements.black=material;
     }
     if(state.alive&&state.clock){
         face=cgCod1HudElements.face;needle=cgCod1HudElements.needle;
@@ -66,7 +68,7 @@ int CG_Cod1HudElementsOwnsPregameFade(void){
        !CH_ReadMarker(marker,&markerEpoch)||markerEpoch!=epoch)return 0;
     for(i=0;i<COD1_SCRIPT_HUD_CAPACITY;i++){
         const cod1ScriptHud_t*s=&cgCod1HudElements.slot[i];
-        if(CH_Validate(s)&&s->epoch==epoch&&s->sequence<=sequence&&s->alive&&s->content==1&&
+        if(CH_Validate(s)&&s->epoch==epoch&&s->sequence<=sequence&&s->alive&&s->content==1&&!strcmp(s->text,"black")&&
            s->x==0&&s->y==0&&!s->align_x&&!s->align_y&&s->width==640&&s->height==480&&
            !s->fade_ms&&s->alpha==255&&s->server_time<=time&&CH_Alpha(s,time)==1.0f)
             return CHC_Current(incarnation,epoch,time)&&sequence==cgCod1HudElements.sequence;
@@ -98,11 +100,11 @@ static void CHC_DrawIntro(uint64_t incarnation,uint64_t epoch,int time){
         if(!CHC_Current(incarnation,epoch,time)||sequence!=cgCod1HudElements.sequence)return;
         color[3]=CH_Alpha(s,time);if(color[3]<=0)continue;
         if(s->content==1){
-            if(!cgCod1HudElements.black)continue;
+            if(!cgCod1HudElements.material[s->index])continue;
             x-=s->width*(s->align_x*.5f);y-=s->height*(s->align_y*.5f);
             trap_R_SetColor(color);if(!CHC_Current(incarnation,epoch,time)||sequence!=cgCod1HudElements.sequence)return;
-            CG_DrawPic(x,y,(float)s->width,(float)s->height,cgCod1HudElements.black);
-            if(x==0 && y==0 && s->width==640 && s->height==480 && color[3]>=1)
+            CG_DrawPic(x,y,(float)s->width,(float)s->height,cgCod1HudElements.material[s->index]);
+            if(!strcmp(s->text,"black") && x==0 && y==0 && s->width==640 && s->height==480 && color[3]>=1)
                 CG_Cod1IntroMusicFrame();
         }else if(s->content==2&&s->text[0]){
             if(!CHF_DrawText(s,incarnation,epoch,time,sequence))return;

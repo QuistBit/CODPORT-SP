@@ -1,3 +1,5 @@
+#include "../g_cod1_navigation_probe.h"
+int G_Cod1TrainingJumperPreparePath(const GscEntityRef*,int,int(*)(void*),void*);
 int TrainingRigFrame(int,int(*)(const GscEntityRef*,const char*,const char*));
 static int TrainingRigNote(const GscEntityRef*,const char*,const char*);
 int TrainingJumperExitNode(const GscEntityRef *,uint64_t,const GscNodeRef *);
@@ -19,12 +21,14 @@ int TrainingJumperExitNode(const GscEntityRef *,uint64_t,const GscNodeRef *);
 #include "../g_cod1_actor_immediate.h"
 #include "../g_cod1_actor_animation_motion.h"
 #include "../g_cod1_weapon_model_cw.h"
+extern const GscModelPartHost *G_Cod1ModelPartHost(void);
 #include "../g_cod1_dropped_item.h"
 #include "../g_cod1_actor_bootstrap.h"
 typedef struct {
  GscEntityRef owner;
  cod1TrainingRoute_t route;
  int resolved,published,stopped;
+ GscNodeRef diagnosticLastNode;uint64_t diagnosticAssignment;
 } TrainingRunner;
 static const struct {
  const char *name,*placedName,*first,*specialBody;
@@ -102,6 +106,7 @@ static int GscTestTurretBuffers(const void*input,size_t bytes,void*out,size_t ou
 static int GscTestTurretClockValid(const GscTestTurretClock*t){return t&&t->current&&t->input&&t->copy&&t->logical>=0&&t->epoch==G_Cod1EntityMapEpoch()&&t->id==gscTestId&&t->actual==level.time&&!memcmp(t->input,t->copy,t->bytes)&&GscTestTurretCurrent(NULL)&&gsc_session_running_at(gscTestSession,t->id,t->logical,t->actual);}
 static int GscTestTurretClockCurrent(void*opaque){GscTestTurretClock*t=opaque;return GscTestTurretClockValid(t)&&t->current(t->context)==1&&GscTestTurretClockValid(t);}
 static void GscTestTurretClockSet(GscTestTurretClock*t,const void*input,const void*copy,size_t bytes,int logical,int(*current)(void*),void*ctx){memset(t,0,sizeof(*t));t->input=input;t->copy=copy;t->bytes=bytes;t->logical=logical;t->actual=level.time;t->epoch=G_Cod1EntityMapEpoch();t->id=gscTestId;t->current=current;t->context=ctx;}
+#include "g_cod1_model_part_clock.inc"
 static int GscTestTurretInvoke(void*u,const GscTurretRequest*input,GscTurretReply*out,char*error,size_t cap,int(*current)(void*),void*ctx){GscTurretRequest source,q;GscTestTurretClock t;GscTurretHost host=gscTestTurret.realTurret;(void)u;if(!host.invoke||!GscTestTurretBuffers(input,sizeof(*input),out,sizeof(*out),error,cap))return 0;source=q=*input;GscTestTurretClockSet(&t,input,&source,sizeof(source),source.now_ms,current,ctx);if(!GscTestTurretClockValid(&t))return 0;q.now_ms=t.actual;return host.invoke(host.user,&q,out,error,cap,GscTestTurretClockCurrent,&t);}
 static int GscTestTurretDropInvoke(void*u,const GscActorDropRequest*input,char*error,size_t cap,int(*current)(void*),void*ctx){GscActorDropRequest source;GscTestTurretClock t;GscEntityRef result;float speed;(void)u;if(!GscTestTurretBuffers(input,sizeof(*input),NULL,0,error,cap))return 0;source=*input;GscTestTurretClockSet(&t,input,&source,sizeof(source),source.now_ms,current,ctx);if(!GscTestTurretClockCurrent(&t))return 0;
  if(!gscTestTurret.dropSelected){if(!G_Cod1DroppedItemsSelect(gscTestId,GscTestTurretCurrent,NULL))return 0;gscTestTurret.dropSelected=1;}
@@ -109,6 +114,9 @@ static int GscTestTurretDropInvoke(void*u,const GscActorDropRequest*input,char*e
 static int GscTestTurretAnimationInvoke(void*u,const GscTurretAnimationRequest*input,char*error,size_t cap,int(*current)(void*),void*ctx){GscTurretAnimationRequest source,q;GscTestTurretClock t;GscTurretAnimationHost host=gscTestTurret.realAnimation;(void)u;if(!host.invoke||!GscTestTurretBuffers(input,sizeof(*input),NULL,0,error,cap))return 0;source=q=*input;GscTestTurretClockSet(&t,input,&source,sizeof(source),source.now_ms,current,ctx);if(!GscTestTurretClockValid(&t))return 0;q.now_ms=t.actual;return host.invoke(host.user,&q,error,cap,GscTestTurretClockCurrent,&t);}
 static int GscTestTurretActorInvoke(void*u,const GscActorAnimationRequest*input,char*error,size_t cap,int(*current)(void*),void*ctx){GscActorAnimationRequest source,q;GscTestTurretClock t;GscActorAnimationHost host=gscTestTurret.realActor;(void)u;if(!host.invoke||!GscTestTurretBuffers(input,sizeof(*input),NULL,0,error,cap))return 0;source=q=*input;
  if(gscTestTurret.nativeThreads && (q.method==GSC_ACTOR_ANIMATION_FLAGGED_RESTART ||
+    (q.method==GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART &&
+     (q.animation[0].ordinal==107||q.animation[0].ordinal==108||q.animation[0].ordinal==109||
+      q.animation[0].ordinal==117||q.animation[0].ordinal==118)) ||
     (q.method==GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART && q.animation[0].ordinal==889 &&
      gscTestCarbine.moodyCharacter && !memcmp(&q.entity,&gscTestCarbine.moodyRef,sizeof(q.entity)))))
     host=*G_Cod1ActorScriptedAnimationHost();
@@ -117,7 +125,7 @@ static int GscTestTurretActorInvoke(void*u,const GscActorAnimationRequest*input,
    if(gsc_session_snapshot(gscTestSession,&snap))
      G_Printf("[Foley private] GscTestTurretActorInvoke clock refused request=%d actual=%d logical=%d origin=%lld last=%lld state=%d\n",t.logical,t.actual,snap.logical_ms,(long long)snap.origin_host_ms,(long long)snap.last_host_ms,(int)snap.state);
    return 0;
- }q.now_ms=t.actual;{int ok=host.invoke(host.user,&q,error,cap,GscTestTurretClockCurrent,&t);if(!ok)G_Printf("[Foley private] GscTestTurretActorInvoke typed host refused request=%d actual=%d\n",t.logical,t.actual);return ok;}}
+ }q.now_ms=t.actual;{int ok=host.invoke(host.user,&q,error,cap,GscTestTurretClockCurrent,&t);if(!ok)G_Printf("[Foley private] GscTestTurretActorInvoke typed host refused request=%d actual=%d method=%u node=%u reason=%s\n",t.logical,t.actual,q.method,q.animation[0].ordinal,error?error:"");return ok;}}
 static int GscTestTurretLookInvoke(void*u,const GscActorLookRequest*input,GscActorLookReply*out,char*error,size_t cap,int(*current)(void*),void*ctx){GscActorLookRequest source,q;GscTestTurretClock t;GscActorLookHost host=gscTestTurret.realLook;(void)u;if(!host.invoke||!GscTestTurretBuffers(input,sizeof(*input),out,sizeof(*out),error,cap))return 0;source=q=*input;GscTestTurretClockSet(&t,input,&source,sizeof(source),source.now_ms,current,ctx);if(!GscTestTurretClockValid(&t))return 0;q.now_ms=t.actual;return host.invoke(host.user,&q,out,error,cap,GscTestTurretClockCurrent,&t);}
 static int GscTestTurretAnimationValidate(void*u,const GscEntityRef*input,uint64_t runtime,int now,char*error,size_t cap,int(*current)(void*),void*ctx){GscEntityRef source;GscTestTurretClock t;GscTurretAnimationHost host=gscTestTurret.realAnimation;(void)u;if(!host.validate||!GscTestTurretBuffers(input,sizeof(*input),NULL,0,error,cap))return 0;source=*input;GscTestTurretClockSet(&t,input,&source,sizeof(source),now,current,ctx);if(!GscTestTurretClockValid(&t))return 0;return host.validate(host.user,input,runtime,t.actual,error,cap,GscTestTurretClockCurrent,&t);}
 static int GscTestTurretActorValidate(void*u,const GscEntityRef*input,uint64_t runtime,int now,char*error,size_t cap,int(*current)(void*),void*ctx){GscEntityRef source;GscTestTurretClock t;GscActorAnimationHost host=gscTestTurret.realActor;(void)u;if(!host.validate||!GscTestTurretBuffers(input,sizeof(*input),NULL,0,error,cap))return 0;source=*input;GscTestTurretClockSet(&t,input,&source,sizeof(source),now,current,ctx);if(!GscTestTurretClockValid(&t)){
@@ -174,8 +182,10 @@ static int GscTestTurretSelect(const GscActorAnimationHost*actorAnimations,
   gsc_session_select_sparse_numeric_arrays(gscTestSession,error,size)&&
   gsc_session_select_r233_owned_numeric_delete(gscTestSession,error,size)&&
   gsc_session_select_r232_actor_animations(gscTestSession,&actor,error,size)&&
+  (!gscTestTurret.nativeThreads||gsc_session_select_r400_source_animations(gscTestSession,G_Cod1ActorSourceAnimationHost(),error,size))&&
   gsc_session_select_r233_actor_animation_end(gscTestSession,error,size)&&
   gsc_session_select_r232_actor_look(gscTestSession,&lookFacade,error,size)&&
+  (!gscTestTurret.nativeThreads||gsc_session_select_r402_source_look(gscTestSession,G_Cod1ActorSourceLookHost(),error,size))&&
   gsc_session_select_r233_actor_drop(gscTestSession,&(GscActorDropHost){NULL,GscTestTurretDropInvoke},error,size)&&
   gsc_session_select_r233_actor_presence(gscTestSession,G_Cod1ActorPresenceHost(),error,size)&&
   gsc_session_select_r232_weapon_model(gscTestSession,G_Cod1WeaponModelHost(),error,size)&&
@@ -192,8 +202,11 @@ static int GscTestTurretSelect(const GscActorAnimationHost*actorAnimations,
     (gsc_session_select_r238_array_value_cow(gscTestSession,error,size)&&
      gsc_session_select_r237_frame_buckets(gscTestSession,error,size)&&
      gsc_session_select_r243_thread_start(gscTestSession,error,size)&&
+     (trap_Cvar_VariableIntegerValue("g_cod1GscPlacedCohort")!=1||
+      gsc_session_select_configured_precache_interval(gscTestSession,error,size))&&
      gsc_session_select_r243_same_bucket_wait(gscTestSession,error,size)&&
      gsc_session_select_r243_thread_entities(gscTestSession,G_Cod1ScriptThreadAuthorityHost(),error,size)&&
+     gsc_session_select_model_part(gscTestSession,&(GscModelPartHost){NULL,GscTestTurretModelPart},error,size)&&
      gsc_session_select_weapon_classname(gscTestSession,G_Cod1WeaponClassnameHost(),error,size)&&
      gsc_session_select_entity_links(gscTestSession,G_Cod1EntityLinkHost(),error,size)&&
      gsc_session_select_r243_scripted_init_dependency(gscTestSession,error,size)&&
@@ -284,12 +297,12 @@ static int GscTestTurretDeleteBind(void){
  * allocation for this map, including after retirement or slot reuse. */
 int FoleyPrivateDispatch(const GscEntityRef*,int,uint64_t,int(*)(void*),void*);
 static int GscTestCourseActorFrame(const GscEntityRef *ref,int now,int(*current)(void*),void *ctx){
- GscR237FrameView view={0};GscSessionSnapshot snap={0};
+ GscR237FrameView view={0};GscSessionTiming snap={0};
  int v,m;
  if(!gscTestTurret.nativeThreads)return G_Cod1ActorGenericFrame(ref,now,current,ctx);
- v=gsc_session_r237_frame_view(gscTestSession,gscTestId,&view);m=gsc_session_snapshot(gscTestSession,&snap);
+ v=gsc_session_r237_frame_view(gscTestSession,gscTestId,&view);m=gsc_session_timing(gscTestSession,&snap);
  if(now<=250)G_Printf("[Foley private] frame clocks slot=%u level=%d origin=%lld last=%lld logical=%d bucket=%d open=%d gen=%llu snapshot=%d view=%d\n",ref->slot,now,(long long)snap.origin_host_ms,(long long)snap.last_host_ms,snap.logical_ms,view.host_now_ms,view.frame_open,(unsigned long long)view.frame_generation,m,v);
- if(!v||!m||snap.session_id!=gscTestId||snap.busy||snap.error[0]||view.frame_open||!view.frame_generation||
+ if(!v||!m||snap.session_id!=gscTestId||snap.busy||snap.has_error||view.frame_open||!view.frame_generation||
     snap.origin_host_ms<0||snap.last_host_ms!=now||now<snap.origin_host_ms||
     now-snap.origin_host_ms!=view.host_now_ms||snap.logical_ms!=view.host_now_ms)return 0;
  return FoleyPrivateDispatch(ref,now,view.frame_generation,current,ctx);
@@ -362,7 +375,7 @@ static int TrainingIsJumper(const GscEntityRef *a){
 static int TrainingNoteOwner(const GscEntityRef *actor){
  return (gscTestCarbine.moodyCharacter && actor && actor->epoch==gscTestCarbine.epoch &&
     !memcmp(actor,&gscTestCarbine.moodyRef,sizeof(*actor)) && G_Cod1EntitySameAllocation(actor)) ||
-    TrainingIsJumper(actor) || TrainingElderCurrent(actor) || (gscTestTurret.instructorResolved &&
+    TrainingIsJumper(actor) || TrainingRunnerIndex(actor)>=0 || (gscTestTurret.instructorResolved &&
     !gscTestTurret.instructorStopped && !memcmp(actor,&gscTestTurret.instructor,sizeof(*actor)));
 }
 int FoleySessionQueueFrameNote(const cod1ActorFaceNote_t *note){
@@ -381,13 +394,14 @@ int FoleySessionQueueFrameNote(const cod1ActorFaceNote_t *note){
 }
 /* close_door can delete this instructor inside the resumed GSC bucket.
  * Only the committed original row can discharge the pre-VM actor update. */
-static int FoleySameBucketRetirement(const GscEntityRef *actor,const cod1ActorLease_t *lease){
+int FoleySameBucketRetirement(const GscEntityRef *actor,const cod1ActorLease_t *lease){
  cod1ActorDeleteSnapshot_t d;
  cod1ActorBootstrapSnapshot_t p;
  uint32_t row;
  if(!lease||memcmp(actor,&lease->entity,sizeof(*actor))||
-    !G_Cod1EntityDeleteRetiredIdentity(actor,lease)||
-    !G_Cod1ActorBootstrapDeleteRead(&d,NULL,0)||!G_Cod1ActorBootstrapRead(&p,NULL,0)||
+    !G_Cod1EntityDeleteRetiredIdentity(actor,lease))return 0;
+ if(G_Cod1TrainingJumperDeleteCommitted(actor,lease))return 1;
+ if(!G_Cod1ActorBootstrapDeleteRead(&d,NULL,0)||!G_Cod1ActorBootstrapRead(&p,NULL,0)||
     !p.enabled||!p.declarationsReady||!p.sealed||!p.selected||!p.runComplete||p.closed||p.invalid||
     p.epoch!=actor->epoch||d.epoch!=p.epoch||!p.receipt||p.receipt!=d.receipt||
     d.count!=p.placedRows||d.count>COD1_ACTOR_CAPACITY||
@@ -481,6 +495,7 @@ static int TrainingControllerAtClosedFrame(const GscEntityRef *ref,int now,GscAc
    if(queued<=0)return queued==0;
  }
  ok=gsc_session_r243_controller_prefix(gscTestSession,gscTestId,ref,serial,frame.frame_generation,&run,error,sizeof(error));
+ if(!ok)G_Printf("[400 controller refusal] owner=%u tick=%d error=%s\n",ref->slot,now,error);
  if(TrainingIsJumper(ref)&&(!ok||(g_debugMove.integer&&(now<1400||now%500==0))))
    G_Printf("[Training jumper controller] tick=%d ok=%d frontier=%d present=%d status=%d selection=%llu error=%s\n",
     now,ok,run.frontier,run.record_present,run.main_status,run.selection_serial,error);
@@ -518,7 +533,7 @@ static int TrainingControllerAtClosedFrame(const GscEntityRef *ref,int now,GscAc
  /* This observer ends at the controller's published frontier. */
  return 0;
 }
-int TrainingJumperRunBlend(const GscEntityRef *,int,float,int(*)(void*),void*);
+int TrainingJumperRunRate(const GscEntityRef *,int,float,int(*)(void*),void*);
 static int TrainingJumperClosed(int now){
  static GscEntityRef last;
  static GscActorControllerPrefixRun receipt;
@@ -532,8 +547,16 @@ static int TrainingJumperClosed(int now){
   if(goal.assigned&&TrainingJumperExitNode(&ref,goal.assignment,&goal.node)){
    GscTrainingAppearance fields={0};
    if(!motion.active){
+    const GscThreadEntityAuthorityHost *authority=G_Cod1ActorThreadAuthorityHost();
+    GscEntityExecutionCertificate cert={0};char error[GSC_SESSION_ERROR_CAP]={0};
+    if(!G_Cod1TrainingJumperPreparePath(&ref,now,GscTestTurretCurrent,NULL)||
+       !authority->resolve(authority->user,&ref,&cert,error,sizeof(error))||
+       !gsc_session_course_anim_entry(gscTestSession,gscTestId,&cert,1,error,sizeof(error))){
+      G_Printf("[384 jumper] run entry failed: %s\n",error);return 0;
+    }
+    G_Printf("[384 jumper] original run main started owner=%u/%u tick=%d\n",ref.slot,ref.generation,now);
     if(!gsc_session_training_appearance(gscTestSession,gscTestId,&ref,1,&fields)||
-       !TrainingJumperRunBlend(&ref,now,fields.rate,GscTestTurretCurrent,NULL)||
+       !TrainingJumperRunRate(&ref,now,fields.rate,GscTestTurretCurrent,NULL)||
        !G_Cod1ActorMotionBeginUnpublished(&ref,now))return 0;
     if(g_debugMove.integer)G_Printf("[tower run rate] owner=%u/%u tick=%d rate=%.7f\n",ref.slot,ref.generation,now,fields.rate);
    }
@@ -552,24 +575,35 @@ static int TrainingJumperClosed(int now){
    now,ref.slot,ref.generation,ok,e->r.currentOrigin[0],e->r.currentOrigin[1],e->r.currentOrigin[2]);}}
  return 1;
 }
-static void GscTestInstructorFrame(int now) {
+/* The first native VM frame can already consume an instructor pose
+ * installed by map startup. Resolve that same placed actor before the frame. */
+static int GscTestResolveInstructor(void) {
     GscEntityRef *ref = &gscTestTurret.instructor;
     const GscEntityHost *entities;
-    int found = 0, present;
+    GscEntityRef candidate = {0};
+    char map[MAX_QPATH], error[128];
+    int found = 0;
+    if (!gscTestTurret.instructorResolved) {
+        trap_Cvar_VariableStringBuffer("mapname", map, sizeof(map));
+        if (!Q_stricmp(map,"training")) {
+            entities = G_Cod1EntityHost();
+            if (!entities->lookup(entities->user,"foley","targetname",&candidate,&found,error,sizeof(error)) ||
+                !found || candidate.epoch != gscTestTurret.epoch || !G_Cod1EntitySameAllocation(&candidate) ||
+                !g_entities[candidate.slot].classname ||
+                strcmp(g_entities[candidate.slot].classname,"actor_ally_airborne_officer_thompson")) return 0;
+            *ref = candidate;
+        }
+        gscTestTurret.instructorResolved = 1;
+    }
+    return !ref->epoch || (ref->epoch == gscTestTurret.epoch && G_Cod1EntitySameAllocation(ref));
+}
+static void GscTestInstructorFrame(int now) {
+    GscEntityRef *ref = &gscTestTurret.instructor;
+    int present;
     const char *stage = "actor identity";
     if (gscTestTurret.instructorStopped || !gscTestTurret.programSelected) return;
-    if (!gscTestTurret.instructorResolved) {
-        char map[MAX_QPATH], error[128];
-        gscTestTurret.instructorResolved = 1;
-        trap_Cvar_VariableStringBuffer("mapname", map, sizeof(map));
-        if (Q_stricmp(map,"training")) return;
-        entities = G_Cod1EntityHost();
-        if (!entities->lookup(entities->user,"foley","targetname",ref,&found,error,sizeof(error)) ||
-            !found || !G_Cod1EntitySameAllocation(ref) || !g_entities[ref->slot].classname ||
-            strcmp(g_entities[ref->slot].classname,"actor_ally_airborne_officer_thompson")) goto stopped;
-    }
+    if (!GscTestResolveInstructor()) goto stopped;
     if (!ref->epoch) return;
-    if (ref->epoch != gscTestTurret.epoch || !G_Cod1EntitySameAllocation(ref)) goto stopped;
     present = G_Cod1ActorGenericPresent(ref);
     if (!present) return;
     if (present < 0) goto stopped;
@@ -686,6 +720,55 @@ static void GscTestRunnerFrame(unsigned index,int now){
   cod1ActorMotionSnapshot_t motion;
   stage="runner goal";
   if(!G_Cod1ActorReadGoal(owner,&goal,NULL,0))goto stop;
+  if(!G_Cod1ActorMotionRead(owner,&motion))goto stop;
+  if(goal.assigned&&(goal.assignment!=runner->diagnosticAssignment||(motion.blocked&&now%1000==0))){
+   cod1NavigationProbe_t p;int valid=G_Cod1NavigationProbe(gscTestSession,gscTestId,owner,now,&p);
+   if(valid)G_Printf("[542 nearest] owner=%u tick=%d assignment=%llu nodes=%d/%d candidates=%u/%u traces=%u/%u origin=%.9g,%.9g,%.9g target=%.9g,%.9g,%.9g start=%.9g,%.9g,%.9g end=%.9g,%.9g,%.9g\n",owner->slot,now,(unsigned long long)p.assignment,p.start,p.goal,p.candidates[0],p.candidates[1],p.traces[0],p.traces[1],p.origin[0],p.origin[1],p.origin[2],p.target[0],p.target[1],p.target[2],p.startNode[0],p.startNode[1],p.startNode[2],p.goalNode[0],p.goalNode[1],p.goalNode[2]);
+   if(valid){int count;unsigned flags;float direction[2];memcpy(&flags,p.path+0x3b8,4);count=(short)(p.path[0x380]|p.path[0x381]<<8);memcpy(direction,p.path+0x398,8);
+    G_Printf("[544 route] owner=%u tick=%d assignment=%llu available=%d native=%d team=%d traces=%u count=%d flags=%x direction=%.9g,%.9g\n",owner->slot,now,(unsigned long long)p.assignment,p.routeAvailable,p.routeResult,p.team,p.routeTraces,count,flags,direction[0],direction[1]);
+    G_Printf("[565 physics probe] owner=%u tick=%d assignment=%llu category=%d root=%d delta=%d physics=%d result=%d traces=%u rootXYZ=%.9g,%.9g,%.9g deltaXYZ=%.9g,%.9g,%.9g end=%.9g,%.9g,%.9g velocity=%.9g,%.9g,%.9g\n",owner->slot,now,(unsigned long long)p.assignment,p.category,p.rootAvailable,p.deltaAvailable,p.physicsAvailable,p.physicsResult,p.physicsTraces,p.root[0],p.root[1],p.root[2],p.delta[0],p.delta[1],p.delta[2],p.physicsEnd[0],p.physicsEnd[1],p.physicsEnd[2],p.physicsVelocity[0],p.physicsVelocity[1],p.physicsVelocity[2]);
+    if(p.routeAvailable&&owner->slot==223&&(goal.assignment!=runner->diagnosticAssignment||now%5000==0)){
+     G_Cod1NavigationDump(now,p.assignment,p.path);
+    }
+   }
+   else G_Printf("[542 nearest unavailable] owner=%u tick=%d assignment=%llu\n",owner->slot,now,(unsigned long long)goal.assignment);
+  }
+  if(goal.assigned&&goal.assignment!=runner->diagnosticAssignment){
+   int kind=G_Cod1RunnerCourseGoal(owner,goal.assignment,&goal.node);
+   if(kind==3||kind==4){
+    cod1NegotiationPair_t pair;int valid=G_Cod1NodeGraphNegotiationPair(gscTestSession,gscTestId,&runner->diagnosticLastNode,&goal.node,&pair);
+    G_Printf("[478 graph pair] owner=%u tick=%d assignment=%llu kind=%d valid=%d begin=%u end=%u\n",owner->slot,now,(unsigned long long)goal.assignment,kind,valid,runner->diagnosticLastNode.index,goal.node.index);
+    if(valid){const float*origin=g_entities[owner->slot].r.currentOrigin;float dx=pair.start[0]-origin[0],dy=pair.start[1]-origin[1];
+     G_Printf("[478 physical pair] owner=%u physical=%u/%u script=%llu/%u yaw=%.6f begin=%.6f,%.6f,%.6f end=%.6f,%.6f,%.6f origin=%.6f,%.6f,%.6f xySquared=%.9f current=%d\n",owner->slot,pair.beginPhysical,pair.endPhysical,(unsigned long long)pair.script.cache,(unsigned)pair.script.entry,pair.yaw,pair.start[0],pair.start[1],pair.start[2],pair.finish[0],pair.finish[1],pair.finish[2],origin[0],origin[1],origin[2],dx*dx+dy*dy,G_Cod1NodeGraphNegotiationCurrent(&pair));
+    }
+   }
+   runner->diagnosticLastNode=goal.node;runner->diagnosticAssignment=goal.assignment;
+  }
+  if(runner->published&&now%500==0){
+   c1ari14Result_t root;int valid=G_Cod1ActorGeneralRootInterval(owner,now,0,&root,GscTestTurretCurrent,NULL);
+   G_Printf("[479 general interval] owner=%u tick=%d valid=%d xyz=%.7f,%.7f,%.7f q=%.7f,%.7f\n",owner->slot,now,valid,valid?root.translation[0]:0,valid?root.translation[1]:0,valid?root.translation[2]:0,valid?root.q2[0]:0,valid?root.q2[1]:0);
+  }
+  /* Completed goals remain assigned for script inspection. An arrival belongs
+   * only to the matching assignment; a newly assigned goal must select run.
+   * Blocked movement is not arrival. The original MAIN owns the body tree. */
+  if(runner->published){
+   GscTrainingAppearance appearance;
+   const GscThreadEntityAuthorityHost *authority=G_Cod1ActorThreadAuthorityHost();
+   GscEntityExecutionCertificate cert={0};char error[GSC_SESSION_ERROR_CAP]={0};
+   int source=(!goal.assigned || (motion.active && motion.assignment==goal.assignment &&
+      motion.arrived && !motion.moving && !motion.blocked))?1:2;
+   if(TrainingReadRunnerAppearance(owner,1,&appearance)){
+    stage="owned locomotion MAIN";
+    if(!authority->resolve(authority->user,owner,&cert,error,sizeof(error))||
+       !G_Cod1ActorLocomotionSource(owner,cert.serial,now,source,&source,GscTestTurretCurrent,NULL)||
+       !gsc_session_locomotion_main(gscTestSession,gscTestId,&cert,source,error,sizeof(error))){
+     G_Printf("[Training] %s owned locomotion failed source=%d: %s\n",name,source,error);goto stop;
+    }
+    /* Entry can execute original script immediately. Re-read the actual goal
+     * and mover before consuming either snapshot after that VM boundary. */
+    if(!G_Cod1ActorReadGoal(owner,&goal,NULL,0)||!G_Cod1ActorMotionRead(owner,&motion))goto stop;
+   }
+  }
   if(goal.assigned){
    int wasArrived;
    int route=G_Cod1RunnerCourseGoal(owner,goal.assignment,&goal.node);
@@ -734,6 +817,23 @@ static int GscTestMoodyPoseFrame(int now){
  if(!GscTestCourseActorFrame(owner,now,GscTestTurretCurrent,NULL)||
     !TrainingControllerAtClosedFrame(owner,now,&gscTestTurret.moodyThink)||
     !G_Cod1ActorReadGoal(owner,&goal,NULL,0))return 0;
+ /* The placed stationary actor enters the archive stop root after its
+  * actual init fields and closed controller are ready. The script itself
+  * selects standanim and owns its waits; no body leaf is installed here. */
+ if(!goal.assigned&&!gscTestCarbine.moodyInitialStop){
+  GscTrainingAppearance appearance;int needed=0;
+  if(!G_Cod1MoodyIdleNeeded(owner,&needed))return 0;
+  if(needed==1&&TrainingReadRunnerAppearance(owner,1,&appearance)){
+   const GscThreadEntityAuthorityHost *authority=G_Cod1ActorThreadAuthorityHost();
+   GscEntityExecutionCertificate cert={0};char error[GSC_SESSION_ERROR_CAP]={0};
+   if(!authority->resolve(authority->user,owner,&cert,error,sizeof(error))||
+      !gsc_session_initial_stop_main(gscTestSession,gscTestId,&cert,error,sizeof(error))){
+    G_Printf("[382 Moody] stop entry failed: %s\n",error);return 0;
+   }
+   gscTestCarbine.moodyInitialStop=1;
+   G_Printf("[382 Moody] original stop main started owner=%u/%u tick=%d\n",owner->slot,owner->generation,now);
+  }
+ }
  /* SetGoalNode is the first grounded route owner. Leave the actor in the
   * original stationary domain for the greeting before that assignment. */
  if(goal.assigned){
@@ -751,12 +851,20 @@ static int GscTestMoodyPoseFrame(int now){
     G_Cod1ActorLookFrame(owner,now,GscTestTurretCurrent,NULL)&&
     G_Cod1ActorUnmountedPublish(owner,now,GscTestTurretCurrent,NULL);
 }
-static int GscTestTurretFrame(int now,char*error,size_t size){
+static int GscTestTurretFrame(int now,int *nextRunner,int (*expired)(void),char*error,size_t size){
  int i;cod1ActorTurretMount_t mount;const char*stage="course frame admission";
- if(!GscTestTurretCurrent(NULL)||now!=level.time)return 0;
- if(!TrainingRigFrame(now,TrainingRigNote)||!TrainingJumperClosed(now)){snprintf(error,size,"jump actor closed controller at %d",now);return 0;}
- GscTestInstructorFrame(now);
- for(i=0;i<(int)TRAINING_RUNNER_COUNT;i++)GscTestRunnerFrame((unsigned)i,now);
+ if(!*nextRunner){
+  if(!GscTestTurretCurrent(NULL)||now!=level.time)return 0;
+  if(!TrainingRigFrame(now,TrainingRigNote)||!TrainingJumperClosed(now)){snprintf(error,size,"jump actor closed controller at %d",now);return 0;}
+  GscTestInstructorFrame(now);
+  *nextRunner=1;
+  if(expired && expired())return 2;
+ }
+ while(*nextRunner<=(int)TRAINING_RUNNER_COUNT){
+  GscTestRunnerFrame((unsigned)(*nextRunner-1),now);
+  ++*nextRunner;
+  if(expired && expired())return 2;
+ }
  if(!gscTestTurret.actor.epoch){
   for(i=MAX_CLIENTS;i<level.num_entities;i++)if(g_entities[i].inuse&&
    g_entities[i].classname&&!strcmp(g_entities[i].classname,"actor_ally_airborne_garand")&&

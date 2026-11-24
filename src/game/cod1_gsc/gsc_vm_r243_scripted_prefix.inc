@@ -71,11 +71,12 @@ static int r243_scripted_prefix_invoke(GscRuntime*r,const Value*receiver,
     caller->host_entry_pins==UINT_MAX||r->entity_entry_depth>=32||
     *r->execution_budget<=0||r->next_serial==UINT64_MAX)
   return rfail(r,line,"scripted prefix guarded entry/budget unavailable");
- capacity=r->task_count<GSC_LIFETIME_TASK_CAPACITY;
+ capacity=r->task_count<task_directory_limit(r);
  for(i=0;!capacity&&i<r->task_count;i++){
-  Task*t=r->lifetime_tasks[i];
+  Task*t=task_at(r,i);
   if(t&&t!=caller&&t->status==TASK_DEAD&&!t->host_entry_pins&&!t->retained_owner_refs)capacity=1;
  }
+ if(!capacity && r->expand_map_tasks){if(!task_reserve_next(r,line))return 0;capacity=1;}
  if(!capacity)return rfail(r,line,"scripted init task capacity unavailable before native prefix");
  memset(owned,0,sizeof(owned));memcpy(owned,args,(size_t)argc*sizeof(Value));
  memset(&q,0,sizeof(q));q.entity=receiver->entity;q.now_ms=r->now_ms;

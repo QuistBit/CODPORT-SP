@@ -42,7 +42,7 @@ typedef struct {
  R243ControllerLease*lease;R243ControllerMainOwner*owner;
  GscActorControllerSelection selection;R243ControllerMainOwner owner_seal;
  Task*pending;Task*claimed_task;uint64_t claimed_serial,claimed_receipt;
- int armed,claimed;
+ int armed,claimed,initial_stop,ordinary_source;
 } R243MainCapture;
 
 /* First member is the capture identity. Protect the complete enclosing call
@@ -133,10 +133,25 @@ static int r243_step_source_current(void*context,const GscActorSourceAnimationRe
  R243ControllerStep*s=context;GscRuntime*r=s->lease->r;
  return r243_controller_scope(s->lease)&&r243_source_receipt_current(r,s,receipt,q,f,x,0);
 }
+static int r402_step_source_take(void*context,const GscActorLookRequest*q,int(*f)(void*),void*x,GscActorSourceLookReceipt*out){
+ R243ControllerStep*s=context;GscRuntime*r=s->lease->r;
+ if(!r243_controller_scope(s->lease))return r402_source_fail(r);return r402_source_take(r,s,q,f,x,out);
+}
+static int r402_step_source_claim(void*context,const GscActorLookRequest*q,int(*f)(void*),void*x,GscActorSourceLookReceipt*out){
+ R243ControllerStep*s=context;GscRuntime*r=s->lease->r;R402SourceLookDispatch*d=r->r402_source_dispatch;
+ if(!r243_controller_scope(s->lease)||!d||!out||!gsc_runtime_r243_controller_storage_separate(r,out,sizeof(*out))||
+    !r402_source_receipt_current(r,s,&d->receipt,q,f,x,1))return r402_source_fail(r);
+ *out=d->receipt;return 1;
+}
+static int r402_step_source_current(void*context,const GscActorSourceLookReceipt*receipt,const GscActorLookRequest*q,int(*f)(void*),void*x){
+ R243ControllerStep*s=context;GscRuntime*r=s->lease->r;
+ return r243_controller_scope(s->lease)&&r402_source_receipt_current(r,s,receipt,q,f,x,0);
+}
 static int r243_controller_phase6_step(void*context,int(*run_current)(void*),void*run_context){
  R243ControllerLease*l=context;R243ControllerStep step;GscActorControllerAnimationServices api;char error[384];int ok;
  step.lease=l;step.run_current=run_current;step.run_context=run_context;
  memset(&api,0,sizeof(api));api.source.context=&step;api.source.take=r243_step_source_take;api.source.claim=r243_step_source_claim;api.source.current=r243_step_source_current;
+ api.sourceLook.context=&step;api.sourceLook.take=r402_step_source_take;api.sourceLook.claim=r402_step_source_claim;api.sourceLook.current=r402_step_source_current;
  api.context=&step;api.current=r243_controller_step_current;api.run_current=r243_controller_step_run;api.notify=r243_controller_step_notify;
  if(!r243_controller_step_current(&step))return 0;error[0]=0;
  l->r->r243_source_step_lease=l;l->r->r243_source_step_lease_bytes=sizeof(*l);
@@ -179,8 +194,8 @@ static int r243_controller_entry_retained(void*context,Task*t,const GscEntityScr
     memcmp(&t->certificate,&c->selection.certificate,sizeof(t->certificate))||
     memcmp(&t->map_certificate,&l->map,sizeof(t->map_certificate))||
     t->initial_self.kind!=V_ENTITY||!state_ref_equal(&t->initial_self.entity,&l->q.entity)||
-    !c->selection.selection_serial||r->r243_next_main_receipt==UINT64_MAX)return 0;
- o=c->owner;memset(o,0,sizeof(*o));o->used=1;o->entity=l->q.entity;o->actor_serial=l->q.actor_serial;
+    ((!c->selection.selection_serial)!=!!c->initial_stop)||r->r243_next_main_receipt==UINT64_MAX)return 0;
+ o=c->owner;memset(o,0,sizeof(*o));o->used=1;o->initial_stop=c->initial_stop;o->ordinary_source=c->ordinary_source;o->entity=l->q.entity;o->actor_serial=l->q.actor_serial;
  o->runtime=l->instance;o->selection=c->selection.selection_serial;o->receipt=r->r243_next_main_receipt++;
  o->task=t;o->task_serial=run->task_serial;o->certificate=c->selection.certificate;o->map=l->map;
  c->owner_seal=*o;c->claimed_task=t;c->claimed_serial=t->serial;c->claimed_receipt=o->receipt;
@@ -225,7 +240,7 @@ static int r243_replace_main(void *context,int phase,uint64_t selection,int (*fe
  R243ControllerMainOwner *o;
  GscRuntime *r;
  Task *t;
- int matched,ok=0;
+ int matched,ok=0,kill_endon=0,j,queued,wake;uint64_t insertion,stamp;
  if(!x)return 0;
  if(x->busy||x->failed||phase!=x->next||phase<0||phase>1||!fence){x->failed=1;return 0;}
  x->busy=1;l=x->lease;r=l->r;o=x->owner;
@@ -235,17 +250,36 @@ static int r243_replace_main(void *context,int phase,uint64_t selection,int (*fe
     !r243_main_task_owned(r,o->task,o->task_serial)||!r243_main_owner_current(l,o)||!fence(game)||
     x->failed||memcmp(o,&x->seal,sizeof(*o))||!r243_main_task_owned(r,o->task,o->task_serial))goto done;
  t=o->task;
- if(t->status!=TASK_EVENT||t->event_scope!=EVENT_ENTITY||strcmp(t->event,"killanimscript")||
-    !state_ref_equal(&t->event_owner,&l->q.entity)||t->retained_owner_refs!=1||t->host_entry_pins||
-    r237_bucket(r)!=l->now||!r237_owner_current(r,l->time_root))goto done;
+ /* Initial stop owns an endon, whereas scripted MAIN owns an ordinary
+  * waiter. Both are real native57080 recipients; the runtime gate is not a
+  * task-status test. Keep unsupported receiver domains closed. */
+ if(o->initial_stop||o->ordinary_source){
+  if((o->initial_stop&&o->selection)||t->status==TASK_DEAD||t->context_retired)goto done;
+  for(j=0;j<t->endon_count;j++)if(t->endon[j].scope==EVENT_ENTITY&&
+     state_ref_equal(&t->endon[j].owner,&l->q.entity)&&!strcmp(t->endon[j].event,"killanimscript"))kill_endon++;
+  if(kill_endon!=1)goto done;
+ }else if(t->status!=TASK_EVENT||t->event_scope!=EVENT_ENTITY||strcmp(t->event,"killanimscript")||
+    !state_ref_equal(&t->event_owner,&l->q.entity))goto done;
+ if(t->retained_owner_refs!=1||t->host_entry_pins||r237_bucket(r)!=l->now||!r237_owner_current(r,l->time_root))goto done;
  if(phase==1){
   /* Native 57080: deliver zero arguments on this entity at H, before unref. */
+  queued=t->r237_enqueued;wake=t->wake_ms;insertion=t->r237_insertion;stamp=t->r243_time_root_incarnation;
   matched=entity_notify_internal(r,&l->q.entity,"killanimscript");
-  if(matched<1||r->error[0]||x->failed||!r243_controller_scope(l)||!fence(game)||
+  if(matched<0||r->error[0]||x->failed||!r243_controller_scope(l)||!fence(game)||
      x->failed||memcmp(o,&x->seal,sizeof(*o))||!r243_main_task_owned(r,t,x->seal.task_serial)||
-     t->status!=TASK_READY||!t->r237_enqueued||t->wake_ms!=l->now||
-     t->r243_time_root_incarnation!=l->time_root||t->retained_owner_refs!=1||r237_bucket(r)!=l->now)goto done;
-  --t->retained_owner_refs;memset(o,0,sizeof(*o));x->seal.task=NULL;
+     t->retained_owner_refs!=1||r237_bucket(r)!=l->now)goto done;
+  if(kill_endon){
+   /* Actual endon retirement leaves inert queue metadata on DEAD tasks.
+    * The scheduler visits READY/SLEEP only. Preserve that metadata exactly;
+    * do not dequeue or force a continuation while releasing the reference. */
+   if(t->status!=TASK_DEAD||!t->context_retired||t->depth||t->endon_count||
+      t->r237_enqueued!=queued||t->wake_ms!=wake||t->r237_insertion!=insertion||t->r243_time_root_incarnation!=stamp)goto done;
+  }else if(matched<1||t->status!=TASK_READY||!t->r237_enqueued||t->wake_ms!=l->now||
+           t->r243_time_root_incarnation!=l->time_root)goto done;
+  --t->retained_owner_refs;
+  if(kill_endon)G_Printf("[395 MAIN cleanup] tick=%d owner=%u task=%llu endonDead=1 refs=1->0 ordinaryWoken=%d\n",
+      l->now,l->q.entity.slot,(unsigned long long)t->serial,matched);
+  memset(o,0,sizeof(*o));x->seal.task=NULL;
 
  }
  ++x->next;ok=1;
@@ -324,5 +358,56 @@ done:
  r->r243_controller_capture=NULL;r->r243_controller_capture_bytes=0;
  r->advancing=0;r->r243_controller_busy=0;
  if(ok)*out=result;else if(!r->error[0])rfail(r,0,"controller prefix ownership retired; committed native effects retained");
+ return ok;
+}
+
+/* Same reference owner as selected scripted MAIN. The fixed stop entry is
+ * admitted by the existing stationary GAME caller; its actual Task is handed
+ * off by the interpreter, never discovered by scanning tasks. Selection zero
+ * explicitly means pre-selection ownership, not a fabricated native category.
+ * No source request, queue, notification or frame time is changed here. */
+int gsc_runtime_initial_stop_main(GscRuntime*r,const GscEntityExecutionCertificate*input,
+ const GscMapExecutionCertificate*map,GscEntityScriptRun*out){
+ R243ControllerCall call;R243ControllerLease*l=&call.lease;R243MainCapture*c=&call.capture;
+ GscEntityExecutionCertificate cert;GscEntityScriptEntry entry={0};GscEntityScriptRun run={0};
+ R243ControllerMainOwner*owner=NULL;int i,ok=0;
+ if(!r||!input||!map||!out||!r->r243_controller_enabled||!r->r243_select_with_cleanup||
+    r->r243_controller_busy||r->r243_controller_capture||r237_busy(r)||!r->started||r->error[0]||
+    r->advancing||r->executing_task||r->entity_entry_depth||r->entity_sequence_busy||
+    !r237_owner_current(r,r->r237_frame_time_root)||r->r237_frame_open||r237_bucket(r)!=r->now_ms||
+    !gsc_runtime_r243_controller_storage_separate(r,input,sizeof(*input))||
+    !gsc_runtime_r243_controller_storage_separate(r,map,sizeof(*map))||
+    !gsc_runtime_r243_controller_storage_separate(r,out,sizeof(*out))||
+    Cod1ModelStringOverlap(input,sizeof(*input),out,sizeof(*out))||
+    Cod1ModelStringOverlap(map,sizeof(*map),out,sizeof(*out)))return 0;
+ cert=*input;if(!cert.serial||!cert.current||!cert.owner.epoch||!cert.owner.generation||
+    !map->receipt||!map->current||!r->r237_frame_generation||r->r243_next_main_receipt==UINT64_MAX)return 0;
+ memset(&call,0,sizeof(call));call.copied.entity=cert.owner;call.copied.actor_serial=cert.serial;
+ call.copied.runtime_identity=r->array_token;call.copied.catalog_identity=r->animation_namespace.identity;
+ call.copied.frame_generation=r->r237_frame_generation;call.copied.now_ms=r->now_ms;
+ l->r=r;l->host=r->r243_controller;l->select=r->r243_select_with_cleanup;l->q=call.copied;l->input=&call.copied;
+ l->map=*map;l->animationMap=r->anim_data;l->instance=r->array_token;l->catalog=r->animation_namespace.identity;
+ l->time_root=r->r237_frame_time_root;l->now=r->now_ms;l->bucket=r237_bucket(r);c->lease=l;
+ r->r243_controller_capture=c;r->r243_controller_capture_bytes=sizeof(call);r->r243_controller_busy=1;
+ if(!r243_controller_current(l))goto done;
+ for(i=0;i<32;i++){
+  if(r->r243_controller_main[i].used&&state_ref_equal(&r->r243_controller_main[i].entity,&cert.owner))goto done;
+  if(!r->r243_controller_main[i].used&&!owner)owner=r->r243_controller_main+i;
+ }
+ if(!owner)goto done;
+ c->owner=owner;c->selection.certificate=cert;c->initial_stop=1;c->armed=1;
+ entry.entity=cert.owner;strcpy(entry.module,"animscripts/stop");strcpy(entry.function,"main");
+ if(!execute_entity_values_owned_map_r243(r,&entry,&cert,&l->map,NULL,0,&run,&c->pending,NULL)||
+    !r243_controller_entry_retained(c,c->pending,&run)||!r243_controller_current(l)||
+    memcmp(input,&cert,sizeof(cert))||memcmp(map,&l->map,sizeof(*map))||
+    !r243_main_owner_current(l,owner)||
+    (run.status!=GSC_ENTITY_ENTRY_WAITING&&run.status!=GSC_ENTITY_ENTRY_SLEEPING))goto done;
+ owner->last_frame=l->q.frame_generation;
+ G_Printf("[395 initial MAIN] tick=%d owner=%u task=%llu receipt=%llu retained=1 status=%d\n",
+  l->now,cert.owner.slot,(unsigned long long)run.task_serial,(unsigned long long)owner->receipt,run.status);
+ *out=run;ok=1;
+done:
+ if(!ok)r243_main_capture_abort(c);
+ r->r243_controller_capture=NULL;r->r243_controller_capture_bytes=0;r->r243_controller_busy=0;
  return ok;
 }

@@ -88,7 +88,7 @@ static int session_load_modules_with_storage(GscSession *s,char (*storage)[GSC_S
     }
     if(s->animation_namespace_enabled&&
        (!gsc_program_select_anim_data(s->program)||
-        !(s->turret_animations_enabled?gsc_program_select_r232_turret_animations(s->program):gsc_program_select_animation_namespace(s->program)))) {
+        !(s->map_animation_names.count?gsc_program_select_map_animation_namespace(s->program,&s->map_animation_names):s->turret_animations_enabled?gsc_program_select_r232_turret_animations(s->program):gsc_program_select_animation_namespace(s->program)))) {
         session_message(error,cap,"R211 animation namespace program selection failed");return 0;
     }
     if(s->training_rigs&&!gsc_program_select_training_rigs(s->program))return 0;
@@ -97,7 +97,7 @@ static int session_load_modules_with_storage(GscSession *s,char (*storage)[GSC_S
     if(!r243_stance_program_select(s)){session_message(error,cap,"R243 live stance program selection refused");return 0;}
     if(!r243_animtime_program_select(s)){session_message(error,cap,"R243 live animtime program selection refused");return 0;}
     if(s->namespace_start_origin_enabled&&
-       !gsc_program_select_namespace_start_origin_query(s->program)) {
+       !(s->map_start_pose_enabled?gsc_program_select_map_start_pose(s->program):gsc_program_select_namespace_start_origin_query(s->program))) {
         session_message(error,cap,"R212 namespace query program selection failed");return 0;
     }
     if((s->actor_bootstrap_enabled||s->actor_program_enabled)&&(!gsc_program_select_entity_model_methods(s->program)||!gsc_program_select_spawner_team_method(s->program)||!gsc_program_select_attachment_queries(s->program))){session_message(error,cap,"actor bootstrap program selection failed");return 0;}
@@ -115,6 +115,9 @@ static int session_load_modules_with_storage(GscSession *s,char (*storage)[GSC_S
     }
     if(s->player_normal_health_enabled&&!gsc_program_select_player_normal_health(s->program)) {
         session_message(error,cap,"normal health program selection failed");return 0;
+    }
+    if(s->player_stance_permissions_enabled&&!gsc_program_select_player_stance_permissions(s->program)) {
+        session_message(error,cap,"stance permissions program selection failed");return 0;
     }
     if(s->player_max_ammo_enabled&&!gsc_program_select_player_max_ammo(s->program)) {
         session_message(error,cap,"max ammo program selection failed");return 0;
@@ -140,30 +143,40 @@ static int session_load_modules_with_storage(GscSession *s,char (*storage)[GSC_S
     if(s->grenade_items_enabled&&!gsc_program_select_r216_items(s->program)){session_message(error,cap,"R216 grenade item program selection failed");return 0;}
     if(s->carbine_items_enabled&&!(s->carbine_items_enabled==2?gsc_program_select_r225_training_followup(s->program):gsc_program_select_r222_carbine_items(s->program))){session_message(error,cap,"R222 carbine item selection failed");return 0;}
     if(s->yaw_motion_enabled&&!gsc_program_select_r216_yaw(s->program)){session_message(error,cap,"R216 yaw program selection failed");return 0;}
+    if(s->vehicle_nodes_enabled&&!gsc_program_select_vehicle_nodes(s->program)){session_message(error,cap,"vehicle-node program selection failed");return 0;}
     if(s->node_queries_enabled&&!gsc_program_select_node_queries(s->program)) {
         session_message(error,cap,"R199 node query program selection failed");return 0;
     }
     if(s->turrets_enabled&&!gsc_program_select_r232_turrets(s->program)){session_message(error,cap,"R232 turret program selection failed");return 0;}
-    if(s->actor_animations_enabled&&!gsc_program_select_r232_actor_animations(s->program)){session_message(error,cap,"R232 actor animation program selection failed");return 0;}
+    if(s->actor_animations_enabled&&!(s->map_actor_animations_enabled?gsc_program_select_map_actor_animations(s->program):gsc_program_select_r232_actor_animations(s->program))){session_message(error,cap,"R232 actor animation program selection failed");return 0;}
     if(s->random_range_enabled&&!gsc_program_select_r232_randomfloat_range(s->program)){session_message(error,cap,"randomFloatRange selector refused");return 0;}
+    if(s->map_source_float_enabled&&!gsc_program_select_map_source_float(s->program)){session_message(error,cap,"map arithmetic selector refused");return 0;}
     if(s->r232_source_float_enabled&&!gsc_program_select_r232_source_float_arithmetic(s->program)){session_message(error,cap,"init/look arithmetic selector refused");return 0;}
     if(s->quoted_strings_enabled&&!gsc_program_select_r232_quoted_strings(s->program)){session_message(error,cap,"native quoted-string selector refused");return 0;}
+    if(s->vehicle_methods_enabled&&!gsc_program_select_vehicle_methods(s->program)){session_message(error,cap,"vehicle methods program selection failed");return 0;}
+    if(s->bullet_trace_enabled&&!gsc_program_select_bullet_trace(s->program)){session_message(error,cap,"bulletTrace program selection failed");return 0;}
+    if(s->vehicle_spawn_enabled&&!gsc_program_select_vehicle_spawn(s->program)){session_message(error,cap,"vehicle spawn program selection failed");return 0;}
+    if(s->turret_precache_enabled&&!gsc_program_select_turret_precache(s->program)){session_message(error,cap,"turret precache program selection failed");return 0;}
+    if(s->turret_spawn_enabled&&!gsc_program_select_turret_spawn(s->program)){session_message(error,cap,"turret spawn program selection failed");return 0;}
+    if(s->model_part_enabled&&!gsc_program_select_model_part(s->program)){session_message(error,cap,"model part program selection failed");return 0;}
     if(s->weapon_classname_enabled&&!gsc_program_select_weapon_classname(s->program)){session_message(error,cap,"weapon classname program selection failed");return 0;}
     if(s->weapon_model_enabled&&!gsc_program_select_weapon_model_query(s->program)){session_message(error,cap,"weapon model program selection failed");return 0;}
     if(s->actor_drop_enabled&&!gsc_program_select_r233_actor_drop(s->program)){session_message(error,cap,"DropWeapon program selection failed");return 0;}
     if(s->actor_presence_enabled&&!gsc_program_select_actor_presence(s->program)){session_message(error,cap,"actor presence program selection failed");return 0;}
-    if(s->actor_look_enabled&&!gsc_program_select_r232_actor_look(s->program)){session_message(error,cap,"actor look program selection failed");return 0;}
+    if(s->actor_look_enabled&&!(s->map_actor_look_enabled?gsc_program_select_map_actor_look(s->program):gsc_program_select_r232_actor_look(s->program))){session_message(error,cap,"actor look program selection failed");return 0;}
     if(s->function_admission_selected&&!gsc_program_select_r232_function_admission(s->program)){session_message(error,cap,"whole-function admission selector refused");return 0;}
     if(s->owned_numeric_delete_enabled&&!gsc_program_select_r233_owned_numeric_delete(s->program)){session_message(error,cap,"owned numeric deletion program selector refused");return 0;}
     if(s->native_animation_roots_enabled&&!gsc_program_select_r233_native_animation_roots(s->program)){session_message(error,cap,"native animation root selector refused");return 0;}
     if(s->flagged_all_restart_enabled&&!gsc_program_select_r233_flagged_all_restart(s->program)){session_message(error,cap,"flagged all restart program selector refused");return 0;}
     if(!r243_command_program_select(s)){session_message(error,cap,"method12 program binding refused");return 0;}
     if(s->critical_selected&&!gsc_program_select_actor_critical_methods(s->program)){session_message(error,cap,"critical program selection refused");return 0;}
-    if(s->namespace_length_enabled&&!gsc_program_select_r233_namespace_animation_length(s->program)){session_message(error,cap,"namespace length program selection failed");return 0;}
-    if(s->developer_selected&&!(s->turret_program_enabled?gsc_program_select_developer_value(s->program,s->developer.enabled):gsc_program_select_r232_developer_script(s->program,&s->developer))){session_message(error,cap,"developer setting selector refused");return 0;}
-    if(s->actor_goal_enabled&&!gsc_program_select_r222_actor_goal(s->program)){session_message(error,cap,"Actor goal program selection failed");return 0;}
+    if(s->namespace_length_enabled&&!(s->map_animation_length_enabled?gsc_program_select_map_animation_length(s->program):gsc_program_select_r233_namespace_animation_length(s->program))){session_message(error,cap,"namespace length program selection failed");return 0;}
+    if(s->developer_selected&&!(s->map_developer_selected?gsc_program_select_map_developer_script(s->program,&s->developer):(s->turret_program_enabled?gsc_program_select_developer_value(s->program,s->developer.enabled):gsc_program_select_r232_developer_script(s->program,&s->developer)))){session_message(error,cap,"developer setting selector refused");return 0;}
+    if(s->map_moveto_enabled&&!gsc_program_select_map_moveto(s->program)){session_message(error,cap,"map moveto selector refused");return 0;}
+    if(s->actor_goal_enabled&&(!gsc_program_select_r222_actor_goal(s->program)||(s->actor_goal_enabled==2&&!gsc_program_select_entity_goal(s->program)))){session_message(error,cap,"Actor goal program selection failed");return 0;}
+    if(s->map_actor_goal_enabled&&!gsc_program_select_map_actor_goal(s->program)){session_message(error,cap,"map vector goal program selection failed");return 0;}
     if(s->hud_elements_enabled&&!gsc_program_select_hud_elements(s->program)){session_message(error,cap,"R200 HUD program selection failed");return 0;}
-    if(s->entity_collision_enabled&&!gsc_program_select_entity_collision(s->program)){session_message(error,cap,"R200 collision program selection failed");return 0;}
+    if(s->entity_collision_enabled&&(!gsc_program_select_entity_collision(s->program)||(s->connectpaths&&!gsc_program_select_connectpaths(s->program))||(s->disconnectpaths&&!gsc_program_select_disconnectpaths(s->program)))){session_message(error,cap,"R200 collision program selection failed");return 0;}
     if(s->training_opening_enabled&&!gsc_program_select_r228_training_opening(s->program)){session_message(error,cap,"opening selection failed");return 0;}
     if(s->local_identifier_case_enabled&&!gsc_program_select_local_identifier_case(s->program)) {session_message(error,cap,"local identifier selection failed");return 0;}
     if(s->loop_sound_enabled&&!gsc_program_select_loop_sound(s->program)) {session_message(error,cap,"loop sound selection failed");return 0;}

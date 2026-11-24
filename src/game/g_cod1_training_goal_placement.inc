@@ -5,6 +5,7 @@ static const char *const trainingGoalNames[]={"foley_node1","foley_node2","foley
 static struct {
     uint64_t epoch;
     cod1NavigationResource_t resource;
+    uint64_t graphReceipt;
     int ready, busy, cancelled;
     float ordinary[GSC_NODE_QUERY_CAPACITY][3];
     int ordinaryCount,worldReady;int hasJumpMount;unsigned jumpIndex;float jumpMount[3];
@@ -50,6 +51,41 @@ static int TrainingPlaceGoal(const Cod1NodeRecord *r,unsigned i,uint64_t *world,
     return 1;
 }
 
+/* The graph constructor already placed and sorted every authored node. */
+static int TrainingGraphCurrent(uint64_t receipt){
+    return receipt && receipt==cod1GraphReceipt && cod1GraphPublished && !cod1GraphCancelled &&
+        cod1GraphPrepared && cod1GraphPrepared->registryEpoch==cod1NodeEpoch &&
+        cod1GraphStaged && cod1GraphStaged->count==(unsigned)cod1NodeCount &&
+        cod1GraphResource.incarnation>cod1NodeRetiredResource &&
+        !memcmp(&cod1GraphResource,&cod1NodeResource,sizeof(cod1GraphResource));
+}
+static int TrainingGraphGoal(unsigned authored,cod1PlacedGoal_t *goal){
+    const C1DPGraphCandidate *graph=cod1GraphStaged;
+    unsigned physical=C1NAV14_SortU16(graph->authoredToPhysical+authored*2);
+    const unsigned char *row;
+    if(physical>=graph->count)return 0;
+    row=graph->records+physical*116;
+    if(C1NAV14_SortU16(row+0x28)!=authored || !C1NAV14_SortU32(row+0x24))return 0;
+    memcpy(goal->position,row+0x38,sizeof(goal->position));
+    goal->yaw=-1.0f;
+    if(row[0x2b]&0x80)memcpy(&goal->yaw,row+0x44,sizeof(goal->yaw));
+    return 1;
+}
+/* -1 retires this graph view, zero leaves the legacy map profile in charge. */
+static int TrainingGraphOrigin(const Cod1NodeRecord *node,float out[3]){
+    unsigned authored,physical;
+    const unsigned char *row;
+    if(!trainingGoals.graphReceipt || trainingGoals.epoch!=cod1NodeEpoch)return 0;
+    if(!TrainingGraphCurrent(trainingGoals.graphReceipt) || trainingGoals.busy ||
+       !trainingGoals.worldReady)return -1;
+    authored=(unsigned)(node-cod1Nodes);
+    if(authored>=cod1GraphStaged->count)return -1;
+    physical=C1NAV14_SortU16(cod1GraphStaged->authoredToPhysical+authored*2);
+    if(physical>=cod1GraphStaged->count)return -1;
+    row=cod1GraphStaged->records+physical*116;
+    if(C1NAV14_SortU16(row+0x28)!=authored)return -1;
+    memcpy(out,row+0x38,3*sizeof(float));return 1;
+}
 void G_Cod1PrepareTrainingGoals(void) {
     uint64_t world=0;
     unsigned i,seen=0,invalid=0;
@@ -60,16 +96,20 @@ void G_Cod1PrepareTrainingGoals(void) {
     trainingGoals.busy=1;
     trainingGoals.epoch=cod1NodeEpoch;
     trainingGoals.resource=cod1NodeResource;
-    if (!trainingGoals.resource.incarnation || !Cod1GraphResourceCurrent(&trainingGoals.resource) ||
-        !G_Cod1PathNodeWorldBegin(&world)) goto done;
+    if (!trainingGoals.resource.incarnation || !Cod1GraphResourceCurrent(&trainingGoals.resource))goto done;
+    if(cod1GraphPublished){
+        if(!TrainingGraphCurrent(cod1GraphReceipt))goto done;
+        trainingGoals.graphReceipt=cod1GraphReceipt;
+    }else if(!G_Cod1PathNodeWorldBegin(&world))goto done;
     for (i=0;i<(unsigned)cod1NodeCount;i++) {
         const Cod1NodeRecord *r=&cod1Nodes[i];
         const int slot=TrainingGoalIndex(r);
         unsigned bit;
         cod1PlacedGoal_t placed={0};
-        int valid=r->type==1 && TrainingPlaceGoal(r,i,&world,&placed);
-        if(r->type==15 && Cod1NodeRaw(r,"targetname") && !strcmp(Cod1NodeRaw(r,"targetname"),"jumpnode") &&
-           TrainingPlaceGoal(r,i,&world,&placed)){
+        int candidate=r->type==1 || (r->type==15 && Cod1NodeRaw(r,"targetname") && !strcmp(Cod1NodeRaw(r,"targetname"),"jumpnode"));
+        int accepted=candidate && (trainingGoals.graphReceipt?TrainingGraphGoal(i,&placed):TrainingPlaceGoal(r,i,&world,&placed));
+        int valid=r->type==1 && accepted;
+        if(r->type==15 && accepted){
            trainingGoals.jumpIndex=i; trainingGoals.hasJumpMount=1;
            VectorCopy(placed.position,trainingGoals.jumpMount);
         }
@@ -87,7 +127,8 @@ void G_Cod1PrepareTrainingGoals(void) {
         trainingGoals.index[slot]=i;seen|=1u<<slot;
     }
     trainingGoals.worldReady=(Cod1GraphResourceCurrent(&trainingGoals.resource) &&
-        G_Cod1PathNodeWorldCurrent(world) && trainingGoals.epoch==cod1NodeEpoch && !trainingGoals.cancelled);
+        (trainingGoals.graphReceipt?TrainingGraphCurrent(trainingGoals.graphReceipt):G_Cod1PathNodeWorldCurrent(world)) &&
+        trainingGoals.epoch==cod1NodeEpoch && !trainingGoals.cancelled);
     trainingGoals.ready=trainingGoals.worldReady ? (seen & ~invalid) : 0;
     /* All three instructor nodes remain an inseparable set. */
     if ((trainingGoals.ready & 7)!=7) trainingGoals.ready &= ~7u;
@@ -128,6 +169,11 @@ cod1PlacedGoal_t G_Cod1TrainingPlacedGoal(const GscEntityRef *owner,uint64_t ass
     int i;
     goal.status=-1;
     if (!Cod1NodeAvailable() || !Cod1NodeRefCurrent(ref)) return goal;
+    if(trainingGoals.graphReceipt){
+        if(trainingGoals.epoch!=cod1NodeEpoch || trainingGoals.busy || !trainingGoals.worldReady ||
+           !TrainingGraphCurrent(trainingGoals.graphReceipt))return goal;
+        if(trainingGoals.placedByIndex[ref->index].status)return trainingGoals.placedByIndex[ref->index];
+    }
     if (G_Cod1RunnerCourseGoal(owner,assignment,ref)==1||TrainingJumperExitNode(owner,assignment,ref)){
         if(trainingGoals.epoch!=cod1NodeEpoch || trainingGoals.busy || !trainingGoals.worldReady ||
            !cod1NodeResource.incarnation || cod1NodeResource.incarnation<=cod1NodeRetiredResource ||
@@ -146,7 +192,7 @@ cod1PlacedGoal_t G_Cod1TrainingPlacedGoal(const GscEntityRef *owner,uint64_t ass
 }
 
 static int TrainingRigNodePosition(const Cod1NodeRecord *record,float out[3]){
- if(!trainingGoals.hasJumpMount||trainingGoals.busy||trainingGoals.cancelled||!trainingGoals.worldReady||
+ if((trainingGoals.graphReceipt&&!TrainingGraphCurrent(trainingGoals.graphReceipt))||!trainingGoals.hasJumpMount||trainingGoals.busy||trainingGoals.cancelled||!trainingGoals.worldReady||
     trainingGoals.epoch!=cod1NodeEpoch||trainingGoals.jumpIndex>=cod1NodeCount||
     cod1Nodes+trainingGoals.jumpIndex!=record||!Cod1GraphResourceCurrent(&trainingGoals.resource))return 0;
  VectorCopy(trainingGoals.jumpMount,out);return 1;
@@ -165,7 +211,7 @@ static int TrainingJumperBuildPath(float route[6][3]){
  unsigned char *bytes=NULL,*visibility=NULL,visited[GSC_NODE_QUERY_CAPACITY]={0};
  C1NAV14_V7NodeData rows[GSC_NODE_QUERY_CAPACITY];C1NAV14_V7LinkData *links=NULL;
  float distance[GSC_NODE_QUERY_CAPACITY];int parent[GSC_NODE_QUERY_CAPACITY],i,n,count=0,ok=0;
- if(cod1NodeCount!=199||!trainingGoals.worldReady||!res.length||res.length>COD1_NAV_RESOURCE_LIMIT||
+ if((trainingGoals.graphReceipt&&!TrainingGraphCurrent(trainingGoals.graphReceipt))||cod1NodeCount!=199||!trainingGoals.worldReady||!res.length||res.length>COD1_NAV_RESOURCE_LIMIT||
     !Cod1GraphResourceCurrent(&res))return 0;
  bytes=malloc(res.length);if(!bytes)return 0;
  q.version=COD1_NAV_RESOURCE_VERSION;q.bytes=sizeof(q);q.operation=COD1_NAV_COPY;
@@ -206,4 +252,77 @@ static int TrainingJumperBuildPath(float route[6][3]){
 int TrainingJumperPath(const GscEntityRef *owner,const GscNodeRef *node,float route[6][3]){
  if(!TrainingJumperExitNode(owner,1,node))return 0;
  return TrainingJumperBuildPath(route);
+}
+
+/* GAME 735D0 calls 71240 without exclusion planes. Query the placed records
+ * in the live graph. The sentient retains its previous match on an empty search. */
+int G_Cod1StandingNode(const float *origin,const GscNodeRef *cached,GscNodeRef *out){
+ const C1DPGraphCandidate *graph=cod1GraphStaged;
+ struct {unsigned physical;float squared;} near[64];
+ unsigned i,j,count=0,authored;
+ const unsigned char *row;
+ uint64_t receipt=trainingGoals.graphReceipt;
+ if(!origin||!cached||!out||!Cod1NodeAvailable()||!TrainingGraphCurrent(receipt))return 0;
+ if(cached->epoch){
+    if(!Cod1NodeRefCurrent(cached))return 0;
+    i=C1NAV14_SortU16(graph->authoredToPhysical+2*cached->index);
+    if(i>=graph->count)return 0;
+    if(C1NAV14_SortU16(graph->records+116*i+0x20)){*out=*cached;return 1;}
+ }
+ for(i=0;i<graph->count;i++){
+    float p[3],d;
+    row=graph->records+116*i;
+    if(!C1NAV14_SortU32(row+0x24)||(row[0x2a]&1))continue;
+    memcpy(p,row+0x38,sizeof(p));
+    d=(float)(((double)p[0]-origin[0])*((double)p[0]-origin[0])+((double)p[1]-origin[1])*((double)p[1]-origin[1]));
+    if(d>=192.f*192.f||fabsf(p[2]-origin[2])>64.f)continue;
+    if(count==64)return 0;
+    j=count++;
+    while(j&&near[j-1].squared>d){near[j]=near[j-1];--j;}
+    near[j].physical=i;near[j].squared=d;
+ }
+ *out=*cached;
+ for(i=0;i<count;i++){
+    const vec3_t mins={-15,-15,17},maxs={15,15,72};
+    vec3_t p;cod1SpatialTraceQuery_t q={0};trace_t trace;
+    row=graph->records+116*near[i].physical;memcpy(p,row+0x38,sizeof(p));
+    if(!(origin[0]>p[0]-16 && origin[0]<p[0]+16 && origin[1]>p[1]-16 && origin[1]<p[1]+16 &&
+         origin[2]>p[2]-1 && origin[2]<p[2]+73)){
+       q.version=COD1_SPATIAL_VERSION;q.bytes=sizeof(q);q.contentsMask=0x820011;
+       q.passEntity[0]=q.passEntity[1]=ENTITYNUM_NONE;
+       VectorCopy(origin,q.start);VectorCopy(p,q.end);VectorCopy(mins,q.mins);VectorCopy(maxs,q.maxs);
+       if(trap_Cod1SpatialCapsuleTrace(&q,&trace)!=COD1_SPATIAL_OK||!TrainingGraphCurrent(receipt))return 0;
+       if(trace.startsolid||trace.fraction<1)continue;
+    }
+    break;
+ }
+ if(count){
+    row=graph->records+116*near[i<count?i:0].physical;authored=C1NAV14_SortU16(row+0x28);
+    if(authored>=graph->count)return 0;
+    out->epoch=cod1NodeEpoch;out->index=authored;out->generation=1;
+ }
+ return 1;
+}
+
+/* Read flags from the same mounted graph and six placed points that produced
+ * the exit path. No goal-node flags or default stance answer is substituted. */
+int G_Cod1TrainingJumperPathFlags(const GscEntityRef*owner,const GscNodeRef*goal,
+ const float points[6][3],uint16_t out[6],uint64_t*receipt){
+ static const unsigned authored[6]={198,195,194,193,192,186};
+ static const unsigned physical[6]={154,48,80,131,122,125};
+ const C1DPGraphCandidate*g=cod1GraphStaged;uint16_t flags[6];unsigned i,n;uint64_t serial=trainingGoals.graphReceipt;
+ if(!owner||!goal||!points||!out||!receipt||!g||!serial||
+    Cod1NodePrivate(out,12)||Cod1NodePrivate(receipt,8)||
+    Cod1NodeOverlap(out,12,points,72)||Cod1NodeOverlap(out,12,owner,sizeof(*owner))||Cod1NodeOverlap(out,12,goal,sizeof(*goal))||
+    Cod1NodeOverlap(receipt,8,points,72)||Cod1NodeOverlap(receipt,8,owner,sizeof(*owner))||Cod1NodeOverlap(receipt,8,goal,sizeof(*goal))||Cod1NodeOverlap(out,12,receipt,8)||
+    !TrainingJumperExitNode(owner,1,goal)||!TrainingGraphCurrent(serial)||
+    trainingGoals.busy||trainingGoals.cancelled||!trainingGoals.worldReady||trainingGoals.epoch!=cod1NodeEpoch||g->count!=199)return 0;
+ for(i=0;i<6;i++){
+  const cod1PlacedGoal_t*p=trainingGoals.placedByIndex+authored[i];
+  n=C1NAV14_SortU16(g->authoredToPhysical+2*authored[i]);
+  if(n!=physical[i]||n>=g->count||p->status!=1||memcmp(points[i],p->position,12))return 0;
+  flags[i]=C1NAV14_SortU16(g->records+116*n+0x2a);
+ }
+ if(g!=cod1GraphStaged||!TrainingGraphCurrent(serial)||!TrainingJumperExitNode(owner,1,goal))return 0;
+ memcpy(out,flags,sizeof(flags));*receipt=serial;return 1;
 }

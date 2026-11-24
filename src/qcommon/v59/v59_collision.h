@@ -23,6 +23,10 @@ V59_API void v59_context_free(v59_context *);
  * rotated model, or special engine handle 510 yet. Returns 0 or -1. */
 V59_API int v59_query(v59_context *,const float start[3],const float end[3],
     const float mins[3],const float maxs[3],uint32_t mask,int model,float fraction);
+/* Bounded moving box: exact brush planes; overlapping surface geometry
+ * remains unavailable (-2), never approximated by a capsule or triangle soup. */
+V59_API int v59_query_box(v59_context *,const float start[3],const float end[3],
+ const float mins[3],const float maxs[3],uint32_t mask,int model,float fraction);
 /* Exact point-in-brush contents from the native leaf brush references (world)
  * or the native model brush range (inline). Returns 0, or -1 for bad input. */
 V59_API int v59_point_contents(const v59_world *,const float point[3],int model,uint32_t *contents);
@@ -30,6 +34,12 @@ V59_API int v59_point_contents(const v59_world *,const float point[3],int model,
 V59_API const void *v59_prepared(const v59_context *);
 V59_API const void *v59_result(const v59_context *);
 V59_API int v59_stationary(const v59_context *);
+/* Scoped original path capsule sight;1 success,0 invalid/unavailable.
+ * Hull(-15,-15,17 or18)..(15,15,72), masks00820011/02820011.
+ * Output remains unchanged on failure; context is exclusive to caller. */
+V59_API int v59_path_sight(v59_context *,const float start[3],const float end[3],
+ const float mins[3],const float maxs[3],const float origin[3],uint32_t mask,int model,int *result);
+
 /* Event kinds: 0 leaf, 1 brush, 2 surface, 3 model_leaf. */
 V59_API size_t v59_event_count(const v59_context *);
 V59_API const int *v59_events(const v59_context *);

@@ -23,13 +23,17 @@ int gsc_program_select_namespace_start_origin_query(GscProgram *g){
        g->start_origin_selected||g->animation_refs_selected||g->animation_length_selected||g->animation_methods_selected)return 0;
     g->namespace_start_origin_selected=1;return 1;
 }
+int gsc_program_select_map_start_pose(GscProgram*g){
+ if(!g||!g->map_animation_names.count||g->map_start_pose_selected||!gsc_program_select_namespace_start_origin_query(g))return 0;
+ g->map_start_pose_selected=1;return 1;
+}
 static int namespace_start_origin_entry(const GscRuntime *r,uint32_t object){
     const AnimationNamespaceEntry *entry;
     if(!object||object>(uint32_t)r->animation_namespace.entry_count)return 0;
     entry=&r->animation_namespace.entries[object-1];
-    return !entry->declaration.flags&&
+    return !entry->declaration.flags&&(r->program->map_start_pose_selected||
         ((entry->catalog==0&&!strcmp(entry->declaration.name,"training_guy_practicejump"))||
-         (entry->catalog==(r->program->training_rigs_selected?2u:1u)&&!strcmp(entry->declaration.name,"training_gear_practicejump")));
+         (entry->catalog==(r->program->training_rigs_selected?2u:1u)&&!strcmp(entry->declaration.name,"training_gear_practicejump"))));
 }
 static int namespace_start_origin_literal_ready(const GscRuntime *r,int expression){
     int n;
@@ -49,13 +53,13 @@ int gsc_runtime_select_namespace_start_origin(GscRuntime *r,const GscStartOrigin
     host=*input;if(!host.query)return 0;
     for(n=0;n<r->program->code_count;++n){
         const Instr *i=&r->program->code[n];
-        if(i->kind==I_CALL&&i->target==-1-START_ORIGIN_STATEMENT_TARGET&&
-           (i->argc!=3||!namespace_start_origin_literal_ready(r,i->args[2])))return 0;
+        if(i->kind==I_CALL&&(i->target==-1-START_ORIGIN_STATEMENT_TARGET||i->target==-1-START_ANGLES_STATEMENT_TARGET)&&
+           ((r->program->map_start_pose_selected?i->argc<3:i->argc!=3)||!namespace_start_origin_literal_ready(r,i->args[2])))return 0;
     }
     for(n=0;n<r->program->expr_count;++n){
         const Expr *e=&r->program->expr[n];
         if(e->call_binding==GSC_EXPR_TARGET_START_ORIGIN_NATIVE&&
-           (e->argc!=3||!namespace_start_origin_literal_ready(r,e->args[2])))return 0;
+           ((r->program->map_start_pose_selected?e->argc<3:e->argc!=3)||!namespace_start_origin_literal_ready(r,e->args[2])))return 0;
     }
     program=r->program;runtime_identity=r->array_token;identity=r->animation_namespace.identity;
     if(!anim_data_current(r,NULL)||!animation_namespace_quiescent(r)||!animation_namespace_scope(r)||
@@ -63,11 +67,11 @@ int gsc_runtime_select_namespace_start_origin(GscRuntime *r,const GscStartOrigin
        !r->program->namespace_start_origin_selected||r->namespace_start_origin_enabled||r->start_origin_enabled)return 0;
     r->namespace_start_origin=host;r->namespace_start_origin_enabled=1;return 1;
 }
-static int namespace_start_origin_call(GscRuntime *r,const Value *args,int argc,int line,Value *out){
+static int namespace_start_origin_call(GscRuntime *r,const Value *args,int argc,int line,unsigned kind,Value *out){
     GscStartOriginRequest request,expected;GscStartOriginReply reply;
     NamespaceStartOriginLease lease;Value staged;char error[384];int n,accepted,ok=0;
     const AnimationNamespaceEntry *entry;uint32_t poison=UINT32_C(0x7fc00001);
-    if(!r||!out||!args||argc!=3||!r->program->namespace_start_origin_selected||!r->namespace_start_origin_enabled)
+    if(!r||!out||!args||(r->program->map_start_pose_selected?argc<3:argc!=3)||(kind!=1&&(!r->program->map_start_pose_selected||kind!=2))||!r->program->namespace_start_origin_selected||!r->namespace_start_origin_enabled)
         return rfail(r,line,"namespace start-origin exact3argument capability unavailable");
     if(r->namespace_start_origin_busy||r->entity_method_busy||r->entity_field_busy||r->entity_inheritance_busy||
        r->entity_prepare_busy||r->entity_certificate_busy||r->entity_sequence_busy)
@@ -77,7 +81,7 @@ static int namespace_start_origin_call(GscRuntime *r,const Value *args,int argc,
        !animation_namespace_value_valid(r,&args[2])||!namespace_start_origin_entry(r,args[2].object))
         return rfail(r,line,"namespace start-origin requires finite vectors and current Guy or gear leaf");
     entry=&r->animation_namespace.entries[args[2].object-1];memset(&request,0,sizeof(request));
-    request.runtime_identity=r->array_token;request.catalog_identity=r->animation_namespace.identity;request.now_ms=r->now_ms;
+    request.query_kind=r->program->map_start_pose_selected?kind:0;request.runtime_identity=r->array_token;request.catalog_identity=r->animation_namespace.identity;request.now_ms=r->now_ms;
     strcpy(request.tree,r->animation_namespace.catalogs[entry->catalog].tree);
     strcpy(request.name,entry->declaration.name);request.ordinal=entry->declaration.ordinal;request.flags=entry->declaration.flags;
     memcpy(request.origin,args[0].vector,sizeof(request.origin));memcpy(request.angles,args[1].vector,sizeof(request.angles));
@@ -103,7 +107,7 @@ done:
     if(!ok||r->error[0])return 0;
     *out=staged;return 1;
 }
-static int start_origin_selected_call(GscRuntime *r,const Value *args,int argc,int line,Value *out){
+static int start_origin_selected_call(GscRuntime *r,const Value *args,int argc,int line,unsigned kind,Value *out){
     return r->program->namespace_start_origin_selected?
-        namespace_start_origin_call(r,args,argc,line,out):start_origin_call(r,args,argc,line,out);
+        namespace_start_origin_call(r,args,argc,line,kind,out):(kind==1?start_origin_call(r,args,argc,line,out):rfail(r,line,"unselected start-angle query"));
 }

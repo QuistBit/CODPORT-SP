@@ -12,6 +12,11 @@ typedef struct {
     char map[1024];
 } GscTestMissionIntent;
 static GscTestMissionIntent gscTestMission;
+typedef struct {GscSession *session;uint64_t id,epoch,map;GscEntityRef player;int phase,at,last,deadline;char target[MAX_QPATH];} GscChangeLevel;
+static GscChangeLevel gscChangeLevel;
+static void GscChangeCancel(void);
+static int GscChangeBegin(const char *target);
+
 #include "../bg_cod1_mission_transition.h"
 static Cod1MissionTransition gscTestFinale;
 static int gscTestFinaleSelected;
@@ -20,7 +25,7 @@ static GscEntityRef gscTestFinalePlayer;
 static void GscTestFailureCancel(void);
 static void GscTestMissionReset(void) {
     uint64_t epoch=gscTestMission.epoch;
-    GscTestFailureCancel();
+    GscTestFailureCancel();GscChangeCancel();
     Cod1MissionTransitionReset(&gscTestFinale);gscTestFinaleSelected=0;
     memset(&gscTestFinalePlayer,0,sizeof(gscTestFinalePlayer));
     memset(&gscTestMission,0,sizeof(gscTestMission));
@@ -60,10 +65,10 @@ static int GscTestMissionGate(void *user,uint64_t id,int logicalMs,
     (void)user;
     if (enabled) *enabled=0;
     if (!enabled || logicalMs<0 ||
-        (kind!=GSC_MISSION_SUCCESS && kind!=GSC_MISSION_FAILED) ||
+        (kind!=GSC_MISSION_SUCCESS && kind!=GSC_MISSION_FAILED && kind!=GSC_MISSION_CHANGELEVEL) ||
         !GscTestMissionCurrent(id,epoch)) goto refuse;
     player=GscTestMissionPlayer();
-    if (kind==GSC_MISSION_SUCCESS) {
+    if (kind==GSC_MISSION_SUCCESS || kind==GSC_MISSION_CHANGELEVEL) {
         if (!player) {
             GscTestError(error,capacity,"mission success player binding unavailable");
             return 0;
@@ -98,7 +103,8 @@ static int GscTestMissionSuccess(void *user,uint64_t id,int logicalMs,
     (void)user;
     if (!event) goto refuse;
     copy=*event; /* Do not keep a borrowed event across engine services. */
-    if (logicalMs<0 || copy.kind!=GSC_MISSION_SUCCESS ||
+    if (logicalMs<0 || (copy.kind!=GSC_MISSION_SUCCESS && copy.kind!=GSC_MISSION_CHANGELEVEL) ||
+        (copy.kind==GSC_MISSION_CHANGELEVEL && copy.phase==GSC_MISSION_SUCCESS_MARK) ||
         (copy.phase!=GSC_MISSION_ARGUMENT && copy.phase!=GSC_MISSION_REQUEST &&
          copy.phase!=GSC_MISSION_SUCCESS_MARK) ||
         !GscTestMissionEventValid(&copy) ||
@@ -122,6 +128,9 @@ static int GscTestMissionSuccess(void *user,uint64_t id,int logicalMs,
         if (gscTestMission.persistent) {
             GscTestError(error,capacity,"mission persistence serializer unavailable in selected diagnostic mode");
             return 0;
+        }
+        if(copy.kind==GSC_MISSION_CHANGELEVEL&&!GscChangeBegin(copy.map)){
+            GscTestError(error,capacity,"changelevel map/request owner unavailable");return 0;
         }
     } else {
         gscTestMission.success=1; /* Also after a suppressed shared gate. */

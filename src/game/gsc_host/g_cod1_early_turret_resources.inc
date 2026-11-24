@@ -18,7 +18,10 @@ static int Cod1EarlyTurretCurrent(void*user,uint64_t epoch,uint64_t receipt){
   prepass==cod1EarlyTurretResources.prepass&&Cod1EarlyTurretScope(epoch,prepass)&&
   cod1EarlyTurretResources.ready&&!cod1EarlyTurretResources.cancelled;
  for(i=0;i<2&&ok;i++)ok=cod1EarlyTurretResources.sizes[i]&&cod1EarlyTurretResources.sizes[i]<=COD1_EARLY_ATR_MAX&&
-  R242ExactATRBytesEqual(cod1EarlyTurretResources.bytes[i],cod1EarlyTurretResources.reference[i],cod1EarlyTurretResources.sizes[i]);
+  (cod1EarlyTurretSeals[i].base ?
+   Cod1ATRSealCurrent(cod1EarlyTurretSeals+i,cod1EarlyTurretSeals[i].base,
+     cod1EarlyTurretSeals[i].base+cod1EarlyTurretResources.sizes[i],cod1EarlyTurretResources.sizes[i]) :
+   R242ExactATRBytesEqual(cod1EarlyTurretResources.bytes[i],cod1EarlyTurretResources.reference[i],cod1EarlyTurretResources.sizes[i]));
  if(!ok)cod1EarlyTurretResources.cancelled=1;cod1EarlyTurretResources.busy=0;return ok;
 }
 static int Cod1EarlyTurretLoading(uint64_t epoch,uint64_t prepass){
@@ -52,6 +55,10 @@ static int Cod1EarlyTurretLoad(void){
  for(n=0;n<2;n++){
   memcpy(cod1EarlyTurretResources.bytes[n],bytes[n],sizes[n]);memcpy(cod1EarlyTurretResources.reference[n],bytes[n],sizes[n]);cod1EarlyTurretResources.sizes[n]=sizes[n];
  }
+ /* The sealed pair becomes authoritative before its address or receipt is
+  * published. Failed protection retains the original exact byte checks.
+  * Dynamic map, feature, developer and cancellation checks stay per call. */
+ for(n=0;n<2;n++)Cod1ATRSealCreate(cod1EarlyTurretSeals+n,bytes[n],sizes[n]);
  cod1EarlyTurretResources.epoch=epoch;cod1EarlyTurretResources.prepass=prepass;
  cod1EarlyTurretResources.receipt=++cod1EarlyTurretSerial;cod1EarlyTurretResources.developer=developer;cod1EarlyTurretResources.ready=1;ok=1;
 done:
@@ -65,6 +72,6 @@ int G_Cod1EarlyTurretProgramPlan(GscSessionTurretProgramPlan*out){
  if(!Cod1EarlyTurretCurrent(NULL,cod1EarlyTurretResources.epoch,cod1EarlyTurretResources.receipt))return 0;
  memset(&plan,0,sizeof(plan));plan.epoch=cod1EarlyTurretResources.epoch;plan.receipt=cod1EarlyTurretResources.receipt;
  plan.current=Cod1EarlyTurretCurrent;plan.developer_enabled=cod1EarlyTurretResources.developer;
- for(i=0;i<2;i++){plan.catalogs[i].atr_bytes=cod1EarlyTurretResources.bytes[i];plan.catalogs[i].atr_size=cod1EarlyTurretResources.sizes[i];}
+ for(i=0;i<2;i++){plan.catalogs[i].atr_bytes=cod1EarlyTurretSeals[i].base?cod1EarlyTurretSeals[i].base:cod1EarlyTurretResources.bytes[i];plan.catalogs[i].atr_size=cod1EarlyTurretResources.sizes[i];}
  *out=plan;return 1;
 }

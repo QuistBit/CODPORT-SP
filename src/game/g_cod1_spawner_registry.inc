@@ -14,7 +14,15 @@ typedef struct {
     char raw[MAX_SPAWN_VARS_CHARS];
 } cod1SpawnerRecord_t;
 
-static cod1SpawnerRecord_t cod1Spawners[MAX_GENTITIES];
+/* The span only bounds enumeration of slots ever published on THIS map.
+ * A slot inside it is still resolved against its live allocation and body
+ * on both passes. Slot reuse or a team mutation cannot confer membership. */
+static struct { cod1SpawnerRecord_t rows[MAX_GENTITIES]; int first,end; } cod1SpawnerStorage;
+#define cod1Spawners (cod1SpawnerStorage.rows)
+static void Cod1SpawnerSpanInclude(int slot) {
+    if(slot < cod1SpawnerStorage.first) cod1SpawnerStorage.first=slot;
+    if(slot >= cod1SpawnerStorage.end) cod1SpawnerStorage.end=slot+1;
+}
 static uint64_t cod1SpawnerEpoch;
 static uint64_t cod1SpawnerIntakeSerial;
 
@@ -33,6 +41,7 @@ static int Cod1SpawnerError( char *error, size_t size, const char *text ) {
 
 void G_Cod1SpawnerMapBegin( void ) {
     memset( cod1Spawners, 0, sizeof( cod1Spawners ) );
+    cod1SpawnerStorage.first=ENTITYNUM_MAX_NORMAL;cod1SpawnerStorage.end=MAX_CLIENTS;
     cod1SpawnerEpoch = G_Cod1EntityMapEpoch();
 }
 
@@ -188,6 +197,7 @@ int G_Cod1SpawnerIntake( struct gentity_s *ent ) {
     G_SetAngle( ent, ent->s.angles );
     if(cod1SpawnerIntakeSerial!=UINT64_MAX)copy.intakeIdentity=++cod1SpawnerIntakeSerial;
     cod1Spawners[ref.slot] = copy;
+    Cod1SpawnerSpanInclude((int)ref.slot);
     Cod1SpawnerInitialNativeExtras( &cod1Spawners[ref.slot] );
     return 1;
 }
@@ -252,7 +262,7 @@ static int Cod1SpawnerCollect( unsigned int mask, int teams,
     if ( !count || (capacity && !out) || !Cod1SpawnerMapCurrent() ||
         (teams && (!mask || (mask & ~14u))) )
         return Cod1SpawnerError( error, errorSize, "spawner collection requires current map and valid nonzero team mask" );
-    for ( i = MAX_CLIENTS; i < ENTITYNUM_MAX_NORMAL; ++i ) {
+    for ( i = cod1SpawnerStorage.first; i < cod1SpawnerStorage.end; ++i ) {
         const cod1SpawnerRecord_t *record = &cod1Spawners[i];
         if ( !Cod1SpawnerFind( &record->snapshot.entity ) ) continue;
         if ( teams && !(mask & (1u << record->snapshot.team)) ) continue;
@@ -260,7 +270,7 @@ static int Cod1SpawnerCollect( unsigned int mask, int teams,
     }
     if ( needed > capacity ) return Cod1SpawnerError( error, errorSize, "spawner collection output is too small; no truncation" );
     needed = 0;
-    for ( i = MAX_CLIENTS; i < ENTITYNUM_MAX_NORMAL; ++i ) {
+    for ( i = cod1SpawnerStorage.first; i < cod1SpawnerStorage.end; ++i ) {
         const cod1SpawnerRecord_t *record = &cod1Spawners[i];
         if ( !Cod1SpawnerFind( &record->snapshot.entity ) ) continue;
         if ( teams && !(mask & (1u << record->snapshot.team)) ) continue;

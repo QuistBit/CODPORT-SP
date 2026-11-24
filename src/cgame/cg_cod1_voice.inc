@@ -55,11 +55,11 @@ static void CG_Cod1VoiceCommand(void){
     !Q_stricmp(packet.sound.sound.path,"sound/voiceovers/us/training/Training_Foley_01.wav")) {
     CGV_BriefingStart(&packet.sound,inc);
  }
- translated=CG_Cod1LocaleLookupSubtitle(packet.subtitle);if(!translated||!*translated||cg.time<0||cg.time>INT_MAX-C1N_MAX_DURATION_MS){CGV_Report(&packet.sound,0,'f');return;}if(!CGV_Current(epoch,inc))return;
+ translated=packet.subtitle[0]?CG_Cod1LocaleLookupSubtitle(packet.subtitle):"";if((packet.subtitle[0]&&(!translated||!*translated))||cg.time<0||cg.time>INT_MAX-C1N_MAX_DURATION_MS){CGV_Report(&packet.sound,0,'f');return;}if(!CGV_Current(epoch,inc))return;
  memset(&request,0,sizeof(request));request.operation=C1V_STREAM_PLAY;request.incarnation=inc;request.packet=packet.sound;request.mix_mode=packet.mix_mode;request.slave_cap=packet.slave_cap;duration=trap_Cod1VoiceStream(&request);if(!CGV_Current(epoch,inc))return;if(duration<=0||duration>C1N_MAX_DURATION_MS){CGV_Report(&packet.sound,0,'f');return;}
  /* Successful engine replacement retires the older allocation/channel. Do
   * not stop it by entity number after publication of its successor. */
- memset(&track,0,sizeof(track));track.active=1;track.start=cg.time;track.duration=duration;track.request=request;strcpy(track.subtitle,packet.subtitle);cgvTracks[packet.sound.sound.entity]=track;cgvCaption=packet.sound.sound.entity;
+ memset(&track,0,sizeof(track));track.active=1;track.start=cg.time;track.duration=duration;track.request=request;strcpy(track.subtitle,packet.subtitle);cgvTracks[packet.sound.sound.entity]=track;cgvCaption=packet.subtitle[0]?(int)packet.sound.sound.entity:-1;
  {C1DReport report;char text[C1D_CAPACITY];memset(&report,0,sizeof(report));report.identity=C1N_PacketIdentity(&packet.sound);report.duration=duration;if(C1D_Encode(text,sizeof(text),&report))trap_SendClientCommand(text);}
 }
 static void CG_Cod1VoiceStopCommand(void){char copied[C1D_ARGC][32];const char *a[C1D_ARGC];C1DReport report;C1NIdentity id;int i;if(trap_Argc()!=C1D_ARGC)return;for(i=0;i<C1D_ARGC;i++){memset(copied[i],0,sizeof(copied[i]));trap_Argv(i,copied[i],sizeof(copied[i]));a[i]=copied[i];}if(!C1V_ControlDecode(C1D_ARGC,a,&report,'x')||report.duration||report.identity.entity>=1024)return;id=C1N_PacketIdentity(&cgvTracks[report.identity.entity].request.packet);if(!memcmp(&id,&report.identity,sizeof(id)))CGV_Stop(report.identity.entity,0);}

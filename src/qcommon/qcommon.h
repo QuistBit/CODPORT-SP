@@ -605,6 +605,8 @@ int     FS_FTell( fileHandle_t f );
 // where are we?
 
 void    FS_Flush( fileHandle_t f );
+void FS_FlushLog(fileHandle_t f,int wait);
+void FS_EnableAsyncLog(fileHandle_t f,int enabled);
 
 void QDECL FS_Printf( fileHandle_t f, const char *fmt, ... );
 // like fprintf
@@ -881,6 +883,12 @@ void SCR_DebugGraph( float value, int color );   // FIXME: move logging to commo
 void SV_Init( void );
 void SV_Shutdown( char *finalmsg );
 void SV_Frame( int msec );
+void SV_FrameWithBudget( int msec, int sliceBudgetMsec );
+qboolean SV_FrameSlicePending( void );
+void SV_FinishFrameSlice( void );
+int SV_FrameSliceDrainMsec( void );
+qboolean CL_CanRunLocalFrameSlice( void );
+extern cvar_t *sv_frameSmoothing;
 void SV_PacketEvent( netadr_t from, msg_t *msg );
 qboolean SV_GameCommand( void );
 

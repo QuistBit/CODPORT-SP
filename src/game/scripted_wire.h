@@ -61,10 +61,15 @@ static int C1ScriptedWireValid(const entityState_t*s,int snapshotTime){unsigned 
  if(approach && ((baseFlags!=3 && baseFlags!=COD1_COURSE_STOP_FLAGS) ||
     !COD1_IS_RIFLE_CROUCHRUN(s->frame) || s->frame!=Cod1CourseCrouchFrame(s->number) ||
     !(s->cod1TurretActorPhases[1][13]>0 && s->cod1TurretActorPhases[1][13]<1)))return 0;
+ if(s->cod1TurretActorGenericCurrent[97]){
+  float phase;
+  memcpy(&phase,&s->effect2Time,sizeof(phase));
+  if(!(phase>=0 && phase<=1) || s->cod1TurretActorConfig==CS_COD1_JUMPER)return 0;
+ }
  if(s->cod1TurretActorVersion!=COD1_SCRIPTED_ACTOR_WIRE_VERSION||s->number<0||s->number>=MAX_GENTITIES||s->eType!=ET_GENERAL||s->pos.trType!=TR_STATIONARY||s->apos.trType!=TR_STATIONARY||!(s->cod1TurretEpochLo|s->cod1TurretEpochHi)||!s->cod1TurretActorGeneration||s->cod1TurretActorGun!=-1||s->cod1TurretActorGunGeneration||s->cod1TurretActorTick<0||s->cod1TurretActorTick>snapshotTime||s->cod1TurretActorConfig<CS_COD1_TURRET_ACTORS||(s->cod1TurretActorConfig>=CS_COD1_TURRET_ACTORS+MAX_COD1_TURRET_ACTORS && !(s->cod1TurretActorConfig==CS_COD1_JUMPER && s->effect1Time==0x4a5202))||(baseFlags!=1&&baseFlags!=3&&baseFlags!=COD1_COURSE_STOP_FLAGS))return 0;
  if(baseFlags==COD1_COURSE_STOP_FLAGS &&
     (!(COD1_IS_RIFLE_CROUCHRUN(s->frame)||COD1_IS_COURSE_WALK_FRAME(s->frame)||COD1_IS_REST_FRAME(s->frame)) ||
      !(s->cod1TurretActorPhases[1][11]>0 && s->cod1TurretActorPhases[1][12]>0)))return 0;
- for(i=0;i<3;i++)if(!(s->pos.trBase[i]>=-1000000&&s->pos.trBase[i]<=1000000)||!(s->apos.trBase[i]>=-3600&&s->apos.trBase[i]<=3600))return 0;for(i=0;i<98;i++)if(!(s->cod1TurretActorGenericCurrent[i]>=0&&s->cod1TurretActorGenericCurrent[i]<=1)||(i>=87&&s->cod1TurretActorGenericCurrent[i]!=0))return 0;if(s->cod1TurretActorGenericCurrent[0]!=1)return 0;for(g=0;g<2;g++){for(i=0;i<25;i++)if(!(s->cod1TurretActorCurrent[g][i]>=0 && s->cod1TurretActorCurrent[g][i]<=1) ||
+ for(i=0;i<3;i++)if(!(s->pos.trBase[i]>=-1000000&&s->pos.trBase[i]<=1000000)||!(s->apos.trBase[i]>=-3600&&s->apos.trBase[i]<=3600))return 0;for(i=0;i<98;i++)if(!(s->cod1TurretActorGenericCurrent[i]>=0&&s->cod1TurretActorGenericCurrent[i]<=1)||(i>=92&&i<97&&!s->cod1TurretActorGenericCurrent[i-5]&&s->cod1TurretActorGenericCurrent[i]!=0))return 0;if(s->cod1TurretActorGenericCurrent[0]!=1)return 0;for(g=0;g<2;g++){for(i=0;i<25;i++)if(!(s->cod1TurretActorCurrent[g][i]>=0 && s->cod1TurretActorCurrent[g][i]<=1) ||
     (!s->cod1TurretActorCurrent[0][i] && s->cod1TurretActorCurrent[1][i]))return 0;for(i=0;i<21;i++)if(!(s->cod1TurretActorPhases[g][i]>=0&&s->cod1TurretActorPhases[g][i]<=1)||((g*21+i>=(baseFlags==COD1_COURSE_STOP_FLAGS?34:(baseFlags==3?32:31)))&& !((baseFlags==1 || (baseFlags==3 && s->frame==0 && !entry && !approach)) && g==1 && i>=11 && i<=15 && s->cod1TurretActorGenericCurrent[82+i-11]>0) && !(approach && g==1 && i==13) && !(entry && g==1 && i>=14) &&s->cod1TurretActorPhases[g][i]!=0))return 0;}return 1;}
 #endif

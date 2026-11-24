@@ -3,10 +3,18 @@
 #include <stdint.h>
 #define R243_ACTOR_FLOAT_PATH 1502
 #define R243_ACTOR_FLOAT_ENEMY 1503
+#define COD1_ACTOR_MOTION_ANGLE 1550
 typedef struct {GscEntityRef entity;uint64_t program,runtime,catalog,task,call;int now;uint32_t method;} R243ActorFloatRequest;
 typedef struct {uint32_t bits;} R243ActorFloatReply;
 typedef struct {void*user;int(*validate)(void*,const GscEntityRef*);int(*query)(void*,const R243ActorFloatRequest*,R243ActorFloatReply*,char*,size_t,int(*)(void*),void*);} R243ActorFloatHost;
-static unsigned R243ActorFloatMask(unsigned method){return method==R243_ACTOR_FLOAT_PATH?1u:method==R243_ACTOR_FLOAT_ENEMY?2u:0u;}
+static unsigned R243ActorFloatMask(unsigned method){return method==R243_ACTOR_FLOAT_PATH?1u:method==R243_ACTOR_FLOAT_ENEMY?2u:method==COD1_ACTOR_MOTION_ANGLE?4u:0u;}
+/* Distances remain finite and nonnegative. A signed heading is bounded
+ * by the native angle-subtraction result, including both half turns. */
+static int ActorFloatReplyValid(unsigned method,uint32_t bits){
+ uint32_t magnitude=bits&0x7fffffffu;
+ if(method==COD1_ACTOR_MOTION_ANGLE)return magnitude<=0x43340000u;
+ return !(bits&0x80000000u) && magnitude<0x7f800000u;
+}
 int R243ProgramSelectActorFloat(GscProgram*,unsigned);
 int R243RuntimeSelectActorFloat(GscRuntime*,const R243ActorFloatHost*);
 int R243ActorFloatExactCallCurrent(const R243ActorFloatRequest*,int(*)(void*),void*);

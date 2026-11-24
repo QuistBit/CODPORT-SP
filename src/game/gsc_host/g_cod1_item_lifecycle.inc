@@ -105,11 +105,13 @@ int G_Cod1ItemLifecycleOwns(const GscEntityRef *ref) {
     return ref && ref->slot<MAX_GENTITIES && ref->epoch && ref->generation &&
         LiveItemRefEqual(ref,&cod1LiveItems.rows[ref->slot].entity);
 }
-static int LiveItemBody(const GscEntityRef *ref) {
+static int LiveItemBodyOwner(const GscEntityRef *ref) {
+    return LiveItemMap() && G_Cod1ItemLifecycleOwns(ref) &&
+        G_Cod1EntitySameAllocation(ref) && cod1LiveItems.epoch==ref->epoch &&
+        cod1LiveItems.selected;
+}
+static int LiveItemBodyFields(const GscEntityRef *ref) {
     Cod1LiveItem *r;gentity_t *e;cod1ItemDescriptor_t d;
-    if(!LiveItemMap() || !G_Cod1ItemLifecycleOwns(ref) ||
-       !G_Cod1EntitySameAllocation(ref) || cod1LiveItems.epoch!=ref->epoch ||
-       !cod1LiveItems.selected || !CAR_Current(&cod1LiveItems.registry))return 0;
     r=&cod1LiveItems.rows[ref->slot];e=&g_entities[ref->slot];
     return !r->consumed && r->serial && r->itemIndex>0 && r->itemIndex<MAX_ITEMS && r->itemRow &&
         !e->client && !e->aiCharacter && !e->aiName && !e->aiAttributes &&
@@ -140,6 +142,14 @@ static int LiveItemBody(const GscEntityRef *ref) {
         e->r.maxs[2]==(r->descriptor.type==1?1:2) &&
         CI_Descriptor(r->descriptor.index,&d) && !memcmp(&d,&r->descriptor,sizeof(d));
 }
+static int LiveItemBody(const GscEntityRef *ref) {
+    return LiveItemBodyOwner(ref) && CAR_Current(&cod1LiveItems.registry) && LiveItemBodyFields(ref);
+}
+/* Only the immediate callers that already checked this registry use this path.
+ * They read fields and compare bytes between the check and this call. */
+static int LiveItemBodyWithCurrentRegistry(const GscEntityRef *ref) {
+    return LiveItemBodyOwner(ref) && LiveItemBodyFields(ref);
+}
 static int LiveItemScope(void) {
     return cod1LiveItemGuard.active && !cod1LiveItemGuard.cancelled &&
         LiveItemMap() && cod1LiveItems.selected &&
@@ -154,7 +164,7 @@ static int LiveItemScope(void) {
         (!cod1LiveItemGuard.sourcePlayer || !memcmp(cod1LiveItemGuard.sourcePlayer,&cod1LiveItemGuard.player,sizeof(GscEntityRef))) &&
         (!cod1LiveItemGuard.sourceVector || !memcmp(cod1LiveItemGuard.sourceVector,cod1LiveItemGuard.sourceVectorCopy,sizeof(vec3_t))) &&
         (!cod1LiveItemGuard.sourceClass || !memcmp(cod1LiveItemGuard.sourceClass,cod1LiveItemGuard.sourceClassCopy,cod1LiveItemGuard.sourceClassBytes)) &&
-        (!cod1LiveItemGuard.hasItem || (LiveItemBody(&cod1LiveItemGuard.item) &&
+        (!cod1LiveItemGuard.hasItem || (LiveItemBodyWithCurrentRegistry(&cod1LiveItemGuard.item) &&
             !memcmp(&cod1LiveItemGuard.row,&cod1LiveItems.rows[cod1LiveItemGuard.item.slot],sizeof(Cod1LiveItem)) &&
             !memcmp(&cod1LiveItemGuard.body,&g_entities[cod1LiveItemGuard.item.slot],sizeof(gentity_t)))) &&
         (!cod1LiveItemGuard.hasPlayer || (PlayerNativePlayer(&cod1LiveItemGuard.player) &&
@@ -180,7 +190,7 @@ static int LiveItemBegin(const GscEntityRef *item,const GscEntityRef *player) {
     if(cod1PreparedItems.active&&cod1PreparedItems.closed)return 0;
     if(cod1LiveItemGuard.active){cod1LiveItemGuard.cancelled=1;return 0;}
     if(!LiveItemMap() || !cod1LiveItems.selected || cod1LiveItems.epoch!=cod1EntityEpoch ||
-       !CAR_Current(&cod1LiveItems.registry) || (item&&!LiveItemBody(item)) ||
+       !CAR_Current(&cod1LiveItems.registry) || (item&&!LiveItemBodyWithCurrentRegistry(item)) ||
        (player&&!PlayerNativePlayer(player)))return 0;
     memset(&cod1LiveItemGuard,0,sizeof(cod1LiveItemGuard));
     cod1LiveItemGuard.active=1;cod1LiveItemGuard.epoch=cod1EntityEpoch;

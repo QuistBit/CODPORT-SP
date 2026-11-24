@@ -392,7 +392,12 @@ static void CG_Cod1DrawUsePrompt(void) {
          * setHintString pool; ordinary RTCW activate hints stay icon-only. */
         if(cgs.cod1MapEntities&&index>0&&index<MAX_COD1_SCRIPT_HINTS){
             const char *raw=CG_ConfigString(CS_COD1_SCRIPT_HINTS+index);
-            if(raw[0]=='L'&&raw[1]==':')CG_Cod1CustomHintExpand(line,sizeof(line),CG_Cod1PromptLocalize(raw+2),CG_Cod1PromptUseKey());
+            if (raw[0]=='L' && raw[1]==':') {
+                const char *hint=CG_Cod1LocaleLookupObjective(raw+2);
+                const char *binding=CG_Cod1PromptUseKey();
+                if (!binding) binding=CG_Cod1LocaleLookup("KEY_UNBOUND");
+                CG_Cod1CustomHintExpand(line,sizeof(line),hint,binding);
+            }
         }
         if (cgs.cod1MapEntities && index==COD1_HINT_USE_VALUE) {
             pattern="Press USE [%s]";

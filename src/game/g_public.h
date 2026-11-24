@@ -469,7 +469,10 @@ typedef enum {
 	G_COD1_LOCALIZED_RELEASE = 1023, /* paired port ABI68 */
 	G_COD1_NAVIGATION_RESOURCE = 1024, /* paired port ABI69 */
 	G_COD1_ENTITY_PARSE_REWIND = 1025, /* paired port ABI71, exhausted GAME_INIT cursor only */
-	G_COD1_LOCALIZED_STARTUP = 1026 /* paired port ABI72, copied one-shot startup scope */
+	G_COD1_LOCALIZED_STARTUP = 1026, /* paired port ABI72, copied one-shot startup scope */
+	G_COD1_MODEL_PART_NAME = 1027, /* paired port ABI74, current model part-name copy */
+	G_COD1_SPATIAL_BOX_TRACE = 1028, /* paired port ABI75, bounded native box query */
+	G_COD1_MODEL_BOUNDS = 1029 /* paired port ABI76, copied registered model bounds */
 } gameImport_t;
 
 
@@ -516,6 +519,10 @@ typedef enum {
 	GAME_RETRIEVE_MOVESPEEDS_FROM_CLIENT,
 	GAME_GETMODELINFO,
 	GAME_COD1_STATE_ABI,
-	GAME_COD1_NAV_RESOURCE_RETIRED /* uint32 low, high; cancellation only */
+	GAME_COD1_NAV_RESOURCE_RETIRED, /* uint32 low, high; cancellation only */
+	GAME_FRAME_SLICE_API,
+	GAME_RUN_FRAME_SLICE /* (levelTime, budgetMs): 0 pending, 1 committed. Zero budget drains. */
 
 } gameExport_t;
+
+#define COD1_FRAME_SLICE_API 0x46530101

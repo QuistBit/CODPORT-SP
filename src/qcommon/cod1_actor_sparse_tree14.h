@@ -5,7 +5,7 @@
  * Owner must prove every active original leaf is represented. No additive
  * overlay, missing-track success, clock, goal-weight or lifetime authority. */
 #define C1AST14_NODES 128
-#define C1AST14_LEAVES 105
+#define C1AST14_LEAVES 107
 typedef struct {unsigned ordinal;int parent,leaf;float currentWeight,phase;} c1ast14Node_t;
 typedef struct {unsigned bones,count;const c1ab14Clip_t*clip[C1AST14_LEAVES];unsigned char map[C1AST14_LEAVES][128];} c1ast14Bank_t;
 static C1AB14_NOINLINE int C1AST14_Merge(const c1ab14Accumulator_t*src,c1ab14Accumulator_t*dst,unsigned n,float weight,int clear,int top){unsigned i,k;double norm,scale;if(clear)memset(dst,0,n*sizeof(*dst));for(i=0;i<n;i++){

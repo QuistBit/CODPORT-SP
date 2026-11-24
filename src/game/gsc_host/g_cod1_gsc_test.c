@@ -61,6 +61,7 @@
 #include "../bg_cod1_direct_fog.h"
 #include "../cod1_gsc/gsc_session.h"
 #include "../g_cod1_node_host.h"
+#include "../g_cod1_vehicle_nodes.h"
 #include "../g_cod1_spawner_pose.h"
 #include "../g_cod1_actor.h"
 #include "../g_cod1_gsc_event_payload.h"
@@ -91,6 +92,7 @@ static int gscTestEntityMode;
 static int gscTestDeleteTransactionsSelected;
 #if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
 static int GscTestGrenadeStorageProtected(const void *,size_t);
+static int GscMapItemStorageProtected(const void *,size_t);
 static int GscTestCarbineStorageProtected(const void *,size_t);
 static int GscTestTurretStorageProtected(const void *,size_t);
 #endif
@@ -147,57 +149,23 @@ static void GscTestError( char *error, size_t capacity, const char *message ) {
  * Bounded repeated reads are not an atomic snapshot of separate cvars. */
 static int GscTestEarlyCurrent(void);
 static int gscTestPreparingEarly;
+#include "../cod1_gsc/gsc_training_readonly.h"
 static int GscTestModuleReadCurrent( void ) {
-    if(gscTestPreparingEarly&&!GscTestEarlyCurrent())return 0;
-    if(gscTestEntityMode==44) {
-        return !gscTestStopRequested && gscTestMapEpoch &&
-            gscTestMapEpoch==G_Cod1EntityMapEpoch() &&
-            trap_Cvar_VariableIntegerValue("g_cod1GscTest")==1 &&
-            GscTestEntityModeValue()==44 &&
-            trap_Cvar_VariableIntegerValue("savegame_loading")==0 &&
-            trap_Cvar_VariableIntegerValue("g_cod1GscTest")==1 &&
-            GscTestEntityModeValue()==44 && !gscTestStopRequested &&
-            gscTestMapEpoch==G_Cod1EntityMapEpoch();
+    if ( gscTestPreparingEarly && !GscTestEarlyCurrent() ) {
+        return 0;
     }
-    if(gscTestEntityMode==45) {
-        return !gscTestStopRequested && gscTestMapEpoch &&
-            gscTestMapEpoch==G_Cod1EntityMapEpoch() &&
-            trap_Cvar_VariableIntegerValue("g_cod1GscTest")==1 &&
-            GscTestEntityModeValue()==45 &&
-            trap_Cvar_VariableIntegerValue("savegame_loading")==0 &&
-            trap_Cvar_VariableIntegerValue("g_cod1GscTest")==1 &&
-            GscTestEntityModeValue()==45 && !gscTestStopRequested &&
-            gscTestMapEpoch==G_Cod1EntityMapEpoch();
+    if ( gscTestStopRequested || gscTestEntityMode < 10 || gscTestEntityMode > 47 ) {
+        return 0;
     }
-    if(gscTestEntityMode==46) {
-        return !gscTestStopRequested && gscTestMapEpoch &&
-            gscTestMapEpoch==G_Cod1EntityMapEpoch() &&
-            trap_Cvar_VariableIntegerValue("g_cod1GscTest")==1 &&
-            GscTestEntityModeValue()==46 &&
-            trap_Cvar_VariableIntegerValue("savegame_loading")==0 &&
-            trap_Cvar_VariableIntegerValue("g_cod1GscTest")==1 &&
-            GscTestEntityModeValue()==46 && !gscTestStopRequested &&
-            gscTestMapEpoch==G_Cod1EntityMapEpoch();
+    if ( gscTestEntityMode >= 30 &&
+         ( !gscTestMapEpoch || gscTestMapEpoch != G_Cod1EntityMapEpoch() ) ) {
+        return 0;
     }
-    if(gscTestEntityMode==47) {
-        return !gscTestStopRequested && gscTestMapEpoch &&
-            gscTestMapEpoch==G_Cod1EntityMapEpoch() &&
-            trap_Cvar_VariableIntegerValue("g_cod1GscTest")==1 &&
-            GscTestEntityModeValue()==47 &&
-            trap_Cvar_VariableIntegerValue("savegame_loading")==0 &&
-            trap_Cvar_VariableIntegerValue("g_cod1GscTest")==1 &&
-            GscTestEntityModeValue()==47 && !gscTestStopRequested &&
-            gscTestMapEpoch==G_Cod1EntityMapEpoch();
-    }
-    return !gscTestStopRequested && (gscTestEntityMode >= 10 && gscTestEntityMode<=43) &&
-        ((gscTestEntityMode!=30 && (gscTestEntityMode!=31 && (gscTestEntityMode!=32 && (gscTestEntityMode!=33 && (gscTestEntityMode!=34 && (gscTestEntityMode!=35 && (gscTestEntityMode!=36 && (gscTestEntityMode!=37 && (gscTestEntityMode!=38 && (gscTestEntityMode!=39 && (gscTestEntityMode!=40&&(gscTestEntityMode!=41&&(gscTestEntityMode!=42&&gscTestEntityMode!=43))))))))))))) || (gscTestMapEpoch && gscTestMapEpoch==G_Cod1EntityMapEpoch())) &&
-        trap_Cvar_VariableIntegerValue("g_cod1GscTest") == 1 &&
-        GscTestEntityModeValue() == gscTestEntityMode &&
-        trap_Cvar_VariableIntegerValue("savegame_loading") == 0 &&
-        trap_Cvar_VariableIntegerValue("g_cod1GscTest") == 1 &&
-        trap_Cvar_VariableIntegerValue("savegame_loading") == 0 &&
-        GscTestEntityModeValue() == gscTestEntityMode && !gscTestStopRequested &&
-        ((gscTestEntityMode!=30 && (gscTestEntityMode!=31 && (gscTestEntityMode!=32 && (gscTestEntityMode!=33 && (gscTestEntityMode!=34 && (gscTestEntityMode!=35 && (gscTestEntityMode!=36 && (gscTestEntityMode!=37 && (gscTestEntityMode!=38 && (gscTestEntityMode!=39 && (gscTestEntityMode!=40&&(gscTestEntityMode!=41&&(gscTestEntityMode!=42&&gscTestEntityMode!=43))))))))))))) || gscTestMapEpoch==G_Cod1EntityMapEpoch());
+    /* These three engine queries are synchronous pure reads. Each invocation
+     * of this predicate, including after a host callback, reads live values. */
+    return trap_Cvar_VariableIntegerValue( "g_cod1GscTest" ) == 1 &&
+           GscTestEntityModeValue() == gscTestEntityMode &&
+           trap_Cvar_VariableIntegerValue( "savegame_loading" ) == 0;
 }
 
 #include "g_cod1_music_host.inc"
@@ -213,6 +181,10 @@ static int GscTestModuleReadCurrent( void ) {
 #include "../g_cod1_r200_collision.h"
 #include "g_cod1_r200_collision_host.inc"
 #include "g_cod1_script_sound_notify_host.inc"
+#include "g_cod1_vehicle_host.inc"
+static int gscVehicleFramesSelected;
+static int GscCampaignProgramCurrent(uint64_t epoch);
+static int GscVehicleMapCurrent(uint64_t epoch){return epoch&&epoch==G_Cod1EntityMapEpoch()&&g_gametype.integer==GT_SINGLE_PLAYER&&!level.spawning&&!level.restarted&&G_Cod1MapEntities()&&G_Cod1EntityCollectionReady(epoch,level.num_entities);}
 #include "g_cod1_loop_sound_host.inc"
 #include "g_cod1_loop_delivery_host.inc"
 #include "g_cod1_fx_host.inc"
@@ -224,7 +196,7 @@ static int GscTestModuleReadCurrent( void ) {
 #include "g_cod1_ambient_host.inc"
 #include "g_cod1_item_precache_host.inc"
 #if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
-#define COD1_REGISTRATION_EXTRA_STORAGE(p,n) (GscTestGrenadeStorageProtected(p,n)||GscTestCarbineStorageProtected(p,n)||GscTestTurretStorageProtected(p,n))
+#define COD1_REGISTRATION_EXTRA_STORAGE(p,n) (GscMapItemStorageProtected(p,n)||GscTestGrenadeStorageProtected(p,n)||GscTestCarbineStorageProtected(p,n)||GscTestTurretStorageProtected(p,n))
 #endif
 #include "g_cod1_weapon_registration.inc"
 #include "g_cod1_registered_clip_ammo.inc"
@@ -745,11 +717,20 @@ static GscSession *GscTestCreateMode40(const GscSessionHost *host,
 
 #include "g_cod1_start_origin_test_host.inc"
 #include "g_cod1_animation_namespace_test_host.inc"
+#include "g_cod1_map_start_pose.inc"
+#include "g_cod1_map_animation_length.inc"
+#include "g_cod1_bullet_trace.inc"
+#include "g_cod1_map_developer.inc"
+#include "g_cod1_map_animation_namespace.inc"
 #include "g_cod1_namespace_start_origin_test_host.inc"
 #if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
 #include "g_cod1_training_grenade_host.inc"
+#include "g_cod1_map_items.inc"
+#include "g_cod1_turret_precache.inc"
+#include "g_cod1_turret_factory.inc"
 #include "g_cod1_training_carbine_host.inc"
 #include "g_cod1_training_turret_host.inc"
+#include "g_cod1_map_model_part.inc"
 int G_Cod1GscTestGrenadeDamageActive(void){return GscTestGrenadeCurrent(NULL);}
 int G_Cod1GscTestFollowupActive(void){return gscTestCarbine.followup&&GscTestCarbineCurrent(NULL);}
 #define GSC_TEST_R216_PLAYER_HOST ((gscTestGrenades.selected||gscTestCarbine.selected)?G_Cod1GrenadePlayerNativeHost():G_Cod1PlayerNativeHost())
@@ -879,6 +860,7 @@ static int GscTestFog( void *user, uint64_t id, int logicalTime,
     return !gscTestStopRequested;
 }
 #include "g_cod1_training_finale_host.inc"
+#include "g_cod1_changelevel_host.inc"
 static void GscTestGraphClientSpawned(struct gentity_s*);
 static int GscTestGraphClientOptions(void);
 #include "g_cod1_client_startup.inc"
@@ -888,7 +870,18 @@ int G_Cod1GscTestBlocksRawSave(void){
     return gscTestSession!=NULL||gscTestBusy||gscTestPreparingEarly||gscTestClientStartup.phase!=0||gscTestRawSaveUnresolved;
 }
 static struct {uint64_t id,epoch,receipt,string_incarnation;char owner[128];int selected,attempted,published,probe,clientReady,started,cancelled;GscEntityRef player;gclient_t*client;cod1PlayerLifetime_t completed_spawn;} gscTestGraph;
+/* The engine permits no game-world entry between slices. Only completed
+ * operations are recorded here, all borrowed callbacks have unwound. */
+enum { GSC_FRAME_BEGIN, GSC_FRAME_NATIVE, GSC_FRAME_POST, GSC_FRAME_ACTORS };
+static struct {
+    int stage,nativeStage,coursePaused,nextRunner,profile;
+    unsigned profileElapsed;
+    uint64_t generation,sessionId;
+} gscFrameCursor;
 static void GscTestDrop( void ) {
+    memset(&gscFrameCursor,0,sizeof(gscFrameCursor));
+    GscMapPoseReset();GscMapLengthReset();GscBulletTraceReset();GscMapDeveloperReset();
+    gscVehicleFramesSelected=0;
     char error[GSC_SESSION_ERROR_CAP];
     GscTestClientStartupCancel();
     memset(&gscTestGraph,0,sizeof(gscTestGraph));
@@ -901,12 +894,12 @@ static void GscTestDrop( void ) {
     }
 #endif
     if(!G_Cod1LoopSoundMapCleanup()||!GscTestLoopFxReset()){gscTestStopRequested=1;return;}
-    GscTestFinaleCancel();
+    GscTestFinaleCancel();GscChangeCancel();
     GscSoundNotifyReset();
 #if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
     if(gscTestTurret.dropSelected){if(!G_Cod1DroppedItemsStop(gscTestId)){G_Printf("R233 dropped-item cleanup refused\n");gscTestStopRequested=1;return;}gscTestTurret.dropSelected=0;}
     G_Cod1HintOwnersReset();
-    GscTestGrenadeReset();
+    GscMapItemReset();GscTestGrenadeReset();
     GscTestTurretReset();
     G_Cod1ActorMotionStop(gscTestCarbine.epoch);
     memset(&gscTestCarbine,0,sizeof(gscTestCarbine));
@@ -962,7 +955,7 @@ static void GscTestCheckCompleted( void ) {
     GscSessionSnapshot snap;
     if (gscTestSession && !gscTestCompleted &&
         gsc_session_snapshot(gscTestSession, &snap) &&
-        snap.state == GSC_SESSION_COMPLETED) {
+        snap.state == GSC_SESSION_COMPLETED && !gscChangeLevel.phase) {
         if(!G_Cod1LoopSoundMapCleanup()||!GscTestLoopFxReset()){gscTestStopRequested=1;return;}
         if(gscTestEntityMode==43){char error[GSC_SESSION_ERROR_CAP];if(!GscTestHudReset(error,sizeof(error))){
             G_Printf("[GSC R200] completed HUD cleanup deferred: %s\n",error);gscTestStopRequested=1;return;
@@ -1025,6 +1018,28 @@ static int GscTestGraphCompletedCurrentPure(int prepared){
   gscTestGraph.completed_spawn.entity.generation==gscTestGraph.player.generation&&
   gscTestGraph.completed_spawn.entity.slot==gscTestGraph.player.slot&&
   gscTestClientStartup.completed_spawn.completion==gscTestGraph.completed_spawn.completion;
+}
+/* The original 14900 completes with the connected player's 134 bits
+ * clear under 3000. The first 6FAD0 scan observes that same player before
+ * map main. Bind this projection to both actual startup owners, only for
+ * the fresh normal SP client at this specific graph phase. */
+int G_Cod1StartupPlayerPath(const GscEntityRef *ref,cod1PlayerLifetime_t *out){
+    const GscTestClientStartup *startup=&gscTestClientStartup;
+    const cod1PlayerLifetime_t *completed=&gscTestGraph.completed_spawn;
+    if(!ref||!out||ref->slot!=0||!gscTestGraph.selected||gscTestGraph.probe||
+       !gscTestGraph.published||!gscTestGraph.started||!gscTestGraph.clientReady||
+       gscTestGraph.cancelled||gscTestStopRequested||level.restarted||level.spawning||
+       startup->phase!=2||!startup->ready||startup->cancelled||startup->session!=gscTestSession||
+       startup->id!=gscTestId||gscTestGraph.id!=gscTestId||startup->epoch!=ref->epoch||
+       gscTestGraph.epoch!=ref->epoch||completed->entity.slot!=ref->slot||
+       completed->entity.epoch!=ref->epoch||completed->entity.generation!=ref->generation||
+       completed->completion!=startup->completed_spawn.completion||
+       startup->client!=gscTestGraph.client||g_entities[0].client!=startup->client||
+       !GscTestClientStartupPlayerCurrentPure(startup)||
+       g_entities[0].client->ps.pm_type!=PM_NORMAL||g_entities[0].health<=0||
+       level.time<completed->completed_time||completed->completed_time<level.previousTime||
+       !G_Cod1PlayerLifetimeSameCompleted(completed))return 0;
+    *out=*completed;return 1;
 }
 static int GscTestGraphCurrent(int prepared){
  GscSessionSnapshot s;
@@ -1125,7 +1140,7 @@ static void GscTestInitPhase( int levelTime,int early ) {
     GscTestPrecacheStringReset();
     GscTestTagFxReset();
     GscTestSaveReset();
-    GscTestItemReset();
+    GscTurretPrecacheReset();GscTestItemReset();
     GscTestAmbientReset();
     GscTestDebugLineReset();
     GscTestDebugTextReset();
@@ -1183,6 +1198,7 @@ static void GscTestInitPhase( int levelTime,int early ) {
         char map[64];trap_Cvar_VariableStringBuffer("mapname",map,sizeof(map));map[sizeof(map)-1]=0;
         if(strcmp(map,"training")){G_Printf("[R229] Training profile held on next map; briefing GSC not selected\n");GscTestLeave();return;}
     }
+    if(GscTestBriefingSelection())gscSoundStreamedSelected=COD1_SS_CAMPAIGN_VOICE_PROFILE;
     if(gscTestEntityMode==43) {
         if(!early){
             trap_Cvar_Register(&gscTestAiArrays,"g_cod1GscAiArrays","0",0);
@@ -1225,7 +1241,7 @@ static void GscTestInitPhase( int levelTime,int early ) {
         gscTestMapEpoch=G_Cod1EntityMapEpoch();gscTestNamespaceStartOriginQueries=0;
         gscTestSession=GscTestCreateMode40(&host,error,sizeof(error));
         if(gscTestSession &&
-           (!gsc_session_select_r198_execution(gscTestSession,G_Cod1PlayerNativeHost(),error,sizeof(error)) ||
+           (!gsc_session_select_r198_execution(gscTestSession,G_Cod1PlayerNativeHost(),error,sizeof(error)) || !gsc_session_select_player_stance_permissions(gscTestSession,error,sizeof(error)) ||
             !gsc_session_select_r199_node_queries(gscTestSession,G_Cod1NodeQueryHost(),error,sizeof(error)) ||
             !GscTestAnimationNamespaceSelect(error,sizeof(error)) ||
             !GscTestNamespaceStartOriginSelect(error,sizeof(error)))) {
@@ -1247,7 +1263,7 @@ static void GscTestInitPhase( int levelTime,int early ) {
         gscTestMapEpoch=G_Cod1EntityMapEpoch();gscTestSpawnerPoseWrites=0;
         gscTestSession=GscTestCreateMode40(&host,error,sizeof(error));
         if(gscTestSession &&
-           (!gsc_session_select_r198_execution(gscTestSession,G_Cod1PlayerNativeHost(),error,sizeof(error)) ||
+           (!gsc_session_select_r198_execution(gscTestSession,G_Cod1PlayerNativeHost(),error,sizeof(error)) || !gsc_session_select_player_stance_permissions(gscTestSession,error,sizeof(error)) ||
             !gsc_session_select_r199_node_queries(gscTestSession,G_Cod1NodeQueryHost(),error,sizeof(error)) ||
             !GscTestStartOriginSelect(error,sizeof(error)))) {
             G_Printf("[GSC R210] spawner-origin selection failed: %s\n",error);
@@ -1267,7 +1283,7 @@ static void GscTestInitPhase( int levelTime,int early ) {
     if((gscTestEntityMode==40||(gscTestEntityMode==41||(gscTestEntityMode==42||gscTestEntityMode==43)))) {
         gscTestSession=GscTestCreateMode40(&host,error,sizeof(error));
         if((gscTestEntityMode==41||(gscTestEntityMode==42||gscTestEntityMode==43))&&gscTestSession&&
-           (!gsc_session_select_r198_execution(gscTestSession,GSC_TEST_R216_PLAYER_HOST,error,sizeof(error))||
+           (!gsc_session_select_r198_execution(gscTestSession,GSC_TEST_R216_PLAYER_HOST,error,sizeof(error)) || !gsc_session_select_player_stance_permissions(gscTestSession,error,sizeof(error))||
             !gsc_session_select_r198_entity_operations(gscTestSession,G_Cod1EntityDeleteHost(),error,sizeof(error))||
             !gsc_session_select_origin_method(gscTestSession,G_Cod1OriginMethodHost(),error,sizeof(error))||
             !gsc_session_select_r198_spatial_natives(gscTestSession,GSC_TEST_R232_SPATIAL_HOST,error,sizeof(error)))) {
@@ -1278,9 +1294,36 @@ static void GscTestInitPhase( int levelTime,int early ) {
             G_Printf("[GSC R199] node selection failed: %s\n",error);GscTestDrop();GscTestLeave();return;
         }
         if((gscTestEntityMode==42||gscTestEntityMode==43))G_Printf("[GSC R199] mode42 node queries selected\n");
+        if((gscTestEntityMode==42||gscTestEntityMode==43)&&gscTestSession&&
+           !gsc_session_select_vehicle_nodes(gscTestSession,G_Cod1VehicleNodeHost(),error,sizeof(error))){
+            G_Printf("[GSC class3] vehicle node selection failed: %s\n",error);GscTestDrop();GscTestLeave();return;
+        }
+        if(gscTestSession&&(!strcmp(path,"maps/vehicle_factory_probe.gsc")||!strcmp(path,"maps/pathfinder.gsc"))&&(!gsc_session_select_vehicle_spawn(gscTestSession,&gscVehicleHost,error,sizeof(error))||!gsc_session_select_vehicle_methods(gscTestSession,&gscVehicleMethods,error,sizeof(error)))){GscTestDrop();GscTestLeave();return;}
+        if(gscTestSession&&(!strcmp(path,"maps/vehicle_factory_probe.gsc")||!strcmp(path,"maps/pathfinder.gsc"))){
+         GscMapExecutionCertificate map={G_Cod1EntityMapEpoch(),GscCampaignProgramCurrent};
+         if(!gsc_session_select_root_map(gscTestSession,&map,error,sizeof(error))||!gsc_session_select_r237_frame_buckets(gscTestSession,error,sizeof(error))||
+            !gsc_session_select_r243_thread_start(gscTestSession,error,sizeof(error))||
+            !gsc_session_select_r243_same_bucket_wait(gscTestSession,error,sizeof(error))||
+            !gsc_session_select_r243_thread_entities(gscTestSession,G_Cod1ScriptThreadAuthorityHost(),error,sizeof(error))){G_Printf("[vehicle] frame selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+         if(!gsc_session_select_r216_yaw(gscTestSession,G_Cod1YawMotionHost(),error,sizeof(error))){G_Printf("[Campaign] script rotation selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+         if(!gsc_session_select_map_moveto(gscTestSession,error,sizeof(error))){G_Printf("[Campaign] moveto selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+         if(!gsc_session_select_map_source_float(gscTestSession,error,sizeof(error))){G_Printf("[Campaign] map arithmetic refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+         if(!gsc_session_select_bullet_trace(gscTestSession,&gscBulletTraceHost,error,sizeof(error))){G_Printf("[Campaign] bulletTrace selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+         if(!gsc_session_select_weapon_classname(gscTestSession,G_Cod1WeaponClassnameHost(),error,sizeof(error))){G_Printf("[Campaign] weapon classname selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+         {char none[128];if(!G_Cod1QueryWeaponModel("none",none,error,sizeof(error))&&(!(gscTestPreparingEarly?G_Cod1SelectCWWeaponModelsForProgram(&map,error,sizeof(error)):G_Cod1SelectCWWeaponModels(error,sizeof(error)))||!G_Cod1QueryWeaponModel("none",none,error,sizeof(error)))){G_Printf("[Campaign] weapon model resources refused: %s\n",error);GscTestDrop();GscTestLeave();return;}if(none[0]){GscTestDrop();GscTestLeave();return;}error[0]=0;
+          if(!gsc_session_select_map_weapon_model(gscTestSession,G_Cod1WeaponModelHost(),error,sizeof(error))){G_Printf("[Campaign] map weapon model selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}}
+         if(!gsc_session_select_model_part(gscTestSession,&gscMapModelPartHost,error,sizeof(error))){G_Printf("[Campaign] model part selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+         if(!gsc_session_select_map_actor_presence(gscTestSession,G_Cod1ActorPresenceHost(),error,sizeof(error))){G_Printf("[Campaign] map actor presence selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+         if(!gsc_session_select_turret_precache(gscTestSession,GscTurretPrecacheProvider(),error,sizeof(error))){G_Printf("[Campaign] turret precache selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+         if(!gsc_session_select_turret_spawn(gscTestSession,&gscTurretFactoryHost,error,sizeof(error))){G_Printf("[Campaign] turret factory selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+
+         if(!GscMapAnimationNamespace(error,sizeof(error))){G_Printf("[Campaign] map declarations refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+         gscVehicleFramesSelected=1;
+        }
+
         if(gscTestEntityMode==43&&gscTestSession&&
            (!gsc_session_select_r200_hud_elements(gscTestSession,&gscTestHudHost,error,sizeof(error))||
-            !gsc_session_select_r200_entity_collision(gscTestSession,G_Cod1R200CollisionHost(),error,sizeof(error)))){
+            (!gsc_session_select_r200_entity_collision(gscTestSession,G_Cod1R200CollisionHost(),error,sizeof(error)) || !gsc_session_select_connectpaths(gscTestSession,GscTestConnectPaths)||!gsc_session_select_disconnectpaths(gscTestSession,GscTestDisconnectPaths)))){
             G_Printf("[GSC R200] HUD/collision selection failed: %s\n",error);GscTestDrop();GscTestLeave();return;
         }
         if(gscTestEntityMode==43)G_Printf("[GSC R200] mode43 real HUD stopwatch and brush collision selected\n");
@@ -1311,13 +1354,19 @@ static void GscTestInitPhase( int levelTime,int early ) {
                     strcpy(plan.module_roots[plan.module_count++],module);
                 }
             }
-            if(!gsc_session_select_actor_program(gscTestSession,&plan,error,sizeof(error))){
+            if(!((!strcmp(path,"maps/pathfinder.gsc"))?gsc_session_select_map_actor_program(gscTestSession,&plan,error,sizeof(error)):gsc_session_select_actor_program(gscTestSession,&plan,error,sizeof(error)))){
                 G_Printf("[GSC R71] Actor program selection failed: %s\n",error);GscTestDrop();GscTestLeave();return;
             }
             if(trap_Cvar_VariableIntegerValue("g_cod1GscGraphStartup")==1&&
                !gsc_session_select_owned_wait_delivery(gscTestSession,error,sizeof(error))){
                 G_Printf("[GSC R113] native wait delivery selection failed: %s\n",error);GscTestDrop();GscTestLeave();return;
             }
+            if(!strcmp(path,"maps/pathfinder.gsc")&&!gsc_session_select_map_actor_animations(gscTestSession,G_Cod1ActorComposedAnimationHost(),error,sizeof(error))){G_Printf("[Campaign] Actor animation selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+            if(!strcmp(path,"maps/pathfinder.gsc")&&(!gsc_session_select_r233_actor_animation_end(gscTestSession,error,sizeof(error))||!gsc_session_select_map_flagged_all(gscTestSession,error,sizeof(error)))){G_Printf("[Campaign] named animation selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+            if(!strcmp(path,"maps/pathfinder.gsc")&&!gsc_session_select_map_actor_look(gscTestSession,G_Cod1ActorLookHost(),error,sizeof(error))){G_Printf("[Campaign] Actor look selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+            if(!strcmp(path,"maps/pathfinder.gsc")&&!gsc_session_select_map_script_state(gscTestSession,G_Cod1ActorScriptStateHost(),error,sizeof(error))){G_Printf("[Campaign] Actor tracking selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+            if(!strcmp(path,"maps/pathfinder.gsc")&&(!gsc_session_select_r222_actor_goal(gscTestSession,G_Cod1ActorGoalHost(),error,sizeof(error))||!gsc_session_select_entity_goal(gscTestSession))){G_Printf("[Campaign] Actor goal selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
+            if(!strcmp(path,"maps/pathfinder.gsc")&&!gsc_session_select_map_actor_goal(gscTestSession,error,sizeof(error))){G_Printf("[Campaign] map vector goal selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
             G_Printf("[GSC R203] original actor constructor prefix selected; full AI controller remains unavailable\n");
         }
         if(gscTestEntityMode==43 && gscTestSession &&
@@ -1628,7 +1677,7 @@ static void GscTestInitPhase( int levelTime,int early ) {
        (!gsc_session_select_r216_yaw(gscTestSession,G_Cod1YawMotionHost(),error,sizeof(error))||
         (!early&&!G_Cod1EntitySelectCarbineSpawn(G_Cod1SpawnTrainingWeapon))||
         !gsc_session_select_r222_carbine_items(gscTestSession,error,sizeof(error))||
-        !gsc_session_select_r222_actor_goal(gscTestSession,G_Cod1ActorGoalHost(),error,sizeof(error)))){
+        (!gsc_session_select_r222_actor_goal(gscTestSession,G_Cod1ActorGoalHost(),error,sizeof(error))||!gsc_session_select_entity_goal(gscTestSession)))){
         G_Printf("R222 carbine capabilities refused: %s\n",error);GscTestDrop();GscTestLeave();return;
     }
     if(gscTestCarbine.followup&&!gsc_session_select_r225_training_followup(gscTestSession,error,sizeof(error))){G_Printf("R225 hint selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
@@ -1638,8 +1687,9 @@ static void GscTestInitPhase( int levelTime,int early ) {
     }
     {int selected=trap_Cvar_VariableIntegerValue("g_cod1GscMoveDelta");
      if(selected!=0&&selected!=1){G_Printf("[R129] invalid GetMoveDelta selector\n");GscTestDrop();GscTestLeave();return;}
+     if(early&&gscTestTurret.nativeThreads&&gscTestCarbine.opening&&GscTestOriginalTrainingPath(path))selected=1;
      if(selected&&(!early||!R243GameMoveDeltaPrepare()||!gsc_session_select_r243_move_delta(gscTestSession,R243GameMoveDeltaHost(),error,sizeof(error)))){G_Printf("[R129] GetMoveDelta bank/Session selection refused\n");GscTestDrop();GscTestLeave();return;}}
-    {int enemy=trap_Cvar_VariableIntegerValue("g_cod1GscActorFloatQuery"),path=trap_Cvar_VariableIntegerValue("g_cod1GscApproxPathDist");unsigned methods=(enemy?2u:0u)|(path?1u:0u);
+    {int enemy=trap_Cvar_VariableIntegerValue("g_cod1GscActorFloatQuery"),path=trap_Cvar_VariableIntegerValue("g_cod1GscApproxPathDist");unsigned methods=((enemy||gscTestTurret.nativeThreads)?2u:0u)|(path?1u:0u)|(gscTestTurret.nativeThreads?4u:0u);
      if((enemy!=0&&enemy!=1)||(path!=0&&path!=1)||(methods&&(!gscTestTurret.selected||!gscTestTurret.programSelected||!gsc_session_select_r243_actor_float_methods(gscTestSession,R243GameActorFloatHost(),methods,error,sizeof(error))))){G_Printf("[R130] Actor float Session selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}}
     /* T04: explicit Training opening admits normal health and loadout hands.
      * No Actor health or original full-root admission is inferred. */
@@ -1647,6 +1697,7 @@ static void GscTestInitPhase( int levelTime,int early ) {
         G_Printf("R243 player startup capabilities refused: %s\n",error);
         GscTestDrop();GscTestLeave();return;
     }
+    if(gscVehicleFramesSelected&&!GscMapItemSelect(error,sizeof(error))){G_Printf("[Campaign] item services selection refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
     if(gscTestEntityMode==43&&trap_Cvar_VariableIntegerValue("g_cod1GscActorPrefix")==1){
         GscSessionNodeProgramPlan nodes;
         if(!G_Cod1EarlyNodeProgramPlan(&nodes)){G_Printf("[GSC R73] early node declarations unavailable\n");GscTestDrop();GscTestLeave();return;}
@@ -1692,10 +1743,12 @@ admit_program:
     if (readonlyContext.map.current && readonlyContext.animation.current) {
         readonlyContext.frame_active=GscTestReadOnlyFrameActive;
         G_Cod1BindReadOnlyActor(&readonlyContext);
-        gsc_session_bind_readonly_context(gscTestSession,gscTestId,G_Cod1EntityHost(),&readonlyContext);
+        gsc_session_bind_scan(gscTestSession,gscTestId,G_Cod1EntityHost(),&readonlyContext,
+            gscTestEntityMode==43 && trap_Cvar_VariableIntegerValue("g_cod1GscBspConstruct")==1);
     }
     if(gscTestEarlyProgram.consumed&&gscTestEarlyProgram.epoch==G_Cod1EntityMapEpoch()&&
        (!GscTestEarlyCurrent()||gscTestStopRequested)){G_Printf("[GSC R76] early configuration retired before constructors\n");GscTestDrop();GscTestLeave();return;}
+    if(gscVehicleFramesSelected&&!GscMapLengthResources(error,sizeof(error))){G_Printf("[Campaign] animation length precache refused: %s\n",error);GscTestDrop();GscTestLeave();return;}
     G_Printf("[GSC R77] prepared %s (no effects during load)\n", path);
     if(trap_Cvar_VariableIntegerValue("g_cod1GscBspConstruct")==1)G_Printf("[GSC R109] retained BSP runtime promoted in place; private fields preserved, no constructor replay\n");
     /* Distinct synchronous constructor handoff. Original per-BSP scheduling
@@ -1748,6 +1801,7 @@ static void GscTestStartPrepared(int levelTime){
         G_Printf("[GSC R114] scene marker refused before start: %s\n",error);
         GscTestDrop();GscTestLeave();return;
     }
+    {char probePath[128];trap_Cvar_VariableStringBuffer("g_cod1GscTestScript",probePath,sizeof(probePath));if((!strcmp(probePath,"maps/vehicle_factory_probe.gsc")||!strcmp(probePath,"maps/pathfinder.gsc"))&&!GscVehicleResourcesBegin()){G_Printf("[vehicle] resource bank refused\n");GscTestDrop();GscTestLeave();return;}}
     if((gscTestEntityMode==22 || gscTestEntityMode==23 || gscTestEntityMode==24 || gscTestEntityMode==25 || (gscTestEntityMode==26 || (gscTestEntityMode==27 || (gscTestEntityMode==28 || (gscTestEntityMode==29 || (gscTestEntityMode==30 || (gscTestEntityMode==31 || (gscTestEntityMode==32 || (gscTestEntityMode==33 || (gscTestEntityMode==34 || gscTestEntityMode==35 || gscTestEntityMode==36 || gscTestEntityMode==37 || gscTestEntityMode==38 || gscTestEntityMode==39 || (gscTestEntityMode==40||(gscTestEntityMode==41||(gscTestEntityMode==42||gscTestEntityMode==43))))))))))))) && !GscTestFxBegin(error,sizeof(error))) {
         G_Printf("[GSC R115] FX scene refused before start: %s\n",error);
         GscTestDrop();GscTestLeave();return;
@@ -1789,8 +1843,10 @@ static void GscTestStartPrepared(int levelTime){
     }
     {cod1LocalizedStartup_t scope;int scoped=gscTestClientStartup.phase==2,ended=1;uint64_t serial=gscTestClientStartup.serial;
     if(scoped&&!GscTestClientStartupBegin(&scope)){G_Printf("[GSC R104] connected startup scope refused\n");GscTestDrop();GscTestLeave();return;}
-    started = GscTestGraphExecuteItems(error,sizeof(error)) && gsc_session_start(gscTestSession, gscTestId, (int64_t)levelTime,
+    started = GscMapItemBegin(error,sizeof(error)) && GscTestGraphExecuteItems(error,sizeof(error)) && gsc_session_start(gscTestSession, gscTestId, (int64_t)levelTime,
                            error, sizeof(error));
+    if(started && gscTestCarbine.selected)
+        started=GscTestRegisterPlacedWeapons(error,sizeof(error));
     if(scoped){scope.operation=COD1_LOCALIZED_STARTUP_END;ended=trap_Cod1LocalizedStartup(&scope);
       if(ended&&started&&gscTestClientStartup.serial==serial&&gscTestClientStartup.phase==2&&!gscTestClientStartup.cancelled)gscTestClientStartup.phase=3;else started=0;
       if(!ended)GscTestError(error,sizeof(error),"localized startup scope lost its owner");}
@@ -1823,6 +1879,29 @@ static void GscTestStartPrepared(int levelTime){
     G_Printf("[GSC R77] started at game time %dms\n", levelTime);
     GscTestCheckCompleted(); GscTestLeave();
 }
+
+/* New-map configuration precedes actor census, DATA capture and all script
+ * loading. No live Session is reconfigured. Scripts stay in original VFS. */
+void G_Cod1GscCampaignMapProfile(void){
+ char map[MAX_QPATH],path[MAX_QPATH];unsigned i;
+ static const char*off[]={"g_cod1GscActorPrefix","g_cod1GscAiArrays","g_cod1GscDeleteTransactions","g_cod1GscTrainingGrenades","g_cod1GscTrainingCarbine","g_cod1GscR232Turret","g_cod1GscTrainingFinale","g_cod1GscTrainingOpening","g_cod1GscNativeThreads","g_cod1GscPlacedInit","g_cod1GscPlacedCurrentState","g_cod1GscPlacedCohort","g_cod1GscGraphStartup","g_cod1GscBspConstruct","g_cod1GscMoodyCharacter","g_cod1GscTrainingRigs"};
+ if(gscTestSession||gscTestBusy||level.restarted||g_gametype.integer!=GT_SINGLE_PLAYER||trap_Cvar_VariableIntegerValue("savegame_loading")||trap_Cvar_VariableIntegerValue("g_cod1GscTest")!=1||GscTestEntityModeValue()!=43)return;
+ trap_Cvar_VariableStringBuffer("mapname",map,sizeof(map));trap_Cvar_VariableStringBuffer("g_cod1GscTestScript",path,sizeof(path));
+ if(!strcmp(map,"us_intro")&&GscTestOriginalTrainingPath(path)){
+  for(i=0;i<sizeof(off)/sizeof(off[0]);i++)trap_Cvar_Set(off[i],"0");
+  trap_Cvar_Set("g_cod1GscTestScript","maps/us_intro.gsc");
+  trap_Cvar_Set("g_cod1GscClientStartup","1");trap_Cvar_Set("g_cod1GscScriptSound","1");
+  trap_Cvar_Set("g_cod1GscSoundNotify","1");trap_Cvar_Set("g_cod1GscStreamedVoice","1");
+  G_Printf("[Campaign] map entry selected original maps/us_intro.gsc\n");
+ }
+ if(!strcmp(map,"pathfinder")&&!strcmp(path,"maps/pathfinder.gsc")){
+  trap_Cvar_Set("g_cod1GscAiArrays","1");
+  trap_Cvar_Set("g_cod1GscDeleteTransactions","1");
+  trap_Cvar_Set("g_cod1GscActorPrefix","1");trap_Cvar_Set("g_cod1GscGraphStartup","1");trap_Cvar_Set("g_cod1GscBspConstruct","1");
+  G_Printf("[Campaign] Pathfinder early original program and real Actor/node construction selected\n");
+ }
+}
+
 int G_Cod1GscTestPrepareBeforeBsp(int levelTime){
     const GscSessionActorProgramPlan *plan;
     if(!GscTestEarlySelected())return 1;
@@ -1906,67 +1985,146 @@ int G_Cod1GscTestPreparePlacedResources(void){
   G_Cod1ActorPlacedCurrentResourcesLoad()&&GscTestEarlyCurrent()&&level.spawning&&!level.restarted;
 }
 #include "g_cod1_native_thread_frame.inc"
-void G_Cod1GscTestRunFrame( int levelTime ) {
-#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
-    G_Cod1LookAtRunFrame();
-#endif
-    char error[GSC_SESSION_ERROR_CAP]={0};
-    if (!GscTestEnter()) return;
-    if (!gscTestSession) { GscTestLeave(); return; }
-    if(GscTestGraphPendingFrame(levelTime))return;
-    if(GscTestClientStartupFrame(levelTime))return;
-#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
-    if(!gscTestCompleted && gscTestGrenades.selected && !GscTestGrenadeBootstrap(error,sizeof(error))) {
-        G_Printf("[R216] grenade bootstrap/currentness failed: %s\n",error);
-        GscTestDrop();GscTestLeave();return;
-    }
-#endif
-    if ((gscSoundStreamedSelected&&trap_Cvar_VariableIntegerValue("g_cod1GscStreamedVoice")!=1)||(gscTestFinaleSelected&&trap_Cvar_VariableIntegerValue("g_cod1GscTrainingFinale")!=1)||(gscTestCarbine.opening&&trap_Cvar_VariableIntegerValue("g_cod1GscTrainingOpening")!=1)||(gscSoundNotifySelected&&trap_Cvar_VariableIntegerValue("g_cod1GscSoundNotify")!=1)||(gscTestCarbine.selected && trap_Cvar_VariableIntegerValue("g_cod1GscTrainingCarbine")!=1) || (gscTestDeleteTransactionsSelected && trap_Cvar_VariableIntegerValue("g_cod1GscDeleteTransactions")!=1) ||
+static int GscTestFrameSelectionRetired(void){
+    return (gscSoundStreamedSelected&&trap_Cvar_VariableIntegerValue("g_cod1GscStreamedVoice")!=1)||(gscTestFinaleSelected&&trap_Cvar_VariableIntegerValue("g_cod1GscTrainingFinale")!=1)||(gscTestCarbine.opening&&trap_Cvar_VariableIntegerValue("g_cod1GscTrainingOpening")!=1)||(gscSoundNotifySelected&&trap_Cvar_VariableIntegerValue("g_cod1GscSoundNotify")!=1)||(gscTestCarbine.selected && trap_Cvar_VariableIntegerValue("g_cod1GscTrainingCarbine")!=1) || (gscTestDeleteTransactionsSelected && trap_Cvar_VariableIntegerValue("g_cod1GscDeleteTransactions")!=1) ||
         (gscTestActorPrefixEpoch && trap_Cvar_VariableIntegerValue("g_cod1GscActorPrefix")!=1) ||
         trap_Cvar_VariableIntegerValue("g_cod1GscTest") != 1 ||
         GscTestEntityModeValue() != gscTestEntityMode ||
         trap_Cvar_VariableIntegerValue("savegame_loading") != 0 ||
         level.restarted || ((gscTestEntityMode==44 || gscTestEntityMode==45 || gscTestEntityMode==46 || gscTestEntityMode==47) && (!gscTestMapEpoch || gscTestMapEpoch!=G_Cod1EntityMapEpoch())) || ((gscTestEntityMode==30 || (gscTestEntityMode==31 || (gscTestEntityMode==32 || (gscTestEntityMode==33 || (gscTestEntityMode==34 || gscTestEntityMode==35 || gscTestEntityMode==36 || gscTestEntityMode==37 || gscTestEntityMode==38 || gscTestEntityMode==39 || (gscTestEntityMode==40||(gscTestEntityMode==41||(gscTestEntityMode==42||gscTestEntityMode==43)))))))) &&
-            (!gscTestMapEpoch || gscTestMapEpoch!=G_Cod1EntityMapEpoch()))) {
+            (!gscTestMapEpoch || gscTestMapEpoch!=G_Cod1EntityMapEpoch()));
+}
+static int GscTestBeginFrame(int levelTime,char *error){
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+    G_Cod1LookAtRunFrame();
+#endif
+    if (!GscTestEnter()) return 0;
+    if (!gscTestSession) { GscTestLeave(); return 0; }
+    if(gscChangeLevel.phase==3){GscTestLeave();return 0;}
+    if(GscTestGraphPendingFrame(levelTime))return 0;
+    if(GscTestClientStartupFrame(levelTime))return 0;
+#if defined(COD1_GSC_R216_GAMEPLAY_WIP) && COD1_GSC_R216_GAMEPLAY_WIP
+    if(!gscTestCompleted && gscTestGrenades.selected && !GscTestGrenadeBootstrap(error,GSC_SESSION_ERROR_CAP)) {
+        G_Printf("[R216] grenade bootstrap/currentness failed: %s\n",error);
+        GscTestDrop();GscTestLeave();return 0;
+    }
+#endif
+    if(GscTestFrameSelectionRetired()) {
         G_Printf("[GSC R77] stopped: disabled, save load or level restart\n");
-        GscTestDrop(); GscTestLeave(); return;
+        GscTestDrop(); GscTestLeave(); return 0;
     }
-    if(gscTestCompleted){GscTestLeave();return;}
-    if(!GscSoundNotifyFlush(levelTime,error,sizeof(error))){G_Printf("[R227] sound completion failed: %s\n",error);GscTestDrop();GscTestLeave();return;}
-    {int profile=trap_Cvar_VariableIntegerValue("g_cod1GscProfile"),begin=trap_Milliseconds(),advanced=1;
-    if (!gscTestCompleted && !GscTestNativeFrameAdvance(levelTime,&advanced,error,sizeof(error))) {
-        G_Printf("[GSC R77] frame failed: %s\n", error);
-        GscTestDrop(); GscTestLeave(); return;
-    }
-    if(profile)G_Printf("[R235 profile] time=%d session ms=%d\n",levelTime,trap_Milliseconds()-begin);
-    if(!advanced){GscTestLeave();return;}}
+    if(!GscChangeFrame()){G_Printf("[Campaign] changelevel frame ownership refused\n");GscTestDrop();GscTestLeave();return 0;}
+    if(gscTestCompleted||gscChangeLevel.phase==3){GscTestLeave();return 0;}
+    if(!GscSoundNotifyFlush(levelTime,error,GSC_SESSION_ERROR_CAP)){G_Printf("[R227] sound completion failed: %s\n",error);GscTestDrop();GscTestLeave();return 0;}
+    return 1;
+}
 
-    if ((gscTestEntityMode==20 || gscTestEntityMode==21 || (gscTestEntityMode==22 || gscTestEntityMode==23 || gscTestEntityMode==24 || gscTestEntityMode==25 || (gscTestEntityMode==26 || (gscTestEntityMode==27 || (gscTestEntityMode==28 || (gscTestEntityMode==29 || (gscTestEntityMode==30 || (gscTestEntityMode==31 || (gscTestEntityMode==32 || (gscTestEntityMode==33 || (gscTestEntityMode==34 || gscTestEntityMode==35 || gscTestEntityMode==36 || gscTestEntityMode==37 || gscTestEntityMode==38 || gscTestEntityMode==39 || (gscTestEntityMode==40||(gscTestEntityMode==41||(gscTestEntityMode==42||gscTestEntityMode==43)))))))))))))) && !GscTestBlastEventsFlush(error,sizeof(error))) {
-        G_Printf("[GSC R113] combat delivery failed after committed damage: %s\n",error);
-        GscTestDrop();GscTestLeave();return;
+static int GscTestFinishFrame(void){
+    memset(&gscFrameCursor,0,sizeof(gscFrameCursor));
+    GscTestLeave();
+    return 1;
+}
+
+static int (*gscFrameDeadline)(void);
+static int GscTestFrameExpired(void){
+    /* A synchronous host callback can request retirement. Let the running
+     * operation reach its original refusal/cleanup path first. */
+    return !gscTestStopRequested && gscFrameDeadline();
+}
+static int GscTestPauseFrame(void){
+    GscTestLeave();
+    return 0;
+}
+
+static int GscTestResumeFrame(int now){
+    int vmNext;
+    if(level.time!=now || level.restarted || !gscTestSession || gscTestId!=gscFrameCursor.sessionId)return 0;
+    if(gscFrameCursor.generation){
+        /* This certificate includes the selected map, native threads, script
+         * path, course settings and developer mode. It also admits a completed
+         * Session whose committed damage/save queues are still due in POST. */
+        if(!gscTestTurret.nativeThreads || !GscTestEarlyCurrent())return 0;
+    }else if(GscTestFrameSelectionRetired())return 0;
+    vmNext=gscFrameCursor.stage==GSC_FRAME_NATIVE &&
+          (gscFrameCursor.nativeStage==NATIVE_CURRENT || gscFrameCursor.nativeStage==NATIVE_EXCLUSIVE);
+    return vmNext || gsc_session_resume_game_frame(gscTestSession,gscTestId,now,
+                gscFrameCursor.generation,gscFrameCursor.stage==GSC_FRAME_NATIVE);
+}
+
+int G_Cod1GscTestRunFrameSlice(int levelTime,int (*deadline)(void)){
+    int (*expired)(void)=deadline?GscTestFrameExpired:NULL;
+    char error[GSC_SESSION_ERROR_CAP]={0};
+    int advanced=1,result;
+    if(gscFrameCursor.stage==GSC_FRAME_BEGIN){
+        if(!GscTestBeginFrame(levelTime,error))return 1;
+        gscFrameCursor.sessionId=gscTestId;
+        gscFrameCursor.profile=trap_Cvar_VariableIntegerValue("g_cod1GscProfile");
+        gscFrameCursor.stage=GSC_FRAME_NATIVE;
+    }else{
+        if(!GscTestEnter())return 0;
+        if(!GscTestResumeFrame(levelTime)){
+            G_Printf("[GSC] paused frame lost its owner at %d\n",levelTime);
+            GscTestDrop();
+            return GscTestFinishFrame();
+        }
     }
-    if((gscTestEntityMode==29 || (gscTestEntityMode==30 || (gscTestEntityMode==31 || (gscTestEntityMode==32 || (gscTestEntityMode==33 || (gscTestEntityMode==34 || gscTestEntityMode==35 || gscTestEntityMode==36 || gscTestEntityMode==37 || gscTestEntityMode==38 || gscTestEntityMode==39 || (gscTestEntityMode==40||(gscTestEntityMode==41||(gscTestEntityMode==42||gscTestEntityMode==43))))))))) && !GscTestSaveFlush(error,sizeof(error))) {
-        G_Printf("[GSC R123] queued saveGame request dispatch refused: %s\n",error);
-        GscTestDrop();GscTestLeave();return;
+    gscFrameDeadline=deadline;
+    if(gscFrameCursor.stage==GSC_FRAME_NATIVE){
+        unsigned begin=gscFrameCursor.profile?(unsigned)trap_Milliseconds():0;
+        result=gscTestCompleted?1:GscTestNativeFrameAdvance(levelTime,&advanced,expired,error,sizeof(error));
+        if(gscFrameCursor.profile)gscFrameCursor.profileElapsed+=(unsigned)trap_Milliseconds()-begin;
+        if(result==2)return GscTestPauseFrame();
+        if(!result){
+            G_Printf("[GSC R77] frame failed: %s\n",error);
+            GscTestDrop();
+            return GscTestFinishFrame();
+        }
+        if(gscFrameCursor.profile)G_Printf("[R235 profile] time=%d session ms=%d\n",levelTime,(int)gscFrameCursor.profileElapsed);
+        if(!advanced)return GscTestFinishFrame();
+        gscFrameCursor.stage=GSC_FRAME_POST;
+        if(expired && expired())return GscTestPauseFrame();
     }
-    /* Drain already committed damage/save work above even if advance ended the
-     * last task. Then retire before services requiring a running Session. */
-    GscTestCheckCompleted();
-    if(gscTestCompleted||gscTestStopRequested){GscTestLeave();return;}
-    if(gscTestCarbine.moody&&!GscTestMoodyFrame(levelTime,error,sizeof(error))){
-        G_Printf("[R223] Moody motion failed: %s\n",error);GscTestDrop();GscTestLeave();return;
+    if(gscFrameCursor.stage==GSC_FRAME_POST){
+        if ((gscTestEntityMode==20 || gscTestEntityMode==21 || (gscTestEntityMode==22 || gscTestEntityMode==23 || gscTestEntityMode==24 || gscTestEntityMode==25 || (gscTestEntityMode==26 || (gscTestEntityMode==27 || (gscTestEntityMode==28 || (gscTestEntityMode==29 || (gscTestEntityMode==30 || (gscTestEntityMode==31 || (gscTestEntityMode==32 || (gscTestEntityMode==33 || (gscTestEntityMode==34 || gscTestEntityMode==35 || gscTestEntityMode==36 || gscTestEntityMode==37 || gscTestEntityMode==38 || gscTestEntityMode==39 || (gscTestEntityMode==40||(gscTestEntityMode==41||(gscTestEntityMode==42||gscTestEntityMode==43)))))))))))))) && !GscTestBlastEventsFlush(error,sizeof(error))) {
+            G_Printf("[GSC R113] combat delivery failed after committed damage: %s\n",error);
+            GscTestDrop();return GscTestFinishFrame();
+        }
+        if((gscTestEntityMode==29 || (gscTestEntityMode==30 || (gscTestEntityMode==31 || (gscTestEntityMode==32 || (gscTestEntityMode==33 || (gscTestEntityMode==34 || gscTestEntityMode==35 || gscTestEntityMode==36 || gscTestEntityMode==37 || gscTestEntityMode==38 || gscTestEntityMode==39 || (gscTestEntityMode==40||(gscTestEntityMode==41||(gscTestEntityMode==42||gscTestEntityMode==43))))))))) && !GscTestSaveFlush(error,sizeof(error))) {
+            G_Printf("[GSC R123] queued saveGame request dispatch refused: %s\n",error);
+            GscTestDrop();return GscTestFinishFrame();
+        }
+        if(!GscChangeFrame()){G_Printf("[Campaign] changelevel commit refused\n");GscTestDrop();return GscTestFinishFrame();}
+        /* Drain already committed damage/save work above even if advance ended the
+         * last task. Then retire before services requiring a running Session. */
+        GscTestCheckCompleted();
+        if(gscTestCompleted||gscTestStopRequested){return GscTestFinishFrame();}
+        if(gscTestCarbine.moody&&!GscTestMoodyFrame(levelTime,error,sizeof(error))){
+            G_Printf("[R223] Moody motion failed: %s\n",error);GscTestDrop();return GscTestFinishFrame();
+        }
+        gscFrameCursor.stage=GSC_FRAME_ACTORS;
+        if(expired && expired())return GscTestPauseFrame();
     }
-    if(gscTestTurret.selected&&!GscTestTurretFrame(levelTime,error,sizeof(error))){
-        G_Printf("[R232] original turret course frame refused: %s\n",error);GscTestDrop();GscTestLeave();return;
+    if(gscTestTurret.selected){
+        result=GscTestTurretFrame(levelTime,&gscFrameCursor.nextRunner,expired,error,sizeof(error));
+        if(result==2)return GscTestPauseFrame();
+        if(!result){
+            G_Printf("[R232] original turret course frame refused: %s\n",error);
+            GscTestDrop();
+            return GscTestFinishFrame();
+        }
     }
     if(!GscTestFinaleFrame(error,sizeof(error))){
-        G_Printf("[R229] finale frame refused: %s\n",error);GscTestDrop();GscTestLeave();return;
+        G_Printf("[R229] finale frame refused: %s\n",error);GscTestDrop();return GscTestFinishFrame();
     }
     GscTestCheckCompleted();
     if(!gscTestCompleted&&!gscTestStopRequested&&!GscTestLoopFxFrame()){
         G_Printf("[GSC R243] pending loop FX delivery failed\n");GscTestDrop();
     }
-    GscTestLeave();
+    return GscTestFinishFrame();
+}
+
+void G_Cod1GscTestRunFrame(int levelTime){
+    (void)G_Cod1GscTestRunFrameSlice(levelTime,NULL);
 }
 
 static int GscTestEventPlayerReady( const gentity_t *player, int use ) {
@@ -2186,7 +2344,7 @@ void G_Cod1GscTestShutdown( void ) {
     GscTestPrecacheStringReset();
     GscTestTagFxReset();
     GscTestSaveReset();
-    GscTestItemReset();
+    GscTurretPrecacheReset();GscTestItemReset();
     GscTestAmbientReset();
     GscTestDebugLineReset();
     GscTestDebugTextReset();
@@ -2208,7 +2366,7 @@ void G_Cod1GscTestBeforeLoad( void ) {
     GscTestPrecacheStringReset();
     GscTestTagFxReset();
     GscTestSaveReset();
-    GscTestItemReset();
+    GscTurretPrecacheReset();GscTestItemReset();
     GscTestAmbientReset();
     GscTestDebugLineReset();
     GscTestDebugTextReset();
@@ -2230,3 +2388,9 @@ void G_Cod1GscTestBeforeLoad( void ) {
 /* Avoid an empty translation unit in base builds. */
 typedef int cod1_gsc_test_disabled_translation_unit;
 #endif
+
+int G_Cod1MapModelStarting(uint64_t epoch) {
+    return epoch && epoch==G_Cod1EntityMapEpoch() && gscTestResourceInitialization &&
+        !gscTestStopRequested && !level.restarted &&
+        gsc_session_model_starting(gscTestSession,gscTestId,level.time);
+}

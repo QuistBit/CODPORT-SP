@@ -3,6 +3,7 @@ typedef struct {
  const GscActorAnimationRequest*input,*forwarded;GscActorAnimationRequest q;
  int(*current)(void*);void*context;GscActorAnimationHost host;
  GscActorSourceAnimationReceipt receipt;int phase,cancelled;
+ GscActorAnimationRequest gameQ;GscActorAnimationHost provider;int mapped,hostNow;int64_t origin;
 } SessionSourceAnimationLease;
 static int session_source_private(const GscSession*,const void*,size_t);
 static int session_source_begin(GscSession*,const GscActorAnimationRequest*,int(*)(void*),void*,SessionSourceAnimationLease*);

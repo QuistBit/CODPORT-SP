@@ -22,6 +22,8 @@ typedef struct {
  int snapTime,extrapolated,cmdNumber,cmdTime,cmdYaw,cmdPitch,dx,dy;
  int playerFlags,heavy,viewlocked,viewlockedEntity,maxfps,interval,extension;
  int presentStereo,front,intervalCalls,intervalResult;
+ int frameSliceAtSwap, snapTimeAtSwap;
+ int sliceBudget, dueTicks, pendingBeforeDraw;
 } CT241Row;
 static struct {
  int initialized,active,current,count,reason,overflow,invalid,cgLost,cgAck,dumped,busy;
@@ -66,9 +68,21 @@ void CL_R241TraceFrameEnd(void){CT241Row*r=CT241_Current();uint64_t now;
  if(ct241.last>=ct241.deadline)CT241_Stop(1);
 }
 void CL_R241TraceAbort(void){ct241CGDepth=0;if(ct241.active){ct241.invalid=1;CT241_Stop(7);}}
+void CL_R241TraceServerBudget(int budget, int residual, int tickMsec) {
+ CT241Row *row = CT241_Current();
+ if (row && tickMsec > 0) {
+  row->sliceBudget = budget;
+  row->dueTicks = residual / tickMsec;
+ }
+}
 void CL_R241TraceMark(int stage){CT241Row*r=CT241_Current();uint64_t now;
  if(!r||stage<0||stage>=CT241_STAGE_COUNT||!CT241_Clock(&now))return;
  if(stage==CT241_END_ENTER)r->ends++;if(stage==CT241_SWAP_ENTER){r->swaps++;r->front=0;}
+ if (stage == CT241_SV_EXIT) r->pendingBeforeDraw = SV_FrameSlicePending();
+ if (stage == CT241_SWAP_EXIT) {
+  r->frameSliceAtSwap = SV_FrameSlicePending();
+  r->snapTimeAtSwap = cl.snap.serverTime;
+ }
  if(!(r->mask&(1u<<stage))||stage==CT241_END_EXIT||stage==CT241_SWAP_EXIT)r->t[stage]=now;
  r->mask|=1u<<stage;
 }
@@ -103,11 +117,11 @@ static int CT241_Dump(void){fileHandle_t f;char path[80],line[2048];int i,j,ok=1
  if(FS_FileExists(path)||!CT241_ExportCurrent(generation,id)){Com_Printf("R241 trace: existing/stale engine export refused, never overwritten: %s\n",path);return 0;}
  f=FS_FOpenFileWrite(path);if(!f)return 0;if(!CT241_ExportCurrent(generation,id)){FS_FCloseFile(f);return 0;}
  Com_sprintf(line,sizeof(line),"#id=%u,map=%u,pid=%u,frequency="CT241_U64",start="CT241_U64",deadline="CT241_U64",count=%d,reason=%d,overflow=%d,invalid=%d,cg_lost=%d,cg_ack=%d\n",ct241.id,ct241.map,ct241.pid,ct241.frequency,ct241.start,ct241.deadline,ct241.count,ct241.reason,ct241.overflow,ct241.invalid,ct241.cgLost,ct241.cgAck);ok=CT241_Write(f,line,generation,id);if(!ok){FS_FCloseFile(f);return 0;}
- ok&=CT241_Write(f,"frame,partial,begin,end,mask,cap_enter,cap_exit,sv_enter,sv_exit,end_enter,end_exit,swap_enter,swap_exit,cg_count,cg0_stereo,cg0_time,cg0_begin,cg0_end,cg1_stereo,cg1_time,cg1_begin,cg1_end,ends,swaps,state,keycatchers,realtime,frame_msec,raw_msec,server_time,delta,snap_time,extrapolated,cmd_number,cmd_time,cmd_yaw,cmd_pitch,unconsumed_dx,unconsumed_dy,player_flags,heavy,viewlocked,viewlocked_entity,maxfps,swap_interval,swap_extension,present_stereo,front,interval_calls,interval_result\n",generation,id);if(!ok){FS_FCloseFile(f);return 0;}
+ ok&=CT241_Write(f,"frame,partial,begin,end,mask,cap_enter,cap_exit,sv_enter,sv_exit,end_enter,end_exit,swap_enter,swap_exit,cg_count,cg0_stereo,cg0_time,cg0_begin,cg0_end,cg1_stereo,cg1_time,cg1_begin,cg1_end,ends,swaps,state,keycatchers,realtime,frame_msec,raw_msec,server_time,delta,snap_time,extrapolated,cmd_number,cmd_time,cmd_yaw,cmd_pitch,unconsumed_dx,unconsumed_dy,player_flags,heavy,viewlocked,viewlocked_entity,maxfps,swap_interval,swap_extension,present_stereo,front,interval_calls,interval_result,frame_slice_at_swap,snap_time_at_swap,slice_budget_ms,due_ticks,pending_before_draw\n",generation,id);if(!ok){FS_FCloseFile(f);return 0;}
  for(i=0;i<ct241.count;i++){CT241Row*r=ct241.rows+i;int at;
   Com_sprintf(line,sizeof(line),"%d,%d,"CT241_U64","CT241_U64",%u",r->frame,r->partial,r->begin,r->end,r->mask);at=(int)strlen(line);
   for(j=0;j<CT241_STAGE_COUNT;j++){Com_sprintf(line+at,sizeof(line)-at,","CT241_U64,r->t[j]);at=(int)strlen(line);}
-  Com_sprintf(line+at,sizeof(line)-at,",%d,%d,%d,"CT241_U64","CT241_U64",%d,%d,"CT241_U64","CT241_U64",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",r->cgCount,r->stereo[0],r->cgTime[0],r->cgBegin[0],r->cgEnd[0],r->stereo[1],r->cgTime[1],r->cgBegin[1],r->cgEnd[1],r->ends,r->swaps,r->state,r->keyCatchers,r->realtime,r->frameMsec,r->rawMsec,r->serverTime,r->delta,r->snapTime,r->extrapolated,r->cmdNumber,r->cmdTime,r->cmdYaw,r->cmdPitch,r->dx,r->dy,r->playerFlags,r->heavy,r->viewlocked,r->viewlockedEntity,r->maxfps,r->interval,r->extension,r->presentStereo,r->front,r->intervalCalls,r->intervalResult);
+  Com_sprintf(line+at,sizeof(line)-at,",%d,%d,%d,"CT241_U64","CT241_U64",%d,%d,"CT241_U64","CT241_U64",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",r->cgCount,r->stereo[0],r->cgTime[0],r->cgBegin[0],r->cgEnd[0],r->stereo[1],r->cgTime[1],r->cgBegin[1],r->cgEnd[1],r->ends,r->swaps,r->state,r->keyCatchers,r->realtime,r->frameMsec,r->rawMsec,r->serverTime,r->delta,r->snapTime,r->extrapolated,r->cmdNumber,r->cmdTime,r->cmdYaw,r->cmdPitch,r->dx,r->dy,r->playerFlags,r->heavy,r->viewlocked,r->viewlockedEntity,r->maxfps,r->interval,r->extension,r->presentStereo,r->front,r->intervalCalls,r->intervalResult,r->frameSliceAtSwap,r->snapTimeAtSwap,r->sliceBudget,r->dueTicks,r->pendingBeforeDraw);
   ok&=CT241_Write(f,line,generation,id);if(!ok)break;
  }
  if(ok){Com_sprintf(line,sizeof(line),"#END,id=%u,rows=%d\n",ct241.id,ct241.count);ok=CT241_Write(f,line,generation,id);}FS_FCloseFile(f);return ok&&CT241_ExportCurrent(generation,id);

@@ -35,10 +35,10 @@ static void release_except(void *p,void *q){
     if(a->ptr!=p && a->ptr!=q)free(a->ptr);free(a);}
 }
 static qboolean needs_split(const vec3_t a,const vec3_t b,const vec3_t c,float tolerance) {
-    vec3_t d; float length2; int k;
-    for(k=0;k<3;k++) d[k]=(c[k]+a[k])-(b[k]+b[k]);
+    double d[3],length2;int k;
+    for(k=0;k<3;k++) d[k]=((double)c[k]+a[k])-((double)b[k]+b[k]);
     length2=(d[2]*d[2]+d[1]*d[1])+d[0]*d[0];
-    return sqrtf(length2)*0.25f > tolerance;
+    return sqrt(length2)*0.25 > tolerance;
 }
 
 static void subdivide(cGrid_t *g,int tolerance) {
@@ -54,9 +54,10 @@ static void subdivide(cGrid_t *g,int tolerance) {
             VectorCopy(g->points[i][j],a); VectorCopy(g->points[i+1][j],b);
             VectorCopy(g->points[i+2][j],c);
             for(n=0;n<3;n++) {
-                left[n]=(b[n]+a[n])*0.5f;
-                right[n]=(c[n]+b[n])*0.5f;
-                center[n]=(right[n]+left[n])*0.5f;
+                double retainedRight=((double)c[n]+b[n])*0.5;
+                left[n]=C1MLStore(((double)b[n]+a[n])*0.5);
+                right[n]=C1MLStore(retainedRight);
+                center[n]=C1MLStore((retainedRight+left[n])*0.5);
             }
             for(k=g->width-1;k>i+1;k--) VectorCopy(g->points[k][j],g->points[k+2][j]);
             VectorCopy(left,g->points[i+1][j]); VectorCopy(center,g->points[i+2][j]);

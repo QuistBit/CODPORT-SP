@@ -70,3 +70,30 @@ static int GscTestEarlyPending(void){
 static int GscTestScriptRootsCurrent(void*user,uint64_t epoch,uint64_t receipt){
  return user==&gscTestEarlyProgram&&epoch==gscTestEarlyProgram.epoch&&receipt==gscTestEarlyProgram.receipt&&GscTestEarlyCurrent();
 }
+
+/* Compilation resources belong to the captured declaration lifetime. During
+ * BSP construction the program has been prepared but not consumed; afterward
+ * both the early receipt and the ready physical world remain mandatory. */
+typedef struct {
+ unsigned char early[sizeof(gscTestEarlyProgram)];GscSession*session;uint64_t epoch,id;
+ int preparing,spawning,now,count;
+} GscCampaignProgramSeal;
+static int GscCampaignProgramSealed(const GscCampaignProgramSeal*c){
+ return c->epoch==G_Cod1EntityMapEpoch()&&g_gametype.integer==GT_SINGLE_PLAYER&&!level.restarted&&!gscTestStopRequested&&
+  c->preparing==gscTestPreparingEarly&&c->spawning==level.spawning&&c->now==level.time&&c->count==level.num_entities&&c->session==gscTestSession&&c->id==gscTestId&&
+  !memcmp(c->early,&gscTestEarlyProgram,sizeof(c->early));
+}
+static int GscCampaignProgramCurrent(uint64_t epoch){
+ GscCampaignProgramSeal seal;int ok=0;
+ if(!epoch||epoch!=G_Cod1EntityMapEpoch()||g_gametype.integer!=GT_SINGLE_PLAYER||level.restarted||gscTestStopRequested)return 0;
+ memcpy(seal.early,&gscTestEarlyProgram,sizeof(seal.early));seal.session=gscTestSession;seal.id=gscTestId;seal.epoch=epoch;
+ seal.preparing=gscTestPreparingEarly;seal.spawning=level.spawning;seal.now=level.time;seal.count=level.num_entities;
+ if(gscTestEarlyProgram.attempted){
+  /* A retired declaration cannot fall back to an unrelated ordinary map. */
+  if(gscTestEarlyProgram.epoch!=epoch||!GscTestEarlyCurrent()||!GscCampaignProgramSealed(&seal))return 0;
+  if(seal.spawning)ok=!gscTestEarlyProgram.consumed&&
+   (seal.preparing||(gscTestEarlyProgram.prepared&&seal.session&&seal.id==gscTestEarlyProgram.id));
+  else ok=gscTestEarlyProgram.prepared&&gscTestEarlyProgram.consumed&&GscVehicleMapCurrent(epoch)&&GscCampaignProgramSealed(&seal)&&GscTestEarlyCurrent();
+ }else ok=!seal.preparing&&GscVehicleMapCurrent(epoch);
+ return ok&&GscCampaignProgramSealed(&seal);
+}

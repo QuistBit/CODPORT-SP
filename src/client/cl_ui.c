@@ -846,6 +846,9 @@ int CL_UISystemCalls( int *args ) {
 		return 0;
 
 	case UI_CMD_EXECUTETEXT:
+		if ( args[1] == EXEC_NOW ) {
+			SV_FinishFrameSlice();
+		}
 		Cbuf_ExecuteText( args[1], VMA( 2 ) );
 		return 0;
 

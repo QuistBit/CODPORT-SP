@@ -131,17 +131,18 @@ Returns false if the triangle is degenrate.
 The normal will point out of the clock for clockwise ordered points
 =====================
 */
+#include "../../v59_mesh_build_math.h"
 static qboolean CM_PlaneFromPoints( vec4_t plane, vec3_t a, vec3_t b, vec3_t c ) {
 	vec3_t d1, d2;
 
 	VectorSubtract( b, a, d1 );
 	VectorSubtract( c, a, d2 );
-	CrossProduct( d2, d1, plane );
-	if ( VectorNormalize( plane ) == 0 ) {
+	C1MLCross( d2, d1, plane );
+	if ( C1MLNorm( plane ) == 0 ) {
 		return qfalse;
 	}
 
-	plane[3] = DotProduct( a, plane );
+	plane[3] = C1MLStore(C1MLDot(a,plane,0,1,2));
 	return qtrue;
 }
 
@@ -560,7 +561,7 @@ CM_FindPlane
 static int CM_FindPlane( float *p1, float *p2, float *p3 ) {
 	float plane[4];
 	int i;
-	float d;
+	double d;
 
 	if ( !CM_PlaneFromPoints( plane, p1, p2, p3 ) ) {
 		return -1;
@@ -568,21 +569,21 @@ static int CM_FindPlane( float *p1, float *p2, float *p3 ) {
 
 	// see if the points are close enough to an existing plane
 	for ( i = 0 ; i < numPlanes ; i++ ) {
-		if ( DotProduct( plane, planes[i].plane ) < 0 ) {
+		if ( C1MLDot(plane,planes[i].plane,1,2,0) < 0 ) {
 			continue;   // allow backwards planes?
 		}
 
-		d = DotProduct( p1, planes[i].plane ) - planes[i].plane[3];
+		d = C1MLDot(p1,planes[i].plane,2,1,0) - planes[i].plane[3];
 		if ( d < -PLANE_TRI_EPSILON || d > PLANE_TRI_EPSILON ) {
 			continue;
 		}
 
-		d = DotProduct( p2, planes[i].plane ) - planes[i].plane[3];
+		d = C1MLDot(p2,planes[i].plane,2,1,0) - planes[i].plane[3];
 		if ( d < -PLANE_TRI_EPSILON || d > PLANE_TRI_EPSILON ) {
 			continue;
 		}
 
-		d = DotProduct( p3, planes[i].plane ) - planes[i].plane[3];
+		d = C1MLDot(p3,planes[i].plane,2,1,0) - planes[i].plane[3];
 		if ( d < -PLANE_TRI_EPSILON || d > PLANE_TRI_EPSILON ) {
 			continue;
 		}
@@ -609,14 +610,14 @@ CM_PointOnPlaneSide
 */
 static int CM_PointOnPlaneSide( float *p, int planeNum ) {
 	float   *plane;
-	float d;
+	double d;
 
 	if ( planeNum == -1 ) {
 		return SIDE_ON;
 	}
 	plane = planes[ planeNum ].plane;
 
-	d = DotProduct( p, plane ) - plane[3];
+	d = C1MLDot(p,plane,2,1,0) - plane[3];
 
 	if ( d > PLANE_TRI_EPSILON ) {
 		return SIDE_FRONT;
@@ -931,7 +932,7 @@ void CM_AddFacetBevels( facet_t *facet ) {
 		k = ( j + 1 ) % w->numpoints;
 		VectorSubtract( w->p[j], w->p[k], vec );
 		//if it's a degenerate edge
-		if ( VectorNormalize( vec ) < 0.5 ) {
+		if ( C1MLNorm(vec) < 0.5 ) {
 			continue;
 		}
 		CM_SnapVector( vec );
@@ -951,18 +952,18 @@ void CM_AddFacetBevels( facet_t *facet ) {
 				// construct a plane
 				VectorClear( vec2 );
 				vec2[axis] = dir;
-				CrossProduct( vec, vec2, plane );
-				if ( VectorNormalize( plane ) < 0.5 ) {
+				C1MLCross(vec,vec2,plane);
+				if ( C1MLNorm(plane) < 0.5 ) {
 					continue;
 				}
-				plane[3] = DotProduct( w->p[j], plane );
+				plane[3] = C1MLStore(C1MLDot(w->p[j],plane,2,1,0));
 
 				// if all the points of the facet winding are
 				// behind this plane, it is a proper edge bevel
 				hasBehind = 0;
 				for ( l = 0 ; l < w->numpoints ; l++ )
 				{
-					d = DotProduct( w->p[l], plane ) - plane[3];
+					d = C1MLStore(C1MLDot(w->p[l],plane,2,0,1)-plane[3]);
 					if ( d < -0.1 ) hasBehind = 1;
 					if ( d > 0.1 ) {
 						break;  // point in front

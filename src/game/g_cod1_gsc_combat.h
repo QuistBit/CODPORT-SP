@@ -20,6 +20,8 @@ typedef struct GscCombatEventTicket {
 void G_Cod1GscTestCombatCapture(struct gentity_s *owner,
     struct gentity_s *attacker, GscCombatEventTicket *ticket);
 int G_Cod1GscTestCombatCurrent(const GscCombatEventTicket *ticket);
+/* Data-only native actor damage direction, from the actual committed hit. */
+int G_Cod1ActorRecordDamageState(const GscEntityRef*,const float*,int32_t taken,int killed);
 /* Returns native continuation safety, independently of event acceptance.
  * Mode 12 queues damage(amount,attacker) or ordinary combat death(attacker).
  * Zero damage is a no-op. Inputs are copied before engine callbacks.

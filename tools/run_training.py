@@ -12,9 +12,9 @@ def training_command(build, game):
         if not (runtime / name).is_file():
             raise FileNotFoundError(runtime / name)
     profile = build / "profile"
-    for name in ("training_player.cfg", "training.pk3"):
-        if not (profile / "main" / name).is_file():
-            raise FileNotFoundError(profile / "main" / name)
+    config = profile / "main/training_player.cfg"
+    if not config.is_file():
+        raise FileNotFoundError(config)
     if not (game / "main/pak0.pk3").is_file():
         raise FileNotFoundError(game / "main/pak0.pk3")
     settings = {
@@ -22,7 +22,8 @@ def training_command(build, game):
         "fs_game": "main", "r_fullscreen": "0", "r_mode": "-1", "r_customwidth": "800",
         "r_customheight": "600", "r_ignorehwgamma": "1", "sys_cpuMHz": "3000",
         "vm_game": "0", "vm_cgame": "0", "vm_ui": "0", "com_introplayed": "1",
-        "com_maxfps": "60", "developer": "0", "logfile": "1",
+        "com_maxfps": "60", "developer": "0", "logfile": "2",
+        "r_smp": "1", "r_swapInterval": "0",
     }
     command = [str(runtime / "WolfSP.exe")]
     for key, value in settings.items():

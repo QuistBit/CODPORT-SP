@@ -55,7 +55,8 @@ static int CourseWalkingDeleteEntry(const GscEntityRef *ref,const cod1ActorLease
   !(m->oldSvFlags&(SVF_BOT|SVF_CASTAI)) && !a->turretMount.mounted &&
   !a->turretMount.requestedGun.epoch && !a->turretMount.occupiedGun.epoch &&
   p->used && ActorRefEqual(ref,&p->owner) && g->used && !memcmp(&g->lease,lease,sizeof(*lease)) &&
-  g->nodes && g->notify && (C1ScriptedWireValid(&e->s,level.time) || (runner && TrainingElderCurrent(ref) && C1UAW_Valid(&e->s,level.time))) &&
+  g->nodes && g->notify && (C1ScriptedWireValid(&e->s,level.time) ||
+   (ActorLocomotionReady(ref->epoch) && C1SourcePoseWireValid(&e->s,level.time)) || (runner && TrainingElderCurrent(ref) && C1UAW_Valid(&e->s,level.time))) &&
   e->s.cod1TurretActorGeneration==ref->generation &&
   (((uint64_t)(uint32_t)e->s.cod1TurretEpochHi<<32)|(uint32_t)e->s.cod1TurretEpochLo)==ref->epoch;
 }
@@ -106,6 +107,16 @@ static int JumperRetireCommit(const cod1ActorDeleteReceipt_t *r){
    !memcmp(&r->lease,&trainingJumperOwner,sizeof(r->lease))&&
    G_Cod1EntityDeleteRetiredIdentity(&r->entity,&r->lease);
 }
+/* The factory jumper has no placed-actor row. Its exact allocation
+ * carries the normal delete transaction tombstone after G_FreeEntity. */
+int G_Cod1TrainingJumperDeleteCommitted(const GscEntityRef *ref,const cod1ActorLease_t *lease){
+ const Cod1DeleteAttempt *attempt;
+ if(!ref||!lease||ref->slot>=MAX_GENTITIES||cod1EntityDeleteBusy||
+    !ActorRefEqual(ref,&lease->entity)||memcmp(lease,&trainingJumperOwner,sizeof(*lease)))return 0;
+ attempt=&cod1DeleteAttempts[ref->slot];
+ return ActorRefEqual(&attempt->entity,ref)&&attempt->attempted&&attempt->notified&&attempt->retired&&
+    G_Cod1EntityDeleteRetiredIdentity(ref,lease);
+}
 /* The shared transaction stores attempted/notified/retired per allocation. */
 static void JumperRetireFail(const cod1ActorDeleteReceipt_t *r){(void)r;}
 static const cod1ActorDeleteOwnerHooks_t jumperRetireHooks={
@@ -124,7 +135,7 @@ static int RuntimeActorDeleteEntry(const GscEntityRef*ref,const cod1ActorLease_t
   !a->dobj.present||a->dobj.busy||a->modelBusy||a->modelMethodBusy||!m->active||m->model||m->busy||
   m->oldContents||m->oldState.solid||!(m->oldSvFlags&SVF_NOCLIENT)||(m->oldSvFlags&(SVF_BOT|SVF_CASTAI))||
   !e->r.linked||e->r.contents!=CONTENTS_BODY||e->clipmask!=MASK_PLAYERSOLID||!e->s.solid||
-  (e->r.svFlags&(SVF_NOCLIENT|SVF_BOT|SVF_CASTAI))||e->r.bmodel||e->client||e->physicsObject||e->neverFree||e->teamchain||e->teammaster||e->tagParent||e->tagName||
+  (e->r.svFlags&(SVF_BOT|SVF_CASTAI))||e->r.bmodel||e->client||e->physicsObject||e->neverFree||e->teamchain||e->teammaster||e->tagParent||e->tagName||
   (e->team&&e->team[0])||(e->spawnflags&1)||e->aiName||e->aiCharacter||e->aiAttributes||e->AIScript_AlertEntity||e->aiInactive||e->item||
   !a->turretMount.initialized||a->turretMount.serial!=lease->serial||!a->turretMount.mounted||a->turretMount.currentTop||a->turretMount.currentStack[0]!=3||
   !(gun=TurretFind(&a->turretMount.occupiedGun))||!ActorRefEqual(&gun->actor,ref))return 0;
@@ -133,6 +144,14 @@ static int RuntimeActorDeleteEntry(const GscEntityRef*ref,const cod1ActorLease_t
   if(i!=(int)(gun-cod1Turrets))return 0;found++;
  }
  if(found!=1||!e->s.cod1TurretActorVersion||e->s.cod1TurretActorGeneration!=ref->generation)return 0;
+ /* Keyed DObj links retain SVF_NOCLIENT. They are visible through the
+  * mounted actor snapshot. Check the published gun and actor identities
+  * before accepting this body for the existing death/free transaction. */
+ if((e->r.svFlags&SVF_NOCLIENT) &&
+    (!C1TAW_Valid(&e->s,level.time) ||
+     (uint32_t)e->s.cod1TurretActorGun!=gun->owner.slot ||
+     (uint32_t)e->s.cod1TurretActorGunGeneration!=gun->owner.generation ||
+     (((uint64_t)(uint32_t)e->s.cod1TurretEpochHi<<32)|(uint32_t)e->s.cod1TurretEpochLo)!=ref->epoch))return 0;
  /* The owned graph must correspond to this exact current native allocation. */
  return cod1GenericActors[lease->actorIndex].used&&cod1GenericActors[lease->actorIndex].nodes&&cod1GenericActors[lease->actorIndex].notify&&
   !memcmp(&cod1GenericActors[lease->actorIndex].lease,lease,sizeof(*lease));

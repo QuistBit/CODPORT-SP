@@ -1,7 +1,7 @@
 /* R121 complete original compiled item domain. Static strings/nulls and
  * integer fields derive from native_precache_item/STATIC_RAW_FACTS.json.
  * Dynamic rows use the real mounted CW registry: this port supports at most
- * CW_MAX_DEFS32 definitions, not retail's possible64 weapon definitions.
+ * 63 loaded definitions plus the separate native none0 sentinel.
  * No map-specific substitution or inferred classname prefix exists here. */
 #ifndef BG_COD1_ITEM_PRECACHE_H
 #define BG_COD1_ITEM_PRECACHE_H

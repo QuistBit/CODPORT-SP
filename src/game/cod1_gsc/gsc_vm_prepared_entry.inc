@@ -102,3 +102,18 @@ int gsc_execute_constructed_entity(GscRuntime*r,const GscEntityScriptEntry*entry
     runtime_private_overlap(r,out,sizeof(*out))||r->entity_sequence_busy||r->advancing||r->executing_task||r->entity_entry_depth)return 0;
  return execute_entity_entry(r,entry,cert,out);
 }
+
+int gsc_execute_course_anim_entry(GscRuntime *r,const GscEntityScriptEntry *entry,const GscEntityExecutionCertificate *owner,int startingRun,GscEntityScriptRun *out){
+ Value animation={0};
+ GscMapExecutionCertificate map;
+ if(!r||!entry||!owner||!out||!owner->serial||!owner->current||!state_ref_equal(&owner->owner,&entry->entity)||
+    !r->anim_data_enabled||!r->anim_data.receipt||!r->anim_data.current||
+    r->entity_sequence_busy||r->advancing||r->executing_task||r->entity_entry_depth||
+    runtime_private_overlap(r,entry,sizeof(*entry))||runtime_private_overlap(r,owner,sizeof(*owner))||
+    runtime_private_overlap(r,out,sizeof(*out))||Cod1ModelStringOverlap(owner,sizeof(*owner),out,sizeof(*out))||
+    Cod1ModelStringOverlap(entry,sizeof(*entry),out,sizeof(*out)))return 0;
+ map=r->anim_data;
+ if(!anim_data_current(r,NULL)||memcmp(&map,&r->anim_data,sizeof(map)))return 0;
+ (void)startingRun;
+ return execute_entity_values_map_r243(r,entry,owner,&map,NULL,0,out);
+}

@@ -11,6 +11,7 @@ static int EntityLinkPrivate(const void*p,size_t n){return
  ActorOverlap(p,n,&cod1EntityLinkBusy,sizeof(cod1EntityLinkBusy))||ActorOverlap(p,n,&cod1EntityLinkCancelled,sizeof(cod1EntityLinkCancelled))||ActorOverlap(p,n,G_Cod1EntityLinkHost(),sizeof(GscEntityLinkHost));}
 static int EntityLinkSame(const GscEntityRef*a,const GscEntityRef*b){return a->epoch==b->epoch&&a->slot==b->slot&&a->generation==b->generation;}
 static int EntityLinkOwner(const GscEntityRef*r){return r&&r->slot<MAX_GENTITIES&&EntityLinkSame(r,&cod1EntityLinks[r->slot].owner);}
+static int ScriptMotionParent(const GscEntityRef *r){return EntityLinkOwner(r) && cod1EntityLinks[r->slot].parent.epoch!=0;}
 static int EntityLinkMap(void){return cod1EntityReady&&!level.spawning&&!level.restarted&&level.time>=0&&ActorMapAvailable();}
 static int EntityLinkCapable(const GscEntityRef*r){const gentity_t*e;
  if(!EntityLinkMap()||!EntityLinkOwner(r)||!G_Cod1EntitySameAllocation(r))return 0;e=g_entities+r->slot;

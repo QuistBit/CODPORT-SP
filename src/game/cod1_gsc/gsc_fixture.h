@@ -298,7 +298,9 @@ GscProgram *gsc_program_create_with_hud(void);
  * Local script shadowing remains first; receivers, threads and refs unsupported.
  * Both wrappers have undefined script result; they do not retire VM tasks. */
 GscProgram *gsc_program_create_with_mission(void);
-enum { GSC_MISSION_SUCCESS=1, GSC_MISSION_FAILED };
+/* changelevel shares native359B0 request semantics, without success mark.
+ * Selected domain: one/two arguments, no third-argument fade override. */
+enum { GSC_MISSION_SUCCESS=1, GSC_MISSION_FAILED, GSC_MISSION_CHANGELEVEL };
 enum { GSC_MISSION_ARGUMENT=1, GSC_MISSION_REQUEST, GSC_MISSION_SUCCESS_MARK,
        GSC_MISSION_DEATH_FADE, GSC_MISSION_FAILURE_MARK };
 typedef struct { int kind, phase, has_arg1; int32_t arg1; size_t length;
@@ -1546,7 +1548,11 @@ int gsc_program_select_animation_references(GscProgram *);
 int gsc_runtime_select_animation_references(GscRuntime *,const GscAnimationCatalog *,const GscMapExecutionCertificate *);
 /* Explicit declared metadata only; these are not native tree/node identities.
  * Select Program before compile. Runtime retains no catalog pointers. */
-enum { GSC_ANIMATION_NAMESPACE_CATALOGS=3 };
+enum { GSC_ANIMATION_NAMESPACE_CATALOGS=3, GSC_MAP_ANIMATION_CATALOGS=8 };
+typedef struct {unsigned count;char names[GSC_MAP_ANIMATION_CATALOGS][64];} GscMapAnimationNames;
+typedef struct {const GscAnimationCatalog *catalogs[GSC_MAP_ANIMATION_CATALOGS];GscMapExecutionCertificate map_certificate;} GscMapAnimationNamespaceSelection;
+int gsc_program_select_map_animation_namespace(GscProgram*,const GscMapAnimationNames*);
+int gsc_runtime_select_map_animation_namespace(GscRuntime*,const GscMapAnimationNamespaceSelection*);
 typedef struct {const GscAnimationCatalog *catalogs[GSC_ANIMATION_NAMESPACE_CATALOGS];GscMapExecutionCertificate map_certificate;} GscAnimationNamespaceSelection;
 int gsc_program_select_animation_namespace(GscProgram *);
 int gsc_runtime_select_animation_namespace(GscRuntime *,const GscAnimationNamespaceSelection *);
@@ -1690,6 +1696,8 @@ int gsc_notify_entity(GscRuntime *runtime, const GscEntityRef *owner,
                       const char *event, int *out_awakened);
 const char *gsc_runtime_error(const GscRuntime *runtime);
 int gsc_active_threads(const GscRuntime *runtime);
+/* Pure existence query; the exact count API remains unchanged. */
+int gsc_has_active_threads(const GscRuntime *runtime);
 
 /* R124 independently selected playfxOnTag request boundary. Exactly three
  * arguments; GetInt0/range precede entity/model query, then bounded GetString2,
@@ -1909,6 +1917,41 @@ enum { GSC_EXPR_TARGET_ENTITY_QUERY_NATIVE=GSC_EXPR_TARGET_STRUCT_NATIVE+1 };
 enum { GSC_EXPR_TARGET_WEAPON_MODEL_NATIVE=GSC_EXPR_TARGET_ENTITY_QUERY_NATIVE+1 };
 typedef struct { void *user; int (*query)(void *,const char *,char [128],char *,size_t,int (*)(void *),void *); } GscWeaponModelHost;
 /* Append-only selected loaded-weapon classname query, string or undefined. */
+/* Typed global model resource query; result copied into VM-owned text. */
+/* Native spawnVehicle has five getters before allocation. The typed factory
+ * owns construction/rollback; it may not run script or synthesize events.
+ * A nonzero operation must be returned even on failure after reservation.
+ * finish(0) releases exactly that operation and remains valid after the caller
+ * lease expires. finish(1) requires current(); cancellation after failed
+ * publication must also release an already committed matching allocation. */
+enum {GSC_EXPR_TARGET_TURRET_PRECACHE_NATIVE=1006};
+typedef struct {char name[128];uint64_t operation,program;int now_ms;} GscTurretPrecacheRequest;
+typedef struct {void*user;int(*invoke)(void*,const GscTurretPrecacheRequest*,char*,size_t,int(*)(void*),void*);} GscTurretPrecacheHost;
+int gsc_program_select_turret_precache(GscProgram*);
+int gsc_runtime_select_turret_precache(GscRuntime*,const GscTurretPrecacheHost*);
+enum {GSC_EXPR_TARGET_VEHICLE_SPAWN_NATIVE=1003};
+typedef struct {char model[128],targetname[128],definition[128];float origin[3],angles[3];int now_ms;uint64_t program;} GscVehicleSpawnRequest;
+typedef struct {uint64_t operation,program;GscEntityRef entity;} GscVehicleSpawnTicket;
+typedef struct {void*user;
+ int(*prepare)(void*,const GscVehicleSpawnRequest*,GscVehicleSpawnTicket*,char*,size_t,int(*)(void*),void*);
+ int(*finish)(void*,const GscVehicleSpawnTicket*,int,char*,size_t,int(*)(void*),void*);
+} GscVehicleSpawnHost;
+int gsc_program_select_vehicle_spawn(GscProgram*);
+int gsc_runtime_select_vehicle_spawn(GscRuntime*,const GscVehicleSpawnHost*);
+enum {GSC_EXPR_TARGET_TURRET_SPAWN_NATIVE=1005};
+typedef struct {char classname[128],weapon[128];float origin[3];int now_ms;uint64_t program,precache_operation;} GscTurretSpawnRequest;
+typedef struct {uint64_t operation,program;GscEntityRef entity;} GscTurretSpawnTicket;
+typedef struct {void*user;
+ int(*prepare)(void*,const GscTurretSpawnRequest*,GscTurretSpawnTicket*,char*,size_t,int(*)(void*),void*);
+ int(*finish)(void*,const GscTurretSpawnTicket*,int,char*,size_t,int(*)(void*),void*);
+} GscTurretSpawnHost;
+int gsc_program_select_turret_spawn(GscProgram*);
+int gsc_runtime_select_turret_spawn(GscRuntime*,const GscTurretSpawnHost*);
+enum {GSC_EXPR_TARGET_MODEL_PART_NATIVE=1002};
+typedef struct {char model[128];int32_t index;int index_valid,now_ms;} GscModelPartRequest;
+typedef struct {void*user;int(*query)(void*,const GscModelPartRequest*,char[128],char*,size_t,int(*)(void*),void*);} GscModelPartHost;
+int gsc_program_select_model_part(GscProgram*);
+int gsc_runtime_select_model_part(GscRuntime*,const GscModelPartHost*);
 enum { GSC_EXPR_TARGET_WEAPON_CLASSNAME_NATIVE=1001 };
 typedef struct {int defined;char classname[128];} GscWeaponClassnameResult;
 typedef struct {void*user;int(*query)(void*,const char*,int,GscWeaponClassnameResult*,char*,size_t,int(*)(void*),void*);} GscWeaponClassnameHost;
@@ -1925,6 +1968,10 @@ typedef struct { uint32_t frames,fps; } GscAnimationLengthReply;
 typedef struct { void *user;int (*query)(void *,const GscAnimationLengthRequest *,GscAnimationLengthReply *,char *,size_t,int (*)(void *),void *); } GscAnimationLengthHost;
 int gsc_program_select_animation_length_query(GscProgram *);
 int gsc_program_select_r233_namespace_animation_length(GscProgram *);
+int gsc_program_select_map_animation_length(GscProgram*);
+int gsc_runtime_select_map_animation_length(GscRuntime*,const GscAnimationLengthHost*);
+/* Read-only copied requirements from an idle prepared namespace:1 row,0 end,-1 invalid. */
+int gsc_runtime_map_animation_metadata_request(const GscRuntime*,unsigned,GscAnimationLengthRequest*);
 int gsc_runtime_select_r233_namespace_animation_length(GscRuntime *,const GscAnimationLengthHost *);
 int gsc_runtime_select_animation_length(GscRuntime *,const GscAnimationLengthHost *);
 /* Separately selected native animation goal commands. Resource descriptors
@@ -1956,21 +2003,25 @@ typedef struct {const GscAnimationCatalog *catalogs[2];
 enum {GSC_ACTOR_ANIMATION_CLEAR=1,GSC_ACTOR_ANIMATION_SET,GSC_ACTOR_ANIMATION_PRONE_NODES,
       GSC_ACTOR_ANIMATION_ENTER_PRONE,GSC_ACTOR_ANIMATION_EXIT_PRONE,GSC_ACTOR_ANIMATION_FLAGGED_RESTART,GSC_ACTOR_ANIMATION_KNOB_ALL,GSC_ACTOR_ANIMATION_ORIENT_MODE,GSC_ACTOR_ANIMATION_UPDATE_PRONE,GSC_ACTOR_ANIMATION_ANIM_MODE,GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART,GSC_ACTOR_ANIMATION_FLAGGED_ALL,
       /* Internal failed-GetFloat prefix acknowledgment; never a GSC method. */
-      GSC_ACTOR_ANIMATION_ORIENT_ERROR_PREFIX};
+      GSC_ACTOR_ANIMATION_ORIENT_ERROR_PREFIX,GSC_ACTOR_ANIMATION_KNOB,GSC_ACTOR_INTERRUPT_POINT,GSC_ACTOR_ANIMATION_FLAGGED_KNOB,GSC_ACTOR_ANIMATION_KNOB_ALL_RESTART,GSC_ACTOR_ANIMATION_AIM_NODES};
 typedef struct {GscEntityRef entity;int32_t now_ms;uint32_t method,precision_bits,rounding;
-    uint64_t runtime_identity,catalog_identity;GscAnimationLengthRequest animation[3];
+    uint64_t runtime_identity,catalog_identity;GscAnimationLengthRequest animation[6];
     uint32_t scalar_bits[3];char notify[64];} GscActorAnimationRequest;
 typedef struct {void *user;
     int (*validate)(void *,const GscEntityRef *,uint64_t,int32_t,char *,size_t,int (*)(void *),void *);
     int (*invoke)(void *,const GscActorAnimationRequest *,char *,size_t,int (*)(void *),void *);
 } GscActorAnimationHost;
+int gsc_program_select_map_actor_animations(GscProgram*);
+int gsc_runtime_select_map_actor_animations(GscRuntime*,const GscActorAnimationHost*);
 int gsc_program_select_r232_actor_animations(GscProgram *);
 /* Explicit whole-function certificates with preserved deferred callback bodies. */
-enum {GSC_ACTOR_LOOK_NODES=1,GSC_ACTOR_LOOK_TARGET,GSC_ACTOR_LOOK_YAW_LIMITS,GSC_ACTOR_LOOK_STOP,GSC_ACTOR_LOOK_TAG_ANGLES,GSC_ACTOR_LOOK_CAN_SEE,GSC_ACTOR_LOOK_TAG_ORIGIN};
-enum {GSC_ACTOR_LOOK_RESULT_VOID=1,GSC_ACTOR_LOOK_RESULT_BOOL,GSC_ACTOR_LOOK_RESULT_VECTOR};
+enum {GSC_ACTOR_LOOK_NODES=1,GSC_ACTOR_LOOK_TARGET,GSC_ACTOR_LOOK_YAW_LIMITS,GSC_ACTOR_LOOK_STOP,GSC_ACTOR_LOOK_TAG_ANGLES,GSC_ACTOR_LOOK_CAN_SEE,GSC_ACTOR_LOOK_TAG_ORIGIN,GSC_ACTOR_LOOK_CAN_SHOOT,GSC_ACTOR_LOOK_SHOOT,GSC_ACTOR_LOOK_AIM_AT_POS,GSC_ACTOR_LOOK_MAY_MOVE,GSC_ACTOR_LOOK_CHECK_PRONE,GSC_ACTOR_TRAVERSE_MODE,GSC_ACTOR_NEGOTIATION_END};
+enum {GSC_ACTOR_LOOK_RESULT_VOID=1,GSC_ACTOR_LOOK_RESULT_BOOL,GSC_ACTOR_LOOK_RESULT_VECTOR,GSC_ACTOR_LOOK_RESULT_FLOAT};
 typedef struct {GscEntityRef entity,argument;int32_t now_ms;uint32_t method,precision_bits,rounding;uint64_t runtime_identity,catalog_identity;GscAnimationLengthRequest animation[3];uint32_t vector_bits[3],scalar_bits[3];char tag[64];} GscActorLookRequest;
 typedef struct {uint32_t kind;int boolean;uint32_t vector_bits[3];} GscActorLookReply;
 typedef struct {void *user;int(*validate)(void*,const GscEntityRef*,uint64_t,int32_t,char*,size_t,int(*)(void*),void*);int(*invoke)(void*,const GscActorLookRequest*,GscActorLookReply*,char*,size_t,int(*)(void*),void*);} GscActorLookHost;
+int gsc_program_select_map_actor_look(GscProgram*);
+int gsc_runtime_select_map_actor_look(GscRuntime*,const GscActorLookHost*);
 int gsc_program_select_r232_actor_look(GscProgram *);
 int gsc_runtime_select_r232_actor_look(GscRuntime *,const GscActorLookHost *);
 int gsc_program_select_r232_function_admission(GscProgram *);
@@ -1979,6 +2030,7 @@ int gsc_program_select_r232_function_admission(GscProgram *);
 typedef struct {int enabled;GscMapExecutionCertificate certificate;} GscDeveloperScriptSelection;
 int gsc_program_select_developer_value(GscProgram*,int);
 int gsc_runtime_admit_developer_script(GscRuntime*,const GscDeveloperScriptSelection*);
+int gsc_program_select_map_developer_script(GscProgram *,const GscDeveloperScriptSelection *);
 int gsc_program_select_r232_developer_script(GscProgram *,const GscDeveloperScriptSelection *);
 int gsc_runtime_select_r232_actor_animations(GscRuntime *,const GscActorAnimationHost *);
 int gsc_program_select_r232_turret_animations(GscProgram *);
@@ -2092,6 +2144,9 @@ int gsc_runtime_r237_frame_buckets_selected(const GscRuntime *);
 int gsc_runtime_r237_frame_view(const GscRuntime *,GscR237FrameView *);
 int gsc_r237_frame_begin(GscRuntime *,int host_logical_ms,uint64_t *out_generation);
 int gsc_r237_run_current_bucket(GscRuntime *,uint64_t expected_generation);
+/* A suspended phase retains the queue and the original instruction budget.
+ * Returns 0 on failure, 1 on completion or 2 after a whole Task yielded. */
+int gsc_r237_frame_phase_slice(GscRuntime *,uint64_t generation,int exclusive,int (*expired)(void));
 int gsc_r237_advance_exclusive(GscRuntime *,uint64_t expected_generation);
 
 
@@ -2144,7 +2199,8 @@ enum {
     GSC_PLAYER_FREEZE_CONTROLS,
     GSC_PLAYER_GET_FRACTION_MAX_AMMO,
     GSC_PLAYER_GET_STANCE,
-    GSC_PLAYER_SET_NORMAL_HEALTH, GSC_PLAYER_GET_NORMAL_HEALTH, GSC_PLAYER_SET_VIEWMODEL, GSC_PLAYER_GIVE_MAX_AMMO
+    GSC_PLAYER_SET_NORMAL_HEALTH, GSC_PLAYER_GET_NORMAL_HEALTH, GSC_PLAYER_SET_VIEWMODEL, GSC_PLAYER_GIVE_MAX_AMMO, GSC_PLAYER_SHELLSHOCK, GSC_PLAYER_STOP_SHELLSHOCK, GSC_PLAYER_GET_SLOT_WEAPON, GSC_PLAYER_SET_ANGLES,
+    GSC_PLAYER_ALLOW_STAND, GSC_PLAYER_ALLOW_CROUCH, GSC_PLAYER_ALLOW_PRONE
 };
 enum { GSC_PLAYER_RESULT_VOID=0,GSC_PLAYER_RESULT_INT,GSC_PLAYER_RESULT_STRING,
     GSC_PLAYER_RESULT_FLOAT };
@@ -2153,7 +2209,8 @@ typedef struct {
     int kind,now_ms;
     char weapon[128];
     int32_t value;
-    float number; /* Explicit normal-health lane only; zero for other methods. */
+    float number; /* Explicit numeric lane; zero for unrelated methods. */
+    uint32_t angles_bits[3]; /* setPlayerAngles only; canonical zero otherwise. */
 } GscPlayerNativeRequest;
 typedef struct { int kind;int32_t value;char text[128];float number; } GscPlayerNativeResult;
 /* Inputs/results are owned copies, never native engine pointers. Check the
@@ -2167,6 +2224,7 @@ int gsc_program_select_player_natives(GscProgram *);
 int gsc_program_select_player_normal_health(GscProgram *);
 int gsc_program_select_player_viewmodel(GscProgram *);
 int gsc_program_select_player_max_ammo(GscProgram *);
+int gsc_program_select_player_stance_permissions(GscProgram *);
 int gsc_runtime_select_player_natives(GscRuntime *,const GscPlayerNativeHost *);
 typedef struct {
     void *user;
@@ -2183,10 +2241,36 @@ int gsc_runtime_select_origin_method(GscRuntime *,const GscEntityOriginMethodHos
 
 /* R198 spatial queries use copied identities/results and the same borrowed
  * session-current lease as player methods. Unsupported engine topology refuses. */
-enum { GSC_SPATIAL_IS_TOUCHING=1,GSC_SPATIAL_GET_EYE };
-enum { GSC_SPATIAL_RESULT_INT=1,GSC_SPATIAL_RESULT_VECTOR };
+typedef struct {uint64_t epoch;uint32_t index,generation;} GscNodeRef;
+/* Native class3 vehicle nodes have their own identity and registry. They are
+ * neither infantry class2 path nodes nor GAME entity allocations. */
+typedef struct {uint64_t epoch;uint32_t index,generation;} GscVehicleNodeRef;
+enum {GSC_VEHICLE_ATTACH_PATH=1,GSC_VEHICLE_START_PATH,GSC_VEHICLE_WAIT_NODE,GSC_VEHICLE_WAIT_SPEED,GSC_VEHICLE_SET_SPEED,GSC_VEHICLE_RESUME_SPEED};
+typedef struct {GscEntityRef owner;GscVehicleNodeRef node;uint64_t program;int now_ms,kind;float values[2];} GscVehicleMethodRequest;
+typedef struct {void*user;int(*invoke)(void*,const GscVehicleMethodRequest*,char*,size_t,int(*)(void*),void*);} GscVehicleMethodHost;
+int gsc_program_select_vehicle_methods(GscProgram*);
+int gsc_runtime_select_vehicle_methods(GscRuntime*,const GscVehicleMethodHost*);
+
+enum {GSC_VEHICLE_NODE_CAPACITY=1500,GSC_VEHICLE_QUERY_ONE=4,GSC_VEHICLE_QUERY_ARRAY=5};
+typedef struct {int kind,now_ms;char value[128],field[128];} GscVehicleNodeQuery;
+enum {GSC_VEHICLE_VALUE_UNDEFINED=0,GSC_VEHICLE_VALUE_INT32,GSC_VEHICLE_VALUE_STRING,
+ GSC_VEHICLE_VALUE_VECTOR,GSC_VEHICLE_VALUE_FLOAT};
+typedef struct {int kind;int32_t integer;float vector[3];char text[128];float number;} GscVehicleNodeField;
+typedef struct {
+ void*user;
+ /* Unknown descriptor returns defined0, count0. A known string descriptor
+  * returns defined1 even for an empty array; duplicate ONE refuses. */
+ int(*query)(void*,const GscVehicleNodeQuery*,GscVehicleNodeRef*,size_t,size_t*,int*,char*,size_t,int(*)(void*),void*);
+ int(*validate)(void*,const GscVehicleNodeRef*,int,int*,char*,size_t,int(*)(void*),void*);
+ int(*read)(void*,const GscVehicleNodeRef*,const char*,int,GscVehicleNodeField*,char*,size_t,int(*)(void*),void*);
+} GscVehicleNodeHost;
+int gsc_program_select_vehicle_nodes(GscProgram*);
+int gsc_runtime_select_vehicle_nodes(GscRuntime*,const GscVehicleNodeHost*);
+
+enum { GSC_SPATIAL_IS_TOUCHING=1,GSC_SPATIAL_GET_EYE,GSC_SPATIAL_STANDING_NODE };
+enum { GSC_SPATIAL_RESULT_INT=1,GSC_SPATIAL_RESULT_VECTOR,GSC_SPATIAL_RESULT_NODE };
 typedef struct {GscEntityRef receiver,other;int kind,now_ms;} GscSpatialNativeRequest;
-typedef struct {int kind;int32_t value;float vector[3];} GscSpatialNativeResult;
+typedef struct {int kind;int32_t value;union {float vector[3];struct {uint32_t epochLo,epochHi,index;} node;};} GscSpatialNativeResult;
 typedef struct {
     void *user;
     int (*invoke)(void *,const GscSpatialNativeRequest *,GscSpatialNativeResult *,
@@ -2204,7 +2288,7 @@ int gsc_runtime_select_entity_coordinates(GscRuntime *);
  * Every callback returns exactly 1 on success, 0 on failure and observes the
  * supplied current lease before publishing a result. Missing metadata is an
  * UNDEFINED value; an explicitly empty string remains a STRING. */
-typedef struct {uint64_t epoch;uint32_t index,generation;} GscNodeRef;
+
 enum {GSC_NODE_QUERY_ONE=1,GSC_NODE_QUERY_ARRAY,GSC_NODE_QUERY_ALL};
 enum {GSC_NODE_FIELD_ORIGIN=1,GSC_NODE_FIELD_ANGLES,GSC_NODE_FIELD_TARGETNAME,
       GSC_NODE_FIELD_TARGET,GSC_NODE_FIELD_CLASSNAME,GSC_NODE_FIELD_ANIMSCRIPT,
@@ -2236,9 +2320,9 @@ typedef struct {
  * are validated around current(); callbacks must never retain borrowed input. */
 enum {GSC_TURRET_SET_MODE=1,GSC_TURRET_START_FIRING,GSC_TURRET_STOP_FIRING,
       GSC_TURRET_SET_TARGET_ENTITY,GSC_TURRET_USE,GSC_TURRET_GET,
-      GSC_TURRET_IS_FIRING,GSC_TURRET_SHOOT};
+      GSC_TURRET_IS_FIRING,GSC_TURRET_SHOOT,GSC_TURRET_CLEAR_TARGET,GSC_TURRET_STOP_USE};
 enum {GSC_TURRET_RESULT_VOID=0,GSC_TURRET_RESULT_BOOL,
-      GSC_TURRET_RESULT_ENTITY,GSC_TURRET_RESULT_UNDEFINED};
+      GSC_TURRET_RESULT_ENTITY,GSC_TURRET_RESULT_UNDEFINED,GSC_TURRET_RESULT_OWNER_RELEASED};
 typedef struct {int kind,now_ms;GscEntityRef entity,argument;char mode[32];} GscTurretRequest;
 typedef struct {int kind,boolean;GscEntityRef entity;} GscTurretReply;
 typedef struct {void *user;int (*invoke)(void *,const GscTurretRequest *,
@@ -2249,7 +2333,16 @@ int gsc_runtime_select_r232_turrets(GscRuntime *,const GscTurretHost *);
 typedef struct {float rate;char idle[8];int rest;} GscTrainingAppearance;
 int gsc_runtime_training_appearance(GscRuntime*,const GscEntityRef*,int,GscTrainingAppearance*);
 #define COD1_SET_GOAL_POS_METHOD 505
-typedef struct {GscEntityRef entity;GscNodeRef node;int now_ms;int positional;float position[3];} GscActorGoalRequest;
+#define COD1_SET_GOAL_ENTITY_METHOD 507
+#define COD1_ROTATE_VELOCITY 508
+#define COD1_MOVE_GRAVITY 509
+#define COD1_MOVE_TO 513
+#define COD1_ROTATE_ROLL 514
+#define COD1_LAUNCH 515
+#define COD1_ROTATE_TO 516
+int gsc_program_select_map_actor_goal(GscProgram*);
+int gsc_program_select_entity_goal(GscProgram *);
+typedef struct {GscEntityRef entity;union {GscNodeRef node;GscEntityRef target;};int now_ms;int positional;float position[3];} GscActorGoalRequest;
 typedef struct {void *user;int (*invoke)(void *,const GscActorGoalRequest *,char *,size_t,int (*)(void *),void *);} GscActorGoalHost;
 int gsc_program_select_r222_carbine_items(GscProgram *);
 int gsc_program_select_r225_training_followup(GscProgram *);
@@ -2303,12 +2396,16 @@ enum {GSC_RECEIVER_TARGET_HUDELEM_NATIVE=GSC_RECEIVER_TARGET_ENTITY_EVENT+1};
 int gsc_program_select_hud_elements(GscProgram *);
 int gsc_runtime_select_hud_elements(GscRuntime *,const GscHudElemHost *);
 int gsc_runtime_retire_hud_elements(GscRuntime *,char *,size_t);
-/* R200 genuine brush collision service; only selected notsolid() uses it. */
+typedef int (*GscEntityWorldAction)(void *,const GscEntityRef *,int,char *,size_t,int (*)(void *),void *);
 typedef struct {
- void *user;
- int (*notsolid)(void *,const GscEntityRef *,int now_ms,char *,size_t,
-                 int (*current)(void *),void *lease);
+    void *user;
+    GscEntityWorldAction notsolid,solid,grenade_touch,grenade_bounce;
 } GscEntityCollisionHost;
+enum { GSC_CONNECTPATHS_METHOD=506, GSC_DISCONNECTPATHS_METHOD=519, GSC_SOLID_METHOD=510, GSC_GRENADE_TOUCH_METHOD=511, GSC_GRENADE_BOUNCE_METHOD=512 };
+int gsc_program_select_disconnectpaths(GscProgram *);
+int gsc_runtime_select_disconnectpaths(GscRuntime *,GscEntityWorldAction);
+int gsc_program_select_connectpaths(GscProgram *);
+int gsc_runtime_select_connectpaths(GscRuntime *,GscEntityWorldAction);
 int gsc_program_select_entity_collision(GscProgram *);
 int gsc_runtime_select_entity_collision(GscRuntime *,const GscEntityCollisionHost *);
 
@@ -2346,6 +2443,8 @@ GscRuntime *gsc_runtime_new_bsp_constructor(const GscProgram *,GscFogCallback,vo
 int gsc_construct_bsp_entity(GscRuntime *,const GscPreparedEntityEntry *,const GscPreparedEntityEntryHost *,GscPreparedEntityEntryRun *,char *,size_t);
 int gsc_bsp_fields_current(const GscRuntime *,const GscPreparedEntityEntry *);
 int gsc_construct_prepared_entity(GscRuntime *,const GscPreparedEntityEntry *,const GscPreparedEntityEntryHost *,GscPreparedEntityEntryRun *,char *,size_t);
+int gsc_runtime_locomotion_main(GscRuntime*,const GscEntityExecutionCertificate*,const GscMapExecutionCertificate*,int,GscEntityScriptRun*);
+int gsc_execute_course_anim_entry(GscRuntime *,const GscEntityScriptEntry *,const GscEntityExecutionCertificate *,int,GscEntityScriptRun *);
 int gsc_execute_constructed_entity(GscRuntime *,const GscEntityScriptEntry *,const GscEntityExecutionCertificate *,GscEntityScriptRun *);
 /* Read-only copied node DATA, not a pathfinding or script certificate. */
 typedef struct {int status;uint32_t physicalIndex,authoredIndex,type;float origin[3];} GscActorBootstrapNodeTarget;
@@ -2413,6 +2512,13 @@ int gsc_runtime_select_attachment_queries(GscRuntime *,const GscAttachmentQueryH
  * quiescent clock0, no active children and no prior configured main. It marks
  * main attempted before task creation and never resets started or errors.
  * The configured root and children retain this copied map certificate. */
+int gsc_runtime_model_starting(const GscRuntime *);
+int gsc_start_configured_main_after_cohort(GscRuntime *,const GscMapExecutionCertificate *,uint64_t,uint32_t);
+/* Ordinary map entry with a real map lifetime, independent of actor bootstrap.
+ * The call lease guards only startup; child tasks retain the map certificate. */
+int gsc_start_with_map(GscRuntime *,const GscMapExecutionCertificate *,int (*)(void *),void *);
+int gsc_program_select_map_source_float(GscProgram*);
+int gsc_runtime_select_map_source_float(GscRuntime*);
 int gsc_start_configured_main_after_bootstrap(GscRuntime *,
     const GscMapExecutionCertificate *);
 
@@ -2488,6 +2594,7 @@ typedef struct {
     char tree[64],name[64];uint32_t ordinal,flags;
     uint64_t runtime_identity,catalog_identity;
     int now_ms;float origin[3],angles[3];
+    unsigned query_kind; /* 0 legacy origin; map profile1 origin /2 angles. */
 } GscStartOriginRequest;
 typedef struct {float vector[3];} GscStartOriginReply;
 typedef struct {
@@ -2496,6 +2603,7 @@ typedef struct {
         char *,size_t,int (*current)(void *),void *);
 } GscStartOriginHost;
 int gsc_program_select_start_origin_query(GscProgram *);
+int gsc_program_select_map_start_pose(GscProgram*);
 int gsc_runtime_select_start_origin(GscRuntime *,const GscStartOriginHost *);
 int gsc_runtime_select_namespace_start_origin(GscRuntime *,const GscStartOriginHost *);
 
@@ -2506,6 +2614,8 @@ int gsc_program_select_r216_items(GscProgram *);
 typedef struct {
     GscEntityRef entity;
     float yaw,seconds,accel,decel;
+    int method,operandsValid;
+    float velocity[3];
     int64_t now_ms;
 } GscYawMotionRequest;
 typedef struct {
@@ -2514,6 +2624,7 @@ typedef struct {
                   int (*current)(void *),void *context);
 } GscYawMotionHost;
 int gsc_program_select_r216_yaw(GscProgram *);
+int gsc_program_select_map_moveto(GscProgram *program);
 int gsc_runtime_select_r216_yaw(GscRuntime *,const GscYawMotionHost *);
 
 
@@ -2553,6 +2664,9 @@ int gsc_runtime_select_r243_scripted_prefix(GscRuntime*,const GscActorScriptedPr
 typedef struct {
  GscEntityRef entity;uint64_t actor_serial,runtime_identity,catalog_identity,frame_generation;
  int now_ms;
+ /* Explicit ordinary MAIN producer: zero retains the existing scripted API;
+  * -1 retains the current ordinary source,1 stop,2 run. */
+ int locomotion_source;
 } GscActorControllerRequest;
 typedef struct {
  GscEntityExecutionCertificate certificate;
@@ -2568,9 +2682,18 @@ typedef struct {void*context;
  int(*current)(void*,const GscActorSourceAnimationReceipt*,const GscActorAnimationRequest*,int(*)(void*),void*);
 } GscActorSourceAnimationBroker;
 typedef struct {
+ uint64_t dispatch,task_serial,runtime_identity,catalog_identity,frame_generation;GscEntityRef entity;
+} GscActorSourceLookReceipt;
+typedef struct {void*context;
+ int(*take)(void*,const GscActorLookRequest*,int(*)(void*),void*,GscActorSourceLookReceipt*);
+ int(*claim)(void*,const GscActorLookRequest*,int(*)(void*),void*,GscActorSourceLookReceipt*);
+ int(*current)(void*,const GscActorSourceLookReceipt*,const GscActorLookRequest*,int(*)(void*),void*);
+} GscActorSourceLookBroker;
+typedef struct {
  void*context;int(*current)(void*);int(*run_current)(void*);
  int(*notify)(void*,const GscEntityRef*,const char*,const char*);
  GscActorSourceAnimationBroker source;
+ GscActorSourceLookBroker sourceLook;
 } GscActorControllerAnimationServices;
 typedef struct {
  void*user;
@@ -2596,6 +2719,11 @@ int gsc_runtime_select_r243_controller_with_cleanup(GscRuntime*,const GscActorSc
 int gsc_runtime_select_r243_scripted_controller(GscRuntime*,const GscActorScriptedControllerHost*);
 int gsc_runtime_r243_controller_prefix(GscRuntime*,const GscEntityRef*,uint64_t,uint64_t,const GscMapExecutionCertificate*,GscActorControllerPrefixRun*);
 
+/* Retain the actual already-admitted stationary stop MAIN. This owns its
+ * returned thread reference, not the still-unqualified native source/category
+ * request producers. Source selection remains the existing GAME transaction. */
+int gsc_runtime_initial_stop_main(GscRuntime*,const GscEntityExecutionCertificate*,const GscMapExecutionCertificate*,GscEntityScriptRun*);
+
 int gsc_runtime_r243_controller_storage_separate(const GscRuntime*,const void*,size_t);
 /* Internal exact readonly forwarded-request predicate, never output storage. */
 int gsc_runtime_r243_controller_request_input(const GscRuntime*,const void*,size_t,int(*)(void*),void*);
@@ -2609,5 +2737,18 @@ int gsc_runtime_node_script_current(const GscRuntime*,GscNodeScriptRef);
  * authority; scope is the exact immutable linked program identity. */
 uint64_t gsc_program_identity(const GscProgram *);
 uint32_t gsc_program_script_function_handle(const GscProgram *,const char *,const char *);
+
+#endif
+
+#ifndef GSC_BULLET_TRACE_TYPES
+#define GSC_BULLET_TRACE_TYPES
+enum {GSC_EXPR_TARGET_BULLET_TRACE_NATIVE=1004};
+typedef struct {uint64_t program;int now_ms,actors;float start[3],end[3];} GscBulletTraceRequest;
+/* World/miss scope. Entity identities require a separate live-value contract.
+ * surface0..22 native material table,23 miss/none; entity_kind0 none,1 world. */
+typedef struct {float fraction,position[3],normal[3];unsigned surface,entity_kind;} GscBulletTraceReply;
+typedef struct {void*user;int(*query)(void*,const GscBulletTraceRequest*,GscBulletTraceReply*,char*,size_t,int(*)(void*),void*);} GscBulletTraceHost;
+int gsc_program_select_bullet_trace(GscProgram*);
+int gsc_runtime_select_bullet_trace(GscRuntime*,const GscBulletTraceHost*);
 
 #endif

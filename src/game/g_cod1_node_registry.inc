@@ -5,12 +5,14 @@
  * from present metadata whose native value schema is not implemented. */
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
 #include "g_cod1_node_host.h"
+#include "g_cod1_vehicle_nodes.h"
 #include <errno.h>
 #include <float.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../qcommon/cod1_angle_normalize14.h"
 #define COD1_NODE_ARENA_BYTES (4u*1024u*1024u)
 typedef struct {
     int type,fields;
@@ -84,6 +86,7 @@ static int Cod1NodeAvailable(void){
         G_Cod1EntityCollectionReady(cod1NodeOwnerEpoch,level.num_entities);
 }
 void G_Cod1NodeRegistryClear(void){
+    G_Cod1VehicleNodesClear();
     G_Cod1NodeGraphStageClear();
     memset(&cod1NodeResource,0,sizeof(cod1NodeResource));
     if(cod1NodeBusy)cod1NodeCancelled=1;
@@ -130,11 +133,12 @@ static int Cod1NodeRegistryIntake(void){
         needed+=bytes[i][0]+bytes[i][1];
         if(!strcmp(key,"origin"))origin=value;else if(!strcmp(key,"angles"))angles=value;
         else if(!strcmp(key,"spawnflags"))flags=value;
-        /* Retail exposes yaw-only node angles. Reject authored pitch/roll
-         * outside this confirmed node topology rather than inventing poses. */
+        /* GAME6D92B parses all three values but stores only normalized yaw.
+         * Keep authored values here for the existing single-pass node graph
+         * constructor. Script reads below project the native type11 value. */
         else if(!strcmp(key,"angle"))goto invalid;
     }
-    if(!origin||!Cod1NodeVector(origin,copy.origin)||(angles&&(!Cod1NodeVector(angles,copy.angles)||copy.angles[0]!=0||copy.angles[2]!=0))||
+    if(!origin||!Cod1NodeVector(origin,copy.origin)||(angles&&(!Cod1NodeVector(angles,copy.angles)||copy.angles[1] < -360000.0f||copy.angles[1] > 360000.0f))||
        (flags&&!Cod1NodeInteger(flags,&copy.spawnflags))||needed>sizeof(cod1NodeArena)-cod1NodeArenaUsed)goto invalid;
     used=cod1NodeArenaUsed;
     for(i=0;i<copy.fields;i++){
@@ -221,12 +225,21 @@ int G_Cod1BindTrainingRoute(const char *first, cod1TrainingRoute_t *route){
     return 1;
 }
 extern const cod1TrainingRoute_t *TrainingCurrentRoute(const GscEntityRef *);
+/* The goal command serial also counts earlier non-course goals. The
+ * authored node and the current runner allocation identify its route step. */
+static unsigned Cod1RunnerStep(const cod1TrainingRoute_t *route,const GscNodeRef *node){
+    unsigned i;
+    if(!route || !Cod1NodeAvailable() || !Cod1NodeRefCurrent(node) || route->epoch!=node->epoch)return 0;
+    for(i=0;i<COD1_TRAINING_ROUTE_LENGTH;i++)if(route->index[i]==node->index)return i+1;
+    return 0;
+}
+unsigned G_Cod1RunnerStep(const GscEntityRef *owner,const GscNodeRef *node){
+    return Cod1RunnerStep(TrainingCurrentRoute(owner),node);
+}
 int G_Cod1RunnerCourseGoal(const GscEntityRef *owner,uint64_t assignment,const GscNodeRef *node){
-    const cod1TrainingRoute_t *route;
-    if(!assignment || assignment>COD1_TRAINING_ROUTE_LENGTH || !Cod1NodeRefCurrent(node) || !Cod1NodeAvailable())return 0;
-    route=TrainingCurrentRoute(owner);
-    if(!route || route->epoch!=node->epoch || route->index[assignment-1]!=node->index)return 0;
-    return route->kind[assignment-1];
+    const cod1TrainingRoute_t *route=TrainingCurrentRoute(owner);
+    unsigned step=Cod1RunnerStep(route,node);
+    return assignment && step ? route->kind[step-1] : 0;
 }
 static int Cod1NodeLease(uint64_t epoch,int now,int (*current)(void *),void *lease){
     return current&&current(lease)==1&&!cod1NodeCancelled&&epoch==cod1NodeEpoch&&Cod1NodeAvailable()&&level.time==now;
@@ -263,6 +276,7 @@ stale:Cod1NodeError(error,size,"node query owner or session changed");
 done:cod1NodeBusy=0;return ok;
 }
 static int TrainingRigNodePosition(const Cod1NodeRecord*,float[3]);
+static int TrainingGraphOrigin(const Cod1NodeRecord*,float[3]);
 static int Cod1NodeValidate(void *user,const GscNodeRef *input,int now_ms,int *alive,char *error,size_t size,int (*current)(void *),void *lease){
     GscNodeRef ref;uint64_t epoch;int now,value,ok=0;(void)user;
     if(Cod1NodePrivate(error,size)||Cod1NodeOverlap(error,size,input,input?sizeof(*input):0)||Cod1NodeOverlap(error,size,alive,alive?sizeof(*alive):0))return 0;
@@ -288,12 +302,21 @@ static int Cod1NodeValuePolicy(const Cod1NodeRecord *record,const char *field,Gs
         if(zeroRadius&&!Cod1NodeRaw(record,"radius")){out->kind=GSC_NODE_VALUE_FLOAT;out->number=0.0f;return 1;}
         return Cod1NodeError(error,size,"native node radius value is unavailable");
     }
+    if(!strcmp(field,"origin")){
+        int placed=TrainingGraphOrigin(record,out->vector);
+        if(placed<0)return Cod1NodeError(error,size,"published node origin retired");
+        if(placed){out->kind=GSC_NODE_VALUE_VECTOR;return 1;}
+    }
     if(!strcmp(field,"origin")&&record->type==15 && Cod1NodeRaw(record,"targetname") && !strcmp(Cod1NodeRaw(record,"targetname"),"jumpnode") &&
        trap_Cvar_VariableIntegerValue("g_cod1GscTrainingRigs")==1){
         if(!TrainingRigNodePosition(record,out->vector))return Cod1NodeError(error,size,"training jump node placement unavailable");
         out->kind=GSC_NODE_VALUE_VECTOR;return 1;
     }
-    if(!strcmp(field,"origin")||!strcmp(field,"angles")){out->kind=GSC_NODE_VALUE_VECTOR;memcpy(out->vector,!strcmp(field,"origin")?record->origin:record->angles,sizeof(out->vector));return 1;}
+    if(!strcmp(field,"origin")){out->kind=GSC_NODE_VALUE_VECTOR;memcpy(out->vector,record->origin,sizeof(out->vector));return 1;}
+    if(!strcmp(field,"angles")){
+        float yaw;if(!C1AngleNormalize14(record->angles[1],&yaw))return Cod1NodeError(error,size,"node yaw outside admitted finite conversion");
+        out->kind=GSC_NODE_VALUE_VECTOR;out->vector[0]=out->vector[2]=0.0f;out->vector[1]=yaw;return 1;
+    }
     if(!strcmp(field,"spawnflags")){out->kind=GSC_NODE_VALUE_INT32;out->integer=record->spawnflags;return 1;}
     value=!strcmp(field,"type")?cod1NodeTypes[record->type-1]:Cod1NodeRaw(record,field);
     if(!value)return 1;
@@ -361,4 +384,6 @@ int G_Cod1NodeScriptAdmission(GscSessionNodeScriptAdmission*out){GscSessionNodeS
 #include "g_cod1_node_prepare.inc"
 #include "g_cod1_node_graph_stage.inc"
 #include "g_cod1_training_goal_placement.inc"
+#include "g_cod1_node_negotiation_pair.inc"
+#include "g_cod1_navigation_probe.inc"
 #endif

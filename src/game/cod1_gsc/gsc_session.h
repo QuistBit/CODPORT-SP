@@ -59,6 +59,7 @@ int gsc_session_execute_projected_spawn_entry(GscSession *,uint64_t,
  * method/controller admission, actor mutation or init execution is implied. */
 int gsc_session_select_r243_scripted_init_dependency(GscSession *,char *,size_t);
 int gsc_session_r243_scripted_init_dependency_selected(const GscSession *);
+int gsc_session_select_map_script_state(GscSession*,const GscActorScriptStateHost*,char*,size_t);
 int gsc_session_select_r243_script_state(GscSession*,const GscActorScriptStateHost*,char*,size_t);
 int gsc_session_select_r243_scripted_start(GscSession*,const GscActorScriptedStartHost*,char*,size_t);
 int gsc_session_select_r243_scripted_prefix(GscSession *,const GscActorScriptedPrefixHost *,char *,size_t);
@@ -89,6 +90,7 @@ int gsc_session_select_entity_links(GscSession*,const GscEntityLinkHost*,char*,s
 int gsc_session_select_r198_entity_operations(GscSession *,const GscEntityDeleteHost *,char *,size_t);
 int gsc_session_select_origin_method(GscSession *,const GscEntityOriginMethodHost *,char *,size_t);
 int gsc_session_select_r198_spatial_natives(GscSession *,const GscSpatialNativeHost *,char *,size_t);
+int gsc_session_select_vehicle_nodes(GscSession*,const GscVehicleNodeHost*,char*,size_t);
 int gsc_session_select_r199_node_queries(GscSession *,const GscNodeQueryHost *,char *,size_t);
 /* Startup HUD does not require path-node queries. Same typed owner/retirement service. */
 int gsc_session_select_startup_hud(GscSession *,const GscHudElemHost *,char *,size_t);
@@ -125,6 +127,7 @@ typedef struct {
 int gsc_session_select_player_normal_health(GscSession *,char *,size_t);
 int gsc_session_select_player_viewmodel(GscSession *,char *,size_t);
 int gsc_session_select_player_max_ammo(GscSession *,char *,size_t);
+int gsc_session_select_player_stance_permissions(GscSession *,char *,size_t);
 /* Explicit map-local game array for startup scripts without Actor bootstrap.
  * A fresh runtime starts empty; no cross-map carry or SAVE claim. */
 int gsc_session_select_map_game_array(GscSession *,char *,size_t);
@@ -486,9 +489,18 @@ int gsc_session_blast_notify_captured(GscSession *, uint64_t session_id,
 int gsc_session_unload(GscSession *, uint64_t session_id, char *error, size_t size);
 /* Allocation-free copy, allowed during callbacks. Stats remain available after
  * fatal cleanup, until new load/unload. Does not expose VM or program pointers. */
+int gsc_session_model_starting(const GscSession *,uint64_t,int);
 int gsc_session_running_at(const GscSession *,uint64_t id,int logical,int host);
 int gsc_session_is_running(const GscSession *, uint64_t id);
 int gsc_session_snapshot(const GscSession *, GscSessionSnapshot *out);
+/* Live control fields only. No task census, statistics, callbacks, cache or
+ * execution authority. Callers retain their existing identity/time checks. */
+typedef struct {
+    uint64_t session_id;
+    int64_t origin_host_ms,last_host_ms;
+    int state,busy,logical_ms,has_error;
+} GscSessionTiming;
+int gsc_session_timing(const GscSession *,GscSessionTiming *out);
 /* R124 copied, session/time fenced tagged-FX capability. The real game
  * provider/client tag-pose consumer are separate from this adapter contract. */
 typedef int (*GscSessionTagFxQueryCallback)(void *, uint64_t, int, GscTagFxQuery *, char *, size_t);
@@ -636,6 +648,7 @@ typedef struct {
  int (*current)(void *,uint64_t,uint64_t);
  uint32_t module_count;char module_roots[GSC_ACTOR_BOOTSTRAP_MODULE_CAPACITY][128];
 } GscSessionActorProgramPlan;
+int gsc_session_select_map_actor_program(GscSession *,const GscSessionActorProgramPlan *,char *,size_t);
 int gsc_session_select_actor_program(GscSession *,const GscSessionActorProgramPlan *,char *,size_t);
 typedef struct GscSessionActorBootstrapHost {
     void *user;
@@ -716,6 +729,8 @@ typedef struct {
     GscSessionAnimationNamespaceCatalogInput catalogs[3];
     GscMapExecutionCertificate map_certificate;
 } GscSessionAnimationNamespaceSelection;
+typedef struct {GscMapAnimationNames names;GscSessionAnimationNamespaceCatalogInput catalogs[GSC_MAP_ANIMATION_CATALOGS];GscMapExecutionCertificate map_certificate;} GscSessionMapAnimationSelection;
+int gsc_session_select_map_animation_namespace(GscSession*,const GscSessionMapAnimationSelection*,char*,size_t);
 /* New immutable generic_human/mg42 ATR namespace and actual command provider.
  * Select idle EMPTY mode40, mutually exclusive with R209/R211 selections. */
 typedef struct {GscSessionAnimationNamespaceCatalogInput catalogs[2];
@@ -746,32 +761,54 @@ int gsc_session_select_r211_animation_namespace(GscSession *,
  * ordinals remain immutable until destroy, including reload. host.user must
  * outlive the Session. Namespace selection alone grants no query capability.
  * This supplies no UseAnimTree, playback, wire query or native tree identity. */
+int gsc_session_select_map_start_pose(GscSession*,const GscStartOriginHost*,char*,size_t);
+int gsc_session_select_map_animation_length(GscSession*,const GscAnimationLengthHost*,char*,size_t);
+int gsc_session_map_animation_metadata_request(const GscSession*,uint64_t,unsigned,GscAnimationLengthRequest*);
 int gsc_session_select_r212_namespace_start_origin(GscSession *,
     const GscStartOriginHost *,char *,size_t);
 
 /* Selected real item fields and spawn admission; configure while EMPTY.
  * The provider is copied. Actor-bootstrap fields remain a separate profile. */
+int gsc_session_select_map_items(GscSession *,const GscEntityFieldHost *,char *,size_t);
 int gsc_session_select_r216_items(GscSession *,const GscEntityFieldHost *,char *,size_t);
 int gsc_session_select_r222_carbine_items(GscSession *,char *,size_t);
 int gsc_session_select_r228_training_opening(GscSession *,char *,size_t);
 int gsc_session_select_r225_training_followup(GscSession *,char *,size_t);
+int gsc_session_initial_stop_main(GscSession*,uint64_t,const GscEntityExecutionCertificate*,char*,size_t);
+int gsc_session_locomotion_main(GscSession*,uint64_t,const GscEntityExecutionCertificate*,int,char*,size_t);
+int gsc_session_course_anim_entry(GscSession *,uint64_t,const GscEntityExecutionCertificate *,int,char *,size_t);
 int gsc_session_training_appearance(GscSession*,uint64_t,const GscEntityRef*,int,GscTrainingAppearance*);
+int gsc_session_select_map_actor_goal(GscSession*,char*,size_t);
+int gsc_session_select_entity_goal(GscSession *);
 int gsc_session_select_r222_actor_goal(GscSession *,const GscActorGoalHost *,char *,size_t);
 int gsc_session_select_r232_turrets(GscSession *,const GscTurretHost *,char *,size_t);
 /* Independent real immediate commands after the owned two-ATR selection. */
+int gsc_session_select_map_flagged_all(GscSession*,char*,size_t);
+int gsc_session_select_map_actor_animations(GscSession*,const GscActorAnimationHost*,char*,size_t);
 int gsc_session_select_r232_actor_animations(GscSession *,const GscActorAnimationHost *,char *,size_t);
 int gsc_session_select_r232_randomfloat_range(GscSession *,char *,size_t);
 int gsc_session_select_r232_source_float_arithmetic(GscSession *,char *,size_t);
 /* Idle two-ATR profile only; retained for reloads until destroy. */
 int gsc_session_select_r232_quoted_strings(GscSession *,char *,size_t);
+int gsc_session_select_map_quoted_strings(GscSession *,char *,size_t);
+int gsc_session_select_map_actor_look(GscSession*,const GscActorLookHost*,char*,size_t);
 int gsc_session_select_r232_actor_look(GscSession *,const GscActorLookHost *,char *,size_t);
 int gsc_session_select_r233_namespace_animation_length(GscSession *,const GscAnimationLengthHost *,char *,size_t);
 int gsc_session_select_r233_native_animation_roots(GscSession*,char*,size_t);
 int gsc_session_select_r233_actor_drop(GscSession*,const GscActorDropHost*,char*,size_t);
 int gsc_session_select_r233_actor_presence(GscSession *,const GscActorPresenceHost *,char *,size_t);
+int gsc_session_select_map_moveto(GscSession *session,char *error,size_t size);
+int gsc_session_select_map_source_float(GscSession*,char*,size_t);
+int gsc_session_select_root_map(GscSession*,const GscMapExecutionCertificate*,char*,size_t);
+int gsc_session_select_vehicle_methods(GscSession*,const GscVehicleMethodHost*,char*,size_t);
+int gsc_session_select_vehicle_spawn(GscSession*,const GscVehicleSpawnHost*,char*,size_t);
+int gsc_session_select_turret_precache(GscSession*,const GscTurretPrecacheHost*,char*,size_t);
+int gsc_session_select_turret_spawn(GscSession*,const GscTurretSpawnHost*,char*,size_t);
+int gsc_session_select_model_part(GscSession*,const GscModelPartHost*,char*,size_t);
 int gsc_session_select_weapon_classname(GscSession*,const GscWeaponClassnameHost*,char*,size_t);
 int gsc_session_select_r232_weapon_model(GscSession *,const GscWeaponModelHost *,char *,size_t);
 int gsc_session_select_r232_function_admission(GscSession *,char *,size_t);
+int gsc_session_select_map_developer_script(GscSession *,const GscDeveloperScriptSelection *,char *,size_t);
 int gsc_session_select_r232_developer_script(GscSession *,const GscDeveloperScriptSelection *,char *,size_t);
 int gsc_session_select_r216_yaw(GscSession *,const GscYawMotionHost *,char *,size_t);
 
@@ -792,6 +829,9 @@ int gsc_session_r237_frame_buckets_selected(const GscSession *);
 int gsc_session_r237_frame_view(const GscSession *,uint64_t,GscR237FrameView *);
 int gsc_session_r237_frame_begin(GscSession *,uint64_t,int64_t,uint64_t *,char *,size_t);
 int gsc_session_r237_run_current_bucket(GscSession *,uint64_t,uint64_t,char *,size_t);
+int gsc_session_resume_game_frame(GscSession *,uint64_t id,int now,uint64_t generation,int open);
+int gsc_session_r237_frame_phase_slice(GscSession *,uint64_t id,uint64_t generation,int exclusive,
+    int (*expired)(void),char *error,size_t cap);
 int gsc_session_r237_advance_exclusive(GscSession *,uint64_t,uint64_t,char *,size_t);
 
 int gsc_session_select_r243_controller_with_cleanup(GscSession*,const GscActorScriptedControllerHost*,GscControllerSelectWithCleanup,char*,size_t);
@@ -815,6 +855,9 @@ int gsc_session_node_script_map_matches(GscSession*,uint64_t,const GscMapExecuti
  * must be a no-fail exact-owner release/cancel, without Session reentry.
  * No runtime/VM graph admission or SAVE semantics are granted. */
 int gsc_session_node_graph_begin(GscSession*,uint64_t,uint64_t,void(*)(uint64_t));
+int gsc_session_select_disconnectpaths(GscSession *,GscEntityWorldAction);
+int gsc_session_select_connectpaths(GscSession *,GscEntityWorldAction);
+int gsc_session_running_path_graph(const GscSession *,uint64_t,uint64_t);
 int gsc_session_node_graph_current(const GscSession*,uint64_t,uint64_t);
 int gsc_session_node_graph_check_begin(GscSession*,uint64_t,uint64_t);
 int gsc_session_node_graph_end(GscSession*,uint64_t,uint64_t,int);
@@ -835,6 +878,14 @@ int gsc_session_select_script_roots(GscSession*,const GscSessionScriptRootsPlan*
 
 
 int gsc_session_select_r243_flagged_all(GscSession*,const GscActorAnimationHost*,char*,size_t);
+int gsc_session_select_r402_source_look(GscSession*,const GscActorLookHost*,char*,size_t);
+int gsc_session_select_r400_source_animations(GscSession*,const GscActorAnimationHost*,char*,size_t);
 
 int gsc_session_select_r243_critical(GscSession*,const GscActorCriticalHost*,char*,size_t);
 
+
+int gsc_session_select_bullet_trace(GscSession*,const GscBulletTraceHost*,char*,size_t);
+
+int gsc_session_select_map_weapon_model(GscSession*,const GscWeaponModelHost*,char*,size_t);
+
+int gsc_session_select_map_actor_presence(GscSession*,const GscActorPresenceHost*,char*,size_t);

@@ -7,6 +7,8 @@ typedef struct {
  cod1ActorLease_t lease;cod1ActorDObjState_t dobj;int(*current)(void*);void*context;
  int sourceActive,sourceChecking;GscActorAnimationRequest sourceRequest;GscActorSourceAnimationReceipt sourceReceipt;
  const void*sourceBorrowed,*sourceUser;int(*sourceCurrent)(void*);void*sourceContext;
+ int lookSourceActive,lookSourceChecking;GscActorLookRequest lookSourceRequest;GscActorSourceLookReceipt lookSourceReceipt;
+ const void*lookSourceBorrowed,*lookSourceUser;int(*lookSourceCurrent)(void*);void*lookSourceContext;
  GscEntityRef frameOwner;int(*frameCurrent)(void*);void*frameContext;
 } C1ControllerAnimationOperation;
 static C1ControllerAnimationOperation cod1ControllerAnimation;
@@ -40,7 +42,9 @@ static int ActorControllerAnimationScope(const C1ControllerAnimationOperation*o)
     o->resources!=cod1ScriptedResources.revision||!ActorScriptedReady(o->epoch))return 0;
  a=cod1Actors+lease.actorIndex;r=cod1GenericActors+lease.actorIndex;f=cod1FaceFrames+lease.actorIndex;
  return a->scriptedController.entered&&!a->scriptedController.invalid&&a->scriptedController.revision==o->controllerRevision&&
-  a->scriptedController.actorSerial==o->q.actor_serial&&a->turretMount.currentTop==1&&a->turretMount.currentStack[1]==9&&
+  a->scriptedController.actorSerial==o->q.actor_serial&&
+  (o->q.locomotion_source?ActorLocomotionAnimationScope(a,&o->q):
+   (a->turretMount.currentTop==1&&a->turretMount.currentStack[1]==9))&&
   !a->turretMount.mounted&&a->dobj.present&&!a->dobj.busy&&!memcmp(&a->dobj,&o->dobj,sizeof(o->dobj))&&r->used&&r->runtime==o->q.runtime_identity&&
   r->catalog==o->q.catalog_identity&&r->tick==o->now&&!memcmp(&r->lease,&lease,sizeof(lease))&&
   f->scripted&&f->frame==o->q.frame_generation&&f->tick==o->now&&!f->poisoned&&!memcmp(&f->lease,&lease,sizeof(lease));
@@ -103,3 +107,5 @@ done:memset(o,0,sizeof(*o));return ok;
 }
 
 #include "g_cod1_actor_source_dispatch.inc"
+
+#include "g_cod1_actor_source_look.inc"

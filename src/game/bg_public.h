@@ -228,6 +228,7 @@ typedef enum {
  * slots. Base is an ownership marker; native ordinals remain 1..511. The
  * wire uses MSG_WriteShort/MSG_ReadShort, and text still shares the unchanged
  * MAX_GAMESTATE_CHARS budget with every other configstring. */
+#define CS_COD1_PLAYER_SHOCK 1749
 #define CS_COD1_LOCALIZED_STRINGS 2048
 #define MAX_COD1_LOCALIZED_STRINGS 512
 /* R225 selected script use hints. Value255 remains the generic-use marker. */

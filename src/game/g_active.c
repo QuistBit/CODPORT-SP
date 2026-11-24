@@ -29,6 +29,7 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "g_local.h"
 #include "g_cod1_player_lifetime.h"
+#include "g_cod1_player_body_angles.inc"
 
 #include "ai_cast_fight.h"   // need these for avoidance
 
@@ -1319,6 +1320,7 @@ void ClientThink_real( gentity_t *ent ) {
 //
 //	// use the snapped origin for linking so it matches client predicted versions
 	VectorCopy( ent->s.pos.trBase, ent->r.currentOrigin );
+	G_Cod1PlayerBodyAngles( ent );
 
 	VectorCopy( pm.mins, ent->r.mins );
 	VectorCopy( pm.maxs, ent->r.maxs );

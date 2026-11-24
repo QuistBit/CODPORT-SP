@@ -56,3 +56,26 @@ int gsc_session_training_appearance(GscSession *s,uint64_t id,const GscEntityRef
  owner=*ref;if(!gsc_runtime_training_appearance(s->runtime,&owner,kind,&result))return 0;
  *out=result;return 1;
 }
+
+int gsc_session_select_entity_goal(GscSession *s){
+ if(!s||s->busy||s->program||s->runtime||s->actor_goal_enabled!=1)return 0;
+ s->actor_goal_enabled=2;return 1;
+}
+
+static int session_after_vm(GscSession *,int,char *,size_t);
+int gsc_session_course_anim_entry(GscSession *s,uint64_t id,const GscEntityExecutionCertificate *owner,int startingRun,char *error,size_t cap){
+ GscEntityScriptEntry entry={0};
+ GscEntityScriptRun result={0};
+ int ok;
+ if(!s||!owner||!owner->current||!owner->serial||!session_enter(s,error,cap))return 0;
+ if(!session_id_matches(s,id)||s->view.state!=GSC_SESSION_RUNNING||!s->runtime||!s->script_roots_ready||
+    !session_script_roots_cache_current(s)||!owner->current(&owner->owner,owner->serial))
+    return session_leave_rejected(s,"stop entry lacks live actor or animation root",error,cap);
+ entry.entity=owner->owner;strcpy(entry.module,startingRun?"animscripts/run":"animscripts/stop");strcpy(entry.function,"main");
+ ok=gsc_execute_course_anim_entry(s->runtime,&entry,owner,startingRun,&result);
+ if(!session_after_vm(s,ok,error,cap))return 0;
+ if(startingRun)G_Printf("[376 run main] owner=%u task=%llu status=%d\n",owner->owner.slot,(unsigned long long)result.task_serial,result.status);
+ 
+
+ return result.task_serial && (result.status==GSC_ENTITY_ENTRY_WAITING||result.status==GSC_ENTITY_ENTRY_SLEEPING);
+}

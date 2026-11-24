@@ -1,3 +1,4 @@
+#include "../game/source_pose_wire.h"
 #include "../game/scripted_wire.h"
 /* Current snapshot -> owned original resources -> ordinary nested current
  * tree -> native modelspace body -> typed renderer capture. No interpolation. */
@@ -31,9 +32,9 @@ static cgtaCache_t*CGTA_Resource(const char*config){cod1TurretActorResourceState
 }
 static int CG_Cod1TurretActorEntity(centity_t*cent){const entityState_t*s=NULL,*gun=NULL;cgtaCache_t*r;c1ab14Accumulator_t accumulated[128];c1aw14Pose_t pose;cod1TurretActorRenderState_t state;unsigned i,k;int j;
  if(!cent||!cent->currentState.cod1TurretActorVersion)return 0;
- if(cent->currentState.cod1TurretActorVersion==COD1_TURRET_ACTOR_WIRE_GENERIC_VERSION)return CGTA2_Entity(&cent->currentState,qfalse);
+ if(CGTA2_Detached(&cent->currentState) || cent->currentState.cod1TurretActorVersion==COD1_TURRET_ACTOR_WIRE_GENERIC_VERSION)return CGTA2_Entity(&cent->currentState,qfalse);
  if(cent->currentState.cod1TurretActorVersion==3)return CGUA3_Entity(cent);
- if(cent->currentState.cod1TurretActorVersion==COD1_FACE_UNMOUNTED_ACTOR_WIRE_VERSION || cent->currentState.cod1TurretActorVersion==COD1_SCRIPTED_ACTOR_WIRE_VERSION)return CGFA4_Entity(cent);
+ if(cent->currentState.cod1TurretActorVersion==COD1_SOURCE_POSE_WIRE_VERSION || cent->currentState.cod1TurretActorVersion==COD1_FACE_UNMOUNTED_ACTOR_WIRE_VERSION || cent->currentState.cod1TurretActorVersion==COD1_SCRIPTED_ACTOR_WIRE_VERSION)return CGFA4_Entity(cent);
  if(!cgs.cod1MapEntities||!cg.snap)return 1;
  for(j=0;j<cg.snap->numEntities;j++)if(cg.snap->entities[j].number==cent->currentState.number){s=cg.snap->entities+j;break;}
  if(!s||(s->eFlags&EF_NODRAW)||!C1TAW_Valid(s,cg.snap->serverTime))return 1;

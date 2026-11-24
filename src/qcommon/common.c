@@ -4,7 +4,7 @@
 Return to Castle Wolfenstein single player GPL Source Code
 Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company. 
 
-This file is part of the Return to Castle Wolfenstein single player GPL Source Code (RTCW SP Source Code).  
+This file is part of the Return to Castle Wolfenstein single player GPL Source Code (В“RTCW SP Source CodeВ”).  
 
 RTCW SP Source Code is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -32,6 +32,21 @@ If you have questions concerning this license or the applicable additional terms
 #include "qcommon.h"
 #include "cod1_client_trace_r241.h"
 #include <setjmp.h>
+#if defined(_WIN32) && defined(_M_IX86)
+#include "cod1_jobs_win.inc"
+#include "cod1_log_win.inc"
+#else
+#include "cod1_jobs_serial.inc"
+#endif
+static cvar_t *com_multithreading,*com_workerThreads,*com_asyncLog;
+static void Com_ThreadStatus_f(void){
+ c1jStatus j;c1lStatus l;C1J_Status(&j);C1L_Status(&l);
+ Com_Printf("MT316 enabled=%d logical=%u available=%u budget=%u created=%u batches=%llu workerChunks=%llu callerChunks=%llu\n",
+ C1J_Enabled(),j.logical,j.available,j.budget,j.created,j.batches,j.workerChunks,j.callerChunks);
+ Com_Printf("MT316 log active=%d queued=%llu written=%llu flushed=%llu pending=%u backpressure=%llu error=%d\n",
+ l.active,l.queued,l.written,l.flushed,l.pending,l.backpressure,l.error);
+}
+
 
 #define MAXPRINTMSG 4096
 
@@ -141,7 +156,13 @@ static void Com_FlushLog( void ) {
 	}
 }
 
+static void Com_PublishLog(void){
+ if(logNeedsFlush && logfile && FS_Initialized()){
+  FS_FlushLog(logfile,0);logNeedsFlush=qfalse;
+ }
+}
 static void Com_WriteLog( const char *text ) {
+ FS_EnableAsyncLog(logfile,C1J_Enabled() && com_asyncLog && com_asyncLog->integer);
 	FS_Write( text, strlen( text ), logfile );
 	logNeedsFlush = qtrue;
 	if ( com_logfile->integer > 1 || com_errorEntered ) {
@@ -2153,6 +2174,12 @@ void Com_Init( char *commandLine ) {
 		}
 	}
 
+ com_multithreading=Cvar_Get("com_multithreading","1",CVAR_ARCHIVE);
+ com_workerThreads=Cvar_Get("com_workerThreads","-1",CVAR_ARCHIVE);
+ com_asyncLog=Cvar_Get("com_asyncLog","1",CVAR_ARCHIVE);
+ Cmd_AddCommand("mt_status",Com_ThreadStatus_f);
+ C1J_Configure(com_multithreading->integer,com_workerThreads->integer);
+ Com_ThreadStatus_f();
 	com_fullyInitialized = qtrue;
 	Com_Printf( "--- Common Initialization Complete ---\n" );
 }
@@ -2290,6 +2317,48 @@ int Com_ModifyMsec( int msec ) {
 	return msec;
 }
 
+#define LOCAL_FRAME_SLICE_MAX_MSEC 8
+
+static qboolean Com_CanSmoothLocalFrame( int minMsec ) {
+	return sv_frameSmoothing && sv_frameSmoothing->integer &&
+		!com_dedicated->integer && !com_dedicated->modified && com_sv_running->integer &&
+		!com_timedemo->integer && !com_journal->integer && !com_fixedtime->integer &&
+		com_timescale->value == 1.0f && !cl_paused->integer &&
+		com_maxfps->integer > 0 && minMsec > 1 && CL_CanRunLocalFrameSlice();
+}
+
+/* The nominal frame period may be fractional on the event clock. */
+static int Com_LocalFramePeriod( int rate, int *remainder ) {
+	int period = 1000 / rate;
+	*remainder += 1000 % rate;
+	if ( *remainder >= rate ) {
+		*remainder -= rate;
+		period++;
+	}
+	return period;
+}
+
+/* Only pacing uses this clock. A partial GAME tick must not reenter the
+ * event queue. Normal client/server event dispatch follows below. */
+static void Com_WaitForLocalDraw( unsigned lastEnd, int delay ) {
+	unsigned elapsed;
+	if ( delay <= 0 ) {
+		return;
+	}
+	elapsed = (unsigned)Sys_Milliseconds() - lastEnd;
+	if ( elapsed >= (unsigned)delay ) {
+		return;
+	}
+#if defined(_WIN32) && defined(_M_IX86)
+	if ( (unsigned)delay - elapsed > 1 ) {
+		Sleep( (unsigned)delay - elapsed - 1 );
+	}
+#endif
+	while ( (unsigned)Sys_Milliseconds() - lastEnd < (unsigned)delay ) {
+		/* Finish the existing frame interval on the millisecond clock. */
+	}
+}
+
 /*
 =================
 Com_Frame
@@ -2299,7 +2368,15 @@ void Com_Frame( void ) {
 
 	int msec, minMsec;
 	static int lastTime;
+	static int lastClientMsec;
+	static int lastClientRate, periodRemainder;
+	static unsigned lastClientEnd;
+	int frameRate, earlyWait, framePeriod = 0;
 	int key;
+	int sliceBudget = 0, clientStart = 0;
+	int deferredServerMsec = 0, deferredEventsMsec = 0;
+	unsigned capExitMsec = 0;
+	qboolean sampledCapExit, measureClient, deferEvents;
 
 	int timeBeforeFirstEvents;
 	int timeBeforeServer;
@@ -2312,10 +2389,13 @@ void Com_Frame( void ) {
 
 
 	if ( setjmp( abortframe ) ) {
+		lastClientRate = periodRemainder = 0;
         Com_FlushLog();
         CL_R241TraceAbort();
 		return;         // an ERR_DROP was thrown
 	}
+    C1J_Configure(com_multithreading->integer,com_workerThreads->integer);
+    if(logfile && FS_Initialized())FS_EnableAsyncLog(logfile,C1J_Enabled() && com_asyncLog->integer);
     CL_R241TraceFrameBegin(com_frameNumber);
 
 	// bk001204 - init to zero.
@@ -2349,20 +2429,43 @@ void Com_Frame( void ) {
 	}
 
     CL_R241TraceMark(CT241_CAP_ENTER);
+	frameRate = com_maxfps->integer;
 	// we may want to spin here if things are going too fast
 	if ( !com_dedicated->integer && com_maxfps->integer > 0 && !com_timedemo->integer ) {
-		minMsec = 1000 / com_maxfps->integer;
+		minMsec = 1000 / frameRate;
 	} else {
 		minMsec = 1;
+	}
+	earlyWait = minMsec;
+	if ( lastClientRate > 0 && frameRate == lastClientRate && lastClientMsec > 0 &&
+		Com_CanSmoothLocalFrame( minMsec ) &&
+		!Cvar_VariableIntegerValue( "r_swapInterval" ) ) {
+		framePeriod = Com_LocalFramePeriod( frameRate, &periodRemainder );
+		/* Keep pumping normal input for the excess at low FPS limits. The
+		 * client and the first local server slice can fill the rest. */
+		earlyWait = minMsec - lastClientMsec - LOCAL_FRAME_SLICE_MAX_MSEC;
+		if ( earlyWait < 1 ) {
+			earlyWait = 1;
+		}
+	} else {
+		periodRemainder = 0;
 	}
 	do {
 		com_frameTime = Com_EventLoop();
 		if ( lastTime > com_frameTime ) {
 			lastTime = com_frameTime;       // possible on first frame
+			earlyWait = minMsec;
+			framePeriod = periodRemainder = 0;
 		}
 		msec = com_frameTime - lastTime;
-	} while ( msec < minMsec );
+	} while ( msec < earlyWait );
     CL_R241TraceMark(CT241_CAP_EXIT);
+	/* Event timestamps and profiling milliseconds have different origins on
+	 * Windows. Keep both ends of the available-budget interval on one clock. */
+	sampledCapExit = sv_frameSmoothing && sv_frameSmoothing->integer;
+	if ( sampledCapExit ) {
+		capExitMsec = (unsigned)Sys_Milliseconds();
+	}
 	Cbuf_Execute();
 
 	lastTime = com_frameTime;
@@ -2378,8 +2481,28 @@ void Com_Frame( void ) {
 		timeBeforeServer = Sys_Milliseconds();
 	}
 
+	/* Reserve the previous client frame's elapsed time before lending the
+	 * remaining presentation budget to the first due local SP tick. */
+	measureClient = sampledCapExit && Com_CanSmoothLocalFrame( minMsec );
+	if ( measureClient && lastClientMsec > 0 ) {
+		unsigned elapsed = (unsigned)Sys_Milliseconds() - capExitMsec;
+		int available = minMsec - lastClientMsec - 1;
+		/* A slow client frame still gets a chance to draw at the first yield. */
+		sliceBudget = 1;
+		if ( available > 0 && elapsed < (unsigned)available ) {
+			sliceBudget = available - (int)elapsed;
+			if ( sliceBudget > LOCAL_FRAME_SLICE_MAX_MSEC ) {
+				sliceBudget = LOCAL_FRAME_SLICE_MAX_MSEC;
+			}
+		}
+	}
+	if ( !measureClient ) {
+		lastClientRate = periodRemainder = 0;
+		lastClientMsec = 0;
+	}
     CL_R241TraceMark(CT241_SV_ENTER);
-	SV_Frame( msec );
+	SV_FrameWithBudget( msec, sliceBudget );
+	deferEvents = SV_FrameSlicePending();
     CL_R241TraceMark(CT241_SV_EXIT);
 
 	// if "dedicated" has been modified, start up
@@ -2410,9 +2533,13 @@ void Com_Frame( void ) {
 		if ( com_speeds->integer ) {
 			timeBeforeEvents = Sys_Milliseconds();
 		}
-		Com_EventLoop();
-		Cbuf_Execute();
-
+		if ( framePeriod && measureClient && frameRate == com_maxfps->integer ) {
+			Com_WaitForLocalDraw( lastClientEnd, framePeriod - lastClientMsec );
+		}
+		if ( !deferEvents ) {
+			Com_EventLoop();
+			Cbuf_Execute();
+		}
 
 		//
 		// client side
@@ -2421,7 +2548,36 @@ void Com_Frame( void ) {
 			timeBeforeClient = Sys_Milliseconds();
 		}
 
+		if ( measureClient ) {
+			clientStart = Sys_Milliseconds();
+		}
 		CL_Frame( msec );
+		if ( measureClient ) {
+			lastClientEnd = (unsigned)Sys_Milliseconds();
+			lastClientMsec = (int)( lastClientEnd - (unsigned)clientStart );
+			/* Begin pacing only after this native local SP server actually yielded. */
+			lastClientRate = ( deferEvents || lastClientRate == frameRate ) ? frameRate : 0;
+			if ( deferEvents && !SV_FrameSlicePending() ) {
+				/* A direct client service may have drained the server inside CL_Frame. */
+				lastClientMsec -= SV_FrameSliceDrainMsec();
+			}
+		}
+		if ( deferEvents ) {
+			unsigned eventStart = 0;
+			qboolean profile = com_speeds->integer != 0;
+			/* The old snapshot supplied this draw. Finish the due work before
+			 * consuming loopback commands or executing the command buffer. */
+			SV_FinishFrameSlice();
+			if ( profile ) {
+				deferredServerMsec = SV_FrameSliceDrainMsec();
+				eventStart = (unsigned)Sys_Milliseconds();
+			}
+			Com_EventLoop();
+			Cbuf_Execute();
+			if ( profile ) {
+				deferredEventsMsec = (int)( (unsigned)Sys_Milliseconds() - eventStart );
+			}
+		}
 
 		if ( com_speeds->integer ) {
 			timeAfter = Sys_Milliseconds();
@@ -2438,6 +2594,11 @@ void Com_Frame( void ) {
 		sv = timeBeforeEvents - timeBeforeServer;
 		ev = timeBeforeServer - timeBeforeFirstEvents + timeBeforeClient - timeBeforeEvents;
 		cl = timeAfter - timeBeforeClient;
+		/* Wall after the swap belongs to the deferred server and event passes.
+		 * This also accounts for an early drain inside a direct client service. */
+		sv += deferredServerMsec;
+		ev += deferredEventsMsec;
+		cl -= deferredServerMsec + deferredEventsMsec;
 		sv -= time_game;
 		cl -= time_frontend + time_backend;
 
@@ -2464,7 +2625,7 @@ void Com_Frame( void ) {
 	// old net chan encryption key
 	key = lastTime * 0x87243987;
 
-    Com_FlushLog();
+    Com_PublishLog();
     CL_R241TraceFrameEnd();
 	com_frameNumber++;
 }
@@ -2475,6 +2636,7 @@ Com_Shutdown
 =================
 */
 void Com_Shutdown( void ) {
+ C1J_Shutdown();
 	if ( logfile ) {
 		FS_FCloseFile( logfile );
 		logNeedsFlush = qfalse;

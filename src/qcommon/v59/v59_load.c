@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "v59_internal.h"
+#include "v59_mesh_build_math.h"
 typedef struct {const unsigned char *data;size_t size;v59_world*w;jmp_buf fail;char *err;size_t errsize;} loader;
 static void bad(loader*l,const char*s){if(l->errsize)snprintf(l->err,l->errsize,"%s",s);longjmp(l->fail,1);}
 static void *take(loader*l,size_t n,size_t size){allocation*a;void*p;
@@ -36,13 +37,11 @@ static void build_mesh(loader*l,surface*s,const float(*v)[3],int nv,const uint16
  for(i=0;i<m->nt;i++){
   triangle*t=&m->tri[i];float u[3],q[3],us[3],vs[3],lu,lv,uv,factor,length;int tri[3];
   for(j=0;j<3;j++)tri[j]=indices[i*3+j];a=tri[0];b=tri[1];c=tri[2];
-  minus(v[c],v[a],A);minus(v[b],v[a],B);cross(A,B,N);length=norm(N);if(!length||!isfinite(length))bad(l,"degenerate or overflowing triangle");
-  cp(N,t->plane);t->plane[3]=dp(N,v[a],0,1,2);if(N[2]<-.001f)down=1;if(N[2]>.001f)up=1;
-  minus(v[b],v[a],u);lu=norm(u);minus(v[c],v[a],q);lv=norm(q);uv=dot(q,u);
-  factor=fd(1,fs(1,fm(uv,uv)));if(!isfinite(factor))bad(l,"singular mesh barycentric basis");
-  for(j=0;j<3;j++){us[j]=fm(factor,u[j]);vs[j]=fm(factor,q[j]);}
-  for(j=0;j<3;j++){t->bary[0][j]=fm(fa(fm(-uv,vs[j]),us[j]),fd(1,lu));t->bary[1][j]=fm(fa(fm(-uv,us[j]),vs[j]),fd(1,lv));}
-  for(j=0;j<2;j++)t->bary[j][3]=dp(t->bary[j],v[a],1,2,0);
+  minus(v[c],v[a],A);minus(v[b],v[a],B);C1MLCross(A,B,N);length=C1MLNorm(N);if(!length||!isfinite(length))bad(l,"degenerate or overflowing triangle");
+  cp(N,t->plane);t->plane[3]=C1MLStore(C1MLDot(N,v[a],0,1,2));if(N[2]<-.001f)down=1;if(N[2]>.001f)up=1;
+  minus(v[b],v[a],u);lu=C1MLNorm(u);minus(v[c],v[a],q);lv=C1MLNorm(q);
+  C1MLBary(v[a],u,q,lu,lv,t->bary);
+  for(j=0;j<2;j++)for(k=0;k<4;k++)if(!isfinite(t->bary[j][k]))bad(l,"singular mesh barycentric basis");
   for(j=0;j<3;j++){
    int e0=tri[j==0?1:0],e1=tri[j==2?1:2];t->vertices[j]=remap[tri[j]];t->edges[j]=-1;
    /* Dictionary semantics from the reference: the last duplicate wins. */
@@ -52,10 +51,8 @@ static void build_mesh(loader*l,surface*s,const float(*v)[3],int nv,const uint16
  m->down=down&&!up;
  for(i=0;i<ne;i++){
   edge*e=&m->edges[i];float axis[3]={0},inv,projection[3],d0;cp(v[ei[i].a],e->origin);
-  minus(v[ei[i].b],e->origin,e->direction);e->length=norm(e->direction);if(!e->length||!isfinite(e->length))bad(l,"zero or overflowing mesh edge");
-  k=0;for(j=1;j<3;j++)if(fabsf(e->direction[j])<fabsf(e->direction[k]))k=j;axis[k]=1;
-  inv=fd(1,dp(e->direction,e->direction,0,1,2));d0=fm(dot(axis,e->direction),inv);
-  for(j=0;j<3;j++)projection[j]=fs(axis[j],fm(fm(inv,e->direction[j]),d0));norm(projection);cp(projection,e->basis[0]);cross(e->direction,e->basis[0],e->basis[1]);
+  minus(v[ei[i].b],e->origin,e->direction);e->length=C1MLNorm(e->direction);if(!e->length||!isfinite(e->length))bad(l,"zero or overflowing mesh edge");
+  C1MLBasis(e->direction,e->basis);
  }
  for(k=0;k<3;k++){s->bounds[k]=262144;s->bounds[k+3]=-262144;for(i=0;i<nv;i++){if(v[i][k]<s->bounds[k])s->bounds[k]=v[i][k];if(v[i][k]>s->bounds[k+3])s->bounds[k+3]=v[i][k];}}
  if(ne>l->w->maxedges)l->w->maxedges=ne;if(m->nv>l->w->maxvertices)l->w->maxvertices=m->nv;
@@ -70,7 +67,7 @@ static int depth_check(loader*l,int i,unsigned char*color,int *depth){int j,d=0;
 V59_API void v59_free(v59_world*w){allocation*a;int i;if(!w)return;
  if(w->surfaces)for(i=0;i<w->ns;i++){free(w->surfaces[i].c.planes);free(w->surfaces[i].c.facets);}
  while(w->allocs){a=w->allocs;w->allocs=a->next;free(a->ptr);free(a);}free(w);}
-V59_API v59_world *v59_load(const void *data,size_t size,char *error,size_t error_size){
+static v59_world *v59_load_native(const void *data,size_t size,char *error,size_t error_size){
  loader*l=calloc(1,sizeof(*l));v59_world*w;const unsigned char *p,*bsides,*bbrushes;int i,j,k,count,nside,nv,ni;uint32_t first=0;float(*verts)[3];uint16_t*indices;
  if(error&&error_size)error[0]=0;
  if(!l)return NULL;l->data=data;l->size=size;l->err=error;l->errsize=error?error_size:0;
@@ -122,6 +119,26 @@ V59_API v59_world *v59_load(const void *data,size_t size,char *error,size_t erro
  for(i=0;i<w->nmodels;i++){model*m=&w->models[i];finite_vec(l,p+i*48,m->bounds,6);for(j=0;j<6;j++)m->ranges[j]=u32(p+i*48+24+j*4);
   range(l,m->ranges[4],m->ranges[5],w->nb);range(l,m->ranges[2],m->ranges[3],w->nsr);}
  free(l);return w;
+}
+/* Construction is original engine PC53, round-to-nearest. The caller may
+ * be a renderer with PC24/FTZ or retain live x87 values. Preserve its complete
+ * x87 state and MXCSR on success and on every checked loader failure. */
+V59_API v59_world *v59_load(const void *data,size_t size,char *error,size_t error_size){
+ v59_world *result;
+#if defined(_MSC_VER) && defined(_M_IX86)
+ unsigned char saved[108],discard[108];unsigned mx,nearMx=0x1f80;unsigned short cw=0x027f;
+ __asm fnsave saved
+ __asm stmxcsr mx
+ __asm fldcw cw
+ __asm ldmxcsr nearMx
+ result=v59_load_native(data,size,error,error_size);
+ __asm fnsave discard
+ __asm ldmxcsr mx
+ __asm frstor saved
+#else
+ result=v59_load_native(data,size,error,error_size);
+#endif
+ return result;
 }
 V59_API int v59_model_count(const v59_world*w){return w?w->nmodels:0;}
 

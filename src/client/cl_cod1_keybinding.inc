@@ -298,13 +298,24 @@ qboolean CL_Cod1KeyBindingContext(cod1KeyBindingQuery_t *query) {
     if(query->phase!=COD1_KEYBINDING_PHASE_QUERY)return qfalse;
     query->cgame_generation=cl_cod1KeyBindingGeneration;return qtrue;
 }
+/* GSC queries use the action names from the CoD controls menu. */
+static const char *CL_Cod1ScriptBinding(const char *binding) {
+    if (!binding) return NULL;
+    if (!Q_stricmp(binding,"+cod1adstoggle")) return "toggle cl_run";
+    if (!Q_stricmp(binding,"+cod1adshold") || !Q_stricmp(binding,"+attack2")) return "+speed";
+    if (!Q_stricmp(binding,"+cod1ads"))
+        return Cvar_VariableIntegerValue("cl_cod1AdsToggle") ? "toggle cl_run" : "+speed";
+    /* Both of these literal engine commands control locomotion. */
+    if (!Q_stricmp(binding,"+speed") || !Q_stricmp(binding,"toggle cl_run")) return NULL;
+    return binding;
+}
 qboolean CL_Cod1KeyBindingScan(int retail,char *buffer,int capacity) {
     const char *binding;int port,n;
     if(!buffer||capacity!=COD1_KEYBINDING_BINDING_CAP||retail<0||retail>255||
        currentVM!=cgvm||!CL_Cod1KeyBindingDomainReady(0))return qfalse;
     memset(buffer,0,(size_t)capacity);port=CL_Cod1KeyBindingPortForRetail(retail);
     if(port<0)return qtrue;
-    binding=Key_GetBinding(port);
+    binding=CL_Cod1ScriptBinding(Key_GetBinding(port));
     if(binding)for(n=0;n<capacity-1&&binding[n];n++)buffer[n]=binding[n];
     return qtrue;
 }

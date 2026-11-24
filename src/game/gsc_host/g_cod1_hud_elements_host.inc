@@ -99,6 +99,18 @@ static int GscTestHudInvoke(void *user,const GscHudElemRequest *input,GscHudElem
         index=(int)request.element.index;generation=request.element.generation;state=gscTestHud.slot[index];result.element=request.element;result.alive=1;
     }
     if(((request.kind==GSC_HUDELEM_WRITE||request.kind==GSC_HUDELEM_READ)&&request.field>=GSC_HUDELEM_FIELD_ALPHA)||request.kind>=GSC_HUDELEM_SET_SHADER){
+        /* The builtin black material predates map shader precaching and is
+         * used directly by unchanged maps/_introscreen. Other materials need
+         * their current map precache entry. */
+        if(request.kind==GSC_HUDELEM_SET_SHADER&&Q_stricmp(request.text,"black")){
+            char name[MAX_STRING_CHARS];int shader;
+            for(shader=1;shader<MAX_COD1_SHADERS;shader++){
+                trap_GetConfigstring(CS_COD1_SHADERS+shader,name,sizeof(name));
+                if(!GscTestHudLeaseCurrent(&lease,request.now_ms,current,context)||memcmp(input,&request,sizeof(request)))goto refuse;
+                if(!name[0]||!Q_stricmp(name,request.text))break;
+            }
+            if(shader==MAX_COD1_SHADERS||!name[0])goto refuse;
+        }
         if(!HudIntroApply(&state,&request,server_time,&result))goto refuse;
     }else if(request.kind==GSC_HUDELEM_WRITE){
         if(request.field==GSC_HUDELEM_FIELD_X||request.field==GSC_HUDELEM_FIELD_Y){

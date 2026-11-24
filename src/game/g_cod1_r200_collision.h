@@ -2,6 +2,9 @@
 #define G_COD1_R200_COLLISION_H
 #include "cod1_gsc/gsc_fixture.h"
 #include <math.h>
+int G_Cod1DisableGrenadeBounce(const GscEntityRef *);
+int G_Cod1EnableGrenadeTouchDamage(const GscEntityRef *);
+int G_Cod1ScriptBrushSolid(const GscEntityRef *,int,char *,size_t,int (*)(void *),void *);
 int G_Cod1ScriptBrushNotSolid(const GscEntityRef *,int,char *,size_t,int (*)(void *),void *);
 int G_Cod1ScriptBrushNonsolidOwned(const GscEntityRef *);
 int G_Cod1ScriptBrushNonsolidCommit(const GscEntityRef *);

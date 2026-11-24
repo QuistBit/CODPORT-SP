@@ -8,7 +8,7 @@
 #include "g_cod1_training_finale_source.h"
 #include "../g_cod1_actor_bootstrap.h"
 #include "../g_cod1_spawner.h"
-static struct {int selected,moody,sequence,followup,opening;int moodyModel,moodyCharacter;uint64_t epoch,id;GscEntityRef moodyRef;} gscTestCarbine;
+static struct {int selected,moody,sequence,followup,opening;int moodyModel,moodyCharacter,moodyInitialStop;uint64_t epoch,id;GscEntityRef moodyRef;} gscTestCarbine;
 static GscSessionActorBootstrapHost gscTestCarbineActors;
 static int GscTestCarbineStorageProtected(const void *p,size_t n) {
  return CAR_Overlap(p,n,&gscTestCarbine,sizeof(gscTestCarbine))||CAR_Overlap(p,n,&gscTestCarbineActors,sizeof(gscTestCarbineActors));
@@ -47,15 +47,16 @@ static int GscTestCarbineFieldRead(void *unused,const GscEntityRef *ref,const ch
         return G_Cod1ActorReadAbsentEnemyField(ref,out,error,size);
     if((!strcmp(name,"weapon")||!strcmp(name,"name"))&&trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1)
         return G_Cod1ActorReadRuntimeStringField(ref,name,out,error,size);
+    if(!Q_stricmp(name,"script_noteworthy"))return G_Cod1EntityReadNoteworthy(ref,out,error,size);
     if(!strcmp(name,"classname")&&trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1)
         return G_Cod1EntityReadClassnameField(ref,out,error,size);
     if(!strcmp(name,"model")&&trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1)
-        return G_Cod1ActorReadModelField(ref,out,error,size);
+        return G_Cod1EntityReadModelField(ref,out,error,size);
     if(!strcmp(name,"anim_pose")&&trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1)
         return G_Cod1ActorPoseFieldHost()->read(NULL,ref,name,out,error,size);
     if(ref->slot>=MAX_CLIENTS&&trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1&&
-       (!strcmp(name,"node")||!strcmp(name,"team")||!strcmp(name,"accuracy")||!strcmp(name,"accuracystationarymod")||
-        !strcmp(name,"scariness")||!strcmp(name,"health")||!strcmp(name,"maxhealth")||!Q_stricmp(name,"maxsightdistsqrd")||!Q_stricmp(name,"walkdist")||!Q_stricmp(name,"interval")||!Q_stricmp(name,"dontavoidplayer")||!Q_stricmp(name,"dropweapon")||!Q_stricmp(name,"pacifist")||!Q_stricmp(name,"chainfallback")||!Q_stricmp(name,"drawoncompass")||!Q_stricmp(name,"useable")))
+       (!Q_stricmp(name,"grenade")||!Q_stricmp(name,"lookforward")||!Q_stricmp(name,"lookright")||!Q_stricmp(name,"lookup")||!Q_stricmp(name,"groundtype")||!Q_stricmp(name,"desiredangle")||!strcmp(name,"node")||!Q_stricmp(name,"chainnode")||!strcmp(name,"team")||!strcmp(name,"accuracy")||!strcmp(name,"accuracystationarymod")||
+        !strcmp(name,"scariness")||!strcmp(name,"health")||!strcmp(name,"maxhealth")||!Q_stricmp(name,"grenadeawareness")||!Q_stricmp(name,"suppressionwait")||!Q_stricmp(name,"maxsightdistsqrd")||!Q_stricmp(name,"walkdist")||!Q_stricmp(name,"interval")||!Q_stricmp(name,"dontavoidplayer")||!Q_stricmp(name,"dropweapon")||!Q_stricmp(name,"pacifist")||!Q_stricmp(name,"chainfallback")||!Q_stricmp(name,"drawoncompass")||!Q_stricmp(name,"useable")))
         return G_Cod1ActorReadRuntimeField(ref,name,out,error,size);
     if(gscTestCarbine.followup&&!strcmp(name,"cod1_hint_string"))return G_Cod1HintRead(ref,out,error,size);
     if(gscTestCarbine.followup&&!strcmp(name,"count")&&G_Cod1ItemLifecycleOwns(ref))return GscTestGrenadeFieldRead(NULL,ref,name,out,error,size);

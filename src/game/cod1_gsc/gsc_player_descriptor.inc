@@ -2,7 +2,7 @@
 #define ENTITY_METHOD_PLAYER_BASE 100
 static int player_method_kind(int descriptor) {
     int kind=descriptor-ENTITY_METHOD_PLAYER_BASE;
-    return kind>=GSC_PLAYER_GET_CURRENT_WEAPON&&kind<=GSC_PLAYER_GIVE_MAX_AMMO?kind:0;
+    return kind>=GSC_PLAYER_GET_CURRENT_WEAPON&&kind<=GSC_PLAYER_ALLOW_PRONE?kind:0;
 }
 static int player_method_descriptor(const GscProgram *g,const char *name) {
     static const char *const names[]={"getcurrentweapon","hasweapon","giveweapon",
@@ -11,6 +11,17 @@ static int player_method_descriptor(const GscProgram *g,const char *name) {
         "reloadbuttonpressed","meleebuttonpressed","freezecontrols"};
     int i;
     if(!g->player_natives_selected)return -1;
+    if(g->player_stance_permissions_selected){
+        if(callable_name_equal(g,name,"allowstand"))return ENTITY_METHOD_PLAYER_BASE+GSC_PLAYER_ALLOW_STAND;
+        if(callable_name_equal(g,name,"allowcrouch"))return ENTITY_METHOD_PLAYER_BASE+GSC_PLAYER_ALLOW_CROUCH;
+        if(callable_name_equal(g,name,"allowprone"))return ENTITY_METHOD_PLAYER_BASE+GSC_PLAYER_ALLOW_PRONE;
+    }
+    if(callable_name_equal(g,name,"setplayerangles"))return ENTITY_METHOD_PLAYER_BASE+GSC_PLAYER_SET_ANGLES;
+    if(callable_name_equal(g,name,"getweaponslotweapon"))return ENTITY_METHOD_PLAYER_BASE+GSC_PLAYER_GET_SLOT_WEAPON;
+    if(g->training_opening_selected && g->shellshock_mode){
+        if(callable_name_equal(g,name,"shellshock"))return ENTITY_METHOD_PLAYER_BASE+GSC_PLAYER_SHELLSHOCK;
+        if(callable_name_equal(g,name,"stopshellshock"))return ENTITY_METHOD_PLAYER_BASE+GSC_PLAYER_STOP_SHELLSHOCK;
+    }
     if(g->player_max_ammo_selected&&callable_name_equal(g,name,"givemaxammo"))return ENTITY_METHOD_PLAYER_BASE+GSC_PLAYER_GIVE_MAX_AMMO;
     if(g->player_viewmodel_selected&&callable_name_equal(g,name,"setviewmodel"))return ENTITY_METHOD_PLAYER_BASE+GSC_PLAYER_SET_VIEWMODEL;
     if(g->player_normal_health_selected) {
@@ -26,8 +37,9 @@ static int player_method_descriptor(const GscProgram *g,const char *name) {
 }
 static int player_method_arity(int descriptor) {
     int kind=player_method_kind(descriptor);
-    if(kind==GSC_PLAYER_SET_NORMAL_HEALTH||kind==GSC_PLAYER_SET_VIEWMODEL||kind==GSC_PLAYER_GIVE_MAX_AMMO)return 1;
-    if(kind==GSC_PLAYER_SET_AMMO_CLIP||kind==GSC_PLAYER_SET_AMMO_STOCK)return 2;
+    if(kind>=GSC_PLAYER_ALLOW_STAND&&kind<=GSC_PLAYER_ALLOW_PRONE)return 1;
+    if(kind==GSC_PLAYER_SET_ANGLES||kind==GSC_PLAYER_GET_SLOT_WEAPON||kind==GSC_PLAYER_SET_NORMAL_HEALTH||kind==GSC_PLAYER_SET_VIEWMODEL||kind==GSC_PLAYER_GIVE_MAX_AMMO)return 1;
+    if(kind==GSC_PLAYER_SET_AMMO_CLIP||kind==GSC_PLAYER_SET_AMMO_STOCK||kind==GSC_PLAYER_SHELLSHOCK)return 2;
     if(kind==GSC_PLAYER_HAS_WEAPON||kind==GSC_PLAYER_GIVE_WEAPON||
        kind==GSC_PLAYER_TAKE_WEAPON||kind==GSC_PLAYER_SWITCH_TO_WEAPON||
        kind==GSC_PLAYER_FREEZE_CONTROLS||kind==GSC_PLAYER_GET_FRACTION_MAX_AMMO)return 1;
@@ -35,7 +47,7 @@ static int player_method_arity(int descriptor) {
 }
 static int player_method_result(int descriptor) {
     int kind=player_method_kind(descriptor);
-    if(kind==GSC_PLAYER_GET_CURRENT_WEAPON||kind==GSC_PLAYER_GET_STANCE)return GSC_PLAYER_RESULT_STRING;
+    if(kind==GSC_PLAYER_GET_SLOT_WEAPON||kind==GSC_PLAYER_GET_CURRENT_WEAPON||kind==GSC_PLAYER_GET_STANCE)return GSC_PLAYER_RESULT_STRING;
     if(kind==GSC_PLAYER_GET_FRACTION_MAX_AMMO||kind==GSC_PLAYER_GET_NORMAL_HEALTH)return GSC_PLAYER_RESULT_FLOAT;
     if(kind==GSC_PLAYER_HAS_WEAPON||
        (kind>=GSC_PLAYER_ATTACK_PRESSED&&kind<=GSC_PLAYER_MELEE_PRESSED))return GSC_PLAYER_RESULT_INT;

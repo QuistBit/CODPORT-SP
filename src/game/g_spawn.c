@@ -43,6 +43,7 @@ If you have questions concerning this license or the applicable additional terms
 #include "g_cod1_spawner.h"
 #include "g_cod1_spawner_registry.inc"
 #include "g_cod1_node_registry.inc"
+#include "g_cod1_vehicle_nodes.inc"
 #include "gsc_host/g_cod1_ai_array_host.inc"
 #include "gsc_host/g_cod1_actor_bootstrap_host.inc"
 #include "gsc_host/g_cod1_spawner_pose.inc"
@@ -913,6 +914,7 @@ void G_SpawnGEntityFromSpawnVars( void ) {
 
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
 	if ( Cod1NodeRegistryIntake() ) return;
+	if ( VehicleIntake() ) return;
 #endif
 
 	// get the next free entity
@@ -1136,10 +1138,12 @@ Parses textual entity definitions out of an entstring and spawns gentities.
 ==============
 */
 void G_SpawnEntitiesFromString( void ) {
+    G_Cod1GscCampaignMapProfile();
 	G_Cod1MapSpawnBegin();
 	G_Cod1SpawnerMapBegin();
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
 	Cod1NodeRegistryBegin();
+	VehicleBegin();
 	Cod1AiDomainBegin();
 	Cod1ActorPrefixBegin();
 #endif
@@ -1174,6 +1178,7 @@ void G_SpawnEntitiesFromString( void ) {
 	level.spawning = qfalse;            // any future calls to G_Spawn*() will be errors
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
 	Cod1NodeRegistryFinish();
+	VehicleFinish();
 	Cod1AiDomainFinish();
 	Cod1ActorPrefixFinish();
 #endif

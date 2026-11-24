@@ -1,0 +1,115 @@
+{
+  "118C": {
+    "src/client/client.h": "tools/source-revisions/118C/client/client.h",
+    "src/game/bg_cod1_script_sound.h": "tools/source-revisions/118C/game/bg_cod1_script_sound.h",
+    "src/game/bg_cod1_script_sound_packet.h": "tools/source-revisions/118C/game/bg_cod1_script_sound_packet.h",
+    "src/game/bg_cod1_sound_notify.h": "tools/source-revisions/118C/game/bg_cod1_sound_notify.h",
+    "src/game/bg_cod1_stance.h": "tools/source-revisions/118C/game/bg_cod1_stance.h",
+    "src/game/bg_cod1_weapondef.h": "tools/source-revisions/118C/game/bg_cod1_weapondef.h",
+    "src/game/bg_public.h": "tools/source-revisions/118C/game/bg_public.h",
+    "src/game/cod1_precache.h": "tools/source-revisions/118C/game/cod1_precache.h",
+    "src/game/cod1_spatial.h": "tools/source-revisions/118C/game/cod1_spatial.h",
+    "src/game/g_public.h": "tools/source-revisions/118C/game/g_public.h",
+    "src/game/q_shared.h": "tools/source-revisions/118C/game/q_shared.h",
+    "src/qcommon/cm_public.h": "tools/source-revisions/118C/qcommon/cm_public.h",
+    "src/qcommon/cod1_client_trace_r241.h": "tools/source-revisions/702A/qcommon/cod1_client_trace_r241.h",
+    "src/qcommon/cod1_collision.h": "tools/source-revisions/118C/qcommon/cod1_collision.h",
+    "src/qcommon/qcommon.h": "tools/source-revisions/118C/qcommon/qcommon.h",
+    "src/qcommon/v59/v59_collision.h": "tools/source-revisions/118C/qcommon/v59/v59_collision.h",
+    "src/renderer/tr_local.h": "tools/source-revisions/118C/renderer/tr_local.h",
+    "src/server/server.h": "tools/source-revisions/118C/server/server.h"
+  },
+  "247C": {
+    "src/game/q_shared.h": "tools/source-revisions/118C/game/q_shared.h"
+  },
+  "310A": {
+    "src/client/client.h": "tools/source-revisions/118C/client/client.h",
+    "src/game/q_shared.h": "tools/source-revisions/118C/game/q_shared.h",
+    "src/qcommon/cm_public.h": "tools/source-revisions/118C/qcommon/cm_public.h",
+    "src/qcommon/qcommon.h": "tools/source-revisions/118C/qcommon/qcommon.h"
+  },
+  "316A": {
+    "src/client/client.h": "tools/source-revisions/118C/client/client.h",
+    "src/game/q_shared.h": "tools/source-revisions/118C/game/q_shared.h",
+    "src/qcommon/cm_public.h": "tools/source-revisions/118C/qcommon/cm_public.h",
+    "src/qcommon/cod1_jobs.h": "tools/source-revisions/316A/qcommon/cod1_jobs.h",
+    "src/qcommon/qcommon.h": "tools/source-revisions/579A/qcommon/qcommon.h"
+  },
+  "322A": {
+    "src/game/q_shared.h": "tools/source-revisions/118C/game/q_shared.h",
+    "src/qcommon/cm_public.h": "tools/source-revisions/118C/qcommon/cm_public.h",
+    "src/qcommon/qcommon.h": "tools/source-revisions/579A/qcommon/qcommon.h"
+  },
+  "337A": {
+    "src/game/q_shared.h": "tools/source-revisions/118C/game/q_shared.h",
+    "src/qcommon/cm_public.h": "tools/source-revisions/118C/qcommon/cm_public.h",
+    "src/qcommon/qcommon.h": "tools/source-revisions/579A/qcommon/qcommon.h"
+  },
+  "413C": {
+    "src/qcommon/v59/v59_collision.h": "tools/source-revisions/413C/qcommon/v59/v59_collision.h"
+  },
+  "426A": {
+    "src/game/q_shared.h": "tools/source-revisions/453A/game/q_shared.h",
+    "src/qcommon/cm_public.h": "tools/source-revisions/118C/qcommon/cm_public.h",
+    "src/qcommon/qcommon.h": "tools/source-revisions/579A/qcommon/qcommon.h"
+  },
+  "453A": {
+    "src/client/client.h": "tools/source-revisions/118C/client/client.h",
+    "src/game/q_shared.h": "tools/source-revisions/453A/game/q_shared.h",
+    "src/qcommon/cm_public.h": "tools/source-revisions/118C/qcommon/cm_public.h",
+    "src/qcommon/qcommon.h": "tools/source-revisions/579A/qcommon/qcommon.h"
+  },
+  "541A": {
+    "src/game/g_public.h": "tools/source-revisions/541A/game/g_public.h",
+    "src/qcommon/cod1_actor_generic_tree14.h": "tools/source-revisions/541A/qcommon/cod1_actor_generic_tree14.h",
+    "src/qcommon/cod1_actor_source_pose14.h": "tools/source-revisions/541A/qcommon/cod1_actor_source_pose14.h",
+    "src/qcommon/cod1_collision.h": "tools/source-revisions/118C/qcommon/cod1_collision.h",
+    "src/qcommon/qcommon.h": "tools/source-revisions/579A/qcommon/qcommon.h",
+    "src/server/server.h": "tools/source-revisions/541A/server/server.h"
+  },
+  "572A": {
+    "src/qcommon/cod1_actor_generic_tree14.h": "tools/source-revisions/541A/qcommon/cod1_actor_generic_tree14.h",
+    "src/qcommon/cod1_actor_source_pose14.h": "tools/source-revisions/541A/qcommon/cod1_actor_source_pose14.h"
+  },
+  "575B": {
+    "src/qcommon/qcommon.h": "tools/source-revisions/579A/qcommon/qcommon.h"
+  },
+  "575C": {
+    "src/qcommon/qcommon.h": "tools/source-revisions/579A/qcommon/qcommon.h"
+  },
+  "578A": {
+    "src/qcommon/qcommon.h": "tools/source-revisions/579A/qcommon/qcommon.h"
+  },
+  "579A": {
+    "src/qcommon/qcommon.h": "tools/source-revisions/579A/qcommon/qcommon.h"
+  },
+  "583A": {
+    "src/qcommon/qcommon.h": "tools/source-revisions/579A/qcommon/qcommon.h"
+  },
+  "609A": {
+    "src/game/bg_cod1_ammo_registry.h": "tools/source-revisions/713A/game/bg_cod1_ammo_registry.h",
+    "src/game/cod1_gsc/gsc_fixture.h": "tools/source-revisions/609A/game/cod1_gsc/gsc_fixture.h",
+    "src/game/cod1_gsc/gsc_session.h": "tools/source-revisions/609A/game/cod1_gsc/gsc_session.h",
+    "src/game/g_cod1_actor.h": "tools/source-revisions/609A/game/g_cod1_actor.h",
+    "src/game/g_cod1_gsc_test.h": "tools/source-revisions/609A/game/g_cod1_gsc_test.h",
+    "src/game/g_public.h": "tools/source-revisions/541A/game/g_public.h"
+  },
+  "693I": {
+    "src/qcommon/qcommon.h": "tools/source-revisions/118C/qcommon/qcommon.h",
+    "src/renderer/tr_local.h": "tools/source-revisions/118C/renderer/tr_local.h"
+  },
+  "702A": {
+    "src/qcommon/cod1_client_trace_r241.h": "tools/source-revisions/702A/qcommon/cod1_client_trace_r241.h",
+    "src/qcommon/qcommon.h": "tools/source-revisions/118C/qcommon/qcommon.h",
+    "src/renderer/tr_local.h": "tools/source-revisions/118C/renderer/tr_local.h"
+  },
+  "710A": {
+    "src/qcommon/qcommon.h": "tools/source-revisions/579A/qcommon/qcommon.h"
+  },
+  "713A": {
+    "src/game/bg_cod1_ammo_registry.h": "tools/source-revisions/713A/game/bg_cod1_ammo_registry.h"
+  },
+  "722C": {
+    "src/game/q_shared.h": "tools/source-revisions/453A/game/q_shared.h"
+  }
+}

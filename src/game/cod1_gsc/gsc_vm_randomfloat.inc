@@ -44,7 +44,10 @@ static int randomfloat_call_selected(GscRuntime *r,int kind,const Value *args,in
     if(selected&&!r->float_arithmetic_enabled)return rfail(r,line,"module float arithmetic runtime capability unavailable");
     if(!argc)return rfail(r,line,"randomfloat missing GetFloat argument 0");
     if(args[0].kind!=V_NUMBER)return rfail(r,line,"randomfloat argument 0 requires selected numeric payload");
-    if(args[0].integer==1) {
+    if(selected==2&&args[0].integer==1){
+        if(!float_arithmetic_number_bits(r,args,line,&bound)||!r232_source_float_bits(bound)||!float_arithmetic_bound_valid(bound))
+            return rfail(r,line,"source randomfloat integer argument outside selected finite GetFloat domain");
+    }else if(args[0].integer==1) {
         if(!args[0].integer_exact||!randomfloat_integer_bits(args[0].integer_value,&bound))
             return rfail(r,line,"randomfloat integer argument 0 outside exact GetFloat domain");
     } else {

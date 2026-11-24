@@ -2,7 +2,7 @@
  * stalingrad factory reads this same live cell, including after spawned.
  * No factory admission or successful spawn is supplied by field access. */
 static int Cod1SpawnerCountPrivate(const void *p,size_t n) {
-    return Cod1SpawnerOverlap(p,n,cod1Spawners,sizeof(cod1Spawners))||
+    return Cod1SpawnerOverlap(p,n,&cod1SpawnerStorage,sizeof(cod1SpawnerStorage))||
         Cod1SpawnerOverlap(p,n,g_entities,sizeof(g_entities))||
         Cod1SpawnerOverlap(p,n,&level,sizeof(level));
 }

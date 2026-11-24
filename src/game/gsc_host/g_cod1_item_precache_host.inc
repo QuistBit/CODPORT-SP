@@ -201,3 +201,32 @@ end:
 refuse:
     GscTestError(error,capacity,"item unknown/unavailable, phase closed or map/session/provider changed; committed prefixes may remain");return 0;
 }
+
+/* Map items register during level construction even if no script calls
+ * precacheItem for their weapon. Merge their definitions after script
+ * initialization, before closing the shared registration window. */
+static int GscTestRegisterPlacedWeapons(char *error,size_t capacity) {
+    GscSessionSnapshot snapshot;
+    int i;
+    if(!gsc_session_snapshot(gscTestSession,&snapshot))return 0;
+    for(i=1;i<level.num_entities;++i) {
+        const gentity_t *ent=&g_entities[i];
+        cod1ItemDescriptor_t descriptor;
+        GscEntityRef owner;
+        GscPrecacheItemEvent registration;
+        if(!ent->inuse || !ent->item || ent->item->giType!=IT_WEAPON ||
+           !ent->classname || strncmp(ent->classname,"weapon_",7) ||
+           (ent->flags&FL_DROPPED_ITEM))continue;
+        if(!CI_Resolve(ent->classname+7,&descriptor) || !descriptor.dynamic ||
+           strcmp(descriptor.classname,ent->classname) || descriptor.type!=1)continue;
+        if(gscTestItem.complete[descriptor.index])continue;
+        memset(&registration,0,sizeof(registration));
+        Q_strncpyz(registration.name,descriptor.internal_name,sizeof(registration.name));
+        registration.operation_id=gscTestItem.operation_id+1;
+        if(!G_Cod1EntityCapture(ent,&owner) ||
+           !GscTestItemPublish(NULL,gscTestId,snapshot.logical_ms,&registration,error,capacity) ||
+           !G_Cod1EntitySameAllocation(&owner))return 0;
+        G_Printf("[CoD1 items] registered placed weapon %s at entity %d\n",descriptor.classname,i);
+    }
+    return 1;
+}

@@ -621,7 +621,7 @@ static void CG_General( centity_t *cent ) {
 
 	ent.hModel = cgs.gameModels[s1->modelindex];
 	cod1WorldModel = cgs.cod1MapEntities && s1->eType == ET_GENERAL &&
-		s1->density == COD1_SCRIPT_MODEL_NET_MARKER &&
+		(s1->density == COD1_SCRIPT_MODEL_NET_MARKER || s1->density == COD1_VEHICLE_NET_MARKER) &&
 		!Q_strncmp( CG_ConfigString( CS_MODELS + s1->modelindex ), "xmodel/", 7 );
 	/* A retained script_model with unavailable visual assets remains a real
 	 * server entity. Do not submit renderer handle 0 as diagnostic axes. */

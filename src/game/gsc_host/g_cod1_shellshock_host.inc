@@ -106,6 +106,7 @@ static void GscTestShellshockReset(void) {
     gscTestShellshock.incarnation=incarnation;gscTestShellshockInitialization=0;
     if(!old.owned || !old.marker_ready || !GscTestShellshockMarkerText(&old,marker) ||
         !GscTestShellshockResetMarker(incarnation,old.map_epoch,marker)) return;
+    trap_SetConfigstring(CS_COD1_PLAYER_SHOCK,"");
     /* Invalidate before traps. Foreign/replacement records are never adopted
      * or erased; the independent callback busy guard survives this reset. */
     for(i=1;i<MAX_COD1_SCRIPT_SHELLSHOCK;++i) if(old.published[i][0]) {
@@ -171,6 +172,45 @@ static int GscTestShellshockTable(const GscTestShellshockScene *lease,int ms,
     }
     if(!*duplicate) *slot=empty;
     return 1;
+}
+/* GAME 37DE0 and 37F30 store index, server start and duration for
+ * the current player. This SP configstring carries all three atomically. */
+int G_Cod1PlayerShellshock(const GscPlayerNativeRequest *input,GscPlayerNativeResult *out,
+    char *error,size_t cap,int (*current)(void *),void *ctx){
+    GscPlayerNativeRequest q=*input;
+    GscTestShellshockScene scene=gscTestShellshock;
+    char actual[MAX_STRING_CHARS],packet[96];int i,index=0,ms=0,now=level.time;
+    double rounded;gentity_t *player;
+    if(!current||q.player.slot>=level.maxclients||!G_Cod1EntitySameAllocation(&q.player)||
+       !GscTestShellshockCurrent(&scene)||gscTestShellshockBusy)goto failed;
+    player=g_entities+q.player.slot;
+    if(!player->client||player->client!=level.clients+q.player.slot||
+       player->client->pers.connected!=CON_CONNECTED)goto failed;
+    if(q.kind==GSC_PLAYER_SHELLSHOCK){
+        for(i=1;i<MAX_COD1_SCRIPT_SHELLSHOCK;i++){
+            trap_GetConfigstring(CS_COD1_SCRIPT_SHELLSHOCK+i,actual,sizeof(actual));
+            if(scene.names[i][0]&&!Q_stricmp(actual,q.weapon)&&!strcmp(actual,scene.names[i])){index=i;break;}
+        }
+        if(!index){GscTestError(error,cap,"shellshock effect was not precached");return 0;}
+        /* Retail stores the product as float before x87 fistp with a positive
+         * 2^-30 bias. For this bounded range this resolves exact half ties up. */
+        rounded=floor((double)(float)(q.number*1000.0f)+0.5);
+        if(!(rounded>=0 && rounded<=60000)){GscTestError(error,cap,"shellshock duration outside 0..60000 milliseconds");return 0;}
+        ms=(int)rounded;
+    }else if(q.kind!=GSC_PLAYER_STOP_SHELLSHOCK)goto failed;
+    if(current(ctx)!=1||!GscTestShellshockCurrent(&scene)||level.time!=now||
+       scene.revision!=gscTestShellshock.revision||!G_Cod1EntitySameAllocation(&q.player)||
+       memcmp(&q,input,sizeof(q)))goto failed;
+    if(index)Com_sprintf(packet,sizeof(packet),"%u %u %d %d %d",q.player.slot,q.player.generation,index,now,ms);
+    else packet[0]=0;
+    trap_SetConfigstring(CS_COD1_PLAYER_SHOCK,packet);
+    trap_GetConfigstring(CS_COD1_PLAYER_SHOCK,actual,sizeof(actual));
+    if(!G_Cod1EntitySameAllocation(&q.player)||strcmp(actual,packet))goto failed;
+    memset(out,0,sizeof(*out));
+    if(g_debugMove.integer>1)G_Printf("[shellshock GAME] player=%u effect=%d start=%d duration=%d\n",q.player.slot,index,index?now:0,ms);
+    return 1;
+failed:
+    GscTestError(error,cap,"shellshock requires the current player and effect table");return 0;
 }
 static int GscTestShellshockPublish(void *user,uint64_t id,int ms,
     const GscShellshockEvent *event,char *error,size_t capacity) {

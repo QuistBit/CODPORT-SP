@@ -32,8 +32,8 @@ static int HudIntroApply(cod1ScriptHud_t *state,const GscHudElemRequest *r,int n
         if(!CQ_Finite(v)||v<=0||v>60||!HudIntroQuantize(v,1000,&n)||n<0||n>60000)return 0;
         state->from_alpha=state->alpha;state->fade_start=now;state->fade_ms=n;
     }else if(r->kind==GSC_HUDELEM_SET_SHADER){
-        if(strcmp(r->text,"black")||r->width<0||r->height<0||r->width>1024||r->height>1024)return 0;
-        state->content=1;state->clock=0;strcpy(state->text,"black");state->width=r->width;state->height=r->height;
+        if(!r->text[0]||!memchr(r->text,0,sizeof(state->text))||r->width<0||r->height<0||r->width>1024||r->height>1024)return 0;
+        state->content=1;state->clock=0;strcpy(state->text,r->text);state->width=r->width;state->height=r->height;
     }else if(r->kind==GSC_HUDELEM_SET_TEXT){
         state->content=2;state->clock=0;state->width=state->height=0;strcpy(state->text,r->text);
     }else return 0;

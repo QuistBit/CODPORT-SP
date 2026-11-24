@@ -32,6 +32,7 @@ If you have questions concerning this license or the applicable additional terms
 #include "../qcommon/qcommon.h"
 #include "win_local.h"
 #include "resource.h"
+#include "../qcommon/cod1_jobs.h"
 #include <errno.h>
 #include <float.h>
 #include <fcntl.h>
@@ -182,6 +183,7 @@ void QDECL Sys_Error( const char *error, ... ) {
 	vsprintf( text, error, argptr );
 	va_end( argptr );
 
+	C1J_Shutdown();
 	Conbuf_AppendText( text );
 	Conbuf_AppendText( "\n" );
 
@@ -212,6 +214,7 @@ Sys_Quit
 ==============
 */
 void Sys_Quit( void ) {
+ C1J_Shutdown();
 	timeEndPeriod( 1 );
 	IN_Shutdown();
 	Sys_DestroyConsole();

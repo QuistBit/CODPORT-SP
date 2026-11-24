@@ -86,6 +86,7 @@ static int scalar_binary_selected(GscRuntime *r,int selected,int op,const Value 
     if(animation_namespace_kind(a->kind)||animation_namespace_kind(b->kind))return animation_namespace_compare(r,op,a,b,line,out);
     if(a->kind==V_ANIMATION||b->kind==V_ANIMATION)return animation_compare(r,op,a,b,line,out);
     if(a->kind==V_HUDELEM||b->kind==V_HUDELEM)return hud_compare(r,op,a,b,line,out);
+    if(a->kind==V_VEHICLE_NODE||b->kind==V_VEHICLE_NODE)return vehicle_node_compare(r,op,a,b,line,out);
     if(a->kind==V_NODE||b->kind==V_NODE)return node_compare(r,op,a,b,line,out);
     if(op==T_AND||op==T_OR) {
         scalar_integer(out,op==T_AND?(truth(*a)&&truth(*b)):(truth(*a)||truth(*b)));return 1;

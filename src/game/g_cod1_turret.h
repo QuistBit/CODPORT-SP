@@ -16,6 +16,7 @@ int G_Cod1ActorGenericPresent(const GscEntityRef *);
 int G_Cod1ActorGenericSample(const GscEntityRef *,int,float[98],int (*)(void *),void *);
 int G_Cod1ActorGenericFrame(const GscEntityRef *,int,int (*)(void *),void *);
 /* goalByte belongs to the selected original actor script lifecycle. */
+int G_Cod1ActorGeneralRootInterval(const GscEntityRef*,int,int,c1ari14Result_t*,int(*)(void*),void*);
 int G_Cod1ActorRootInterval(const GscEntityRef *,int,int,c1ari14Result_t *,int (*)(void *),void *);
 /* Original unmounted shuffle/Look closure; zero transport tails, no gun. */
 int G_Cod1ActorUnmountedSample(const GscEntityRef *,int,float[98],float[2][21],int (*)(void *),void *);

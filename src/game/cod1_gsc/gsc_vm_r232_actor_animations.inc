@@ -1,4 +1,4 @@
-/* Explicit bounded method capability; original-source MAIN transport stays held. */
+/* Explicit bounded method capability. A source step uses its own exact one-shot offer. */
 int R243ProgramSelectFlaggedAll(GscProgram*g){
  if(!g||g->invalid||g->linked||g->module_count||!g->actor_animations_selected||!g->native_animation_roots_selected||g->flagged_all_selected)return 0;
  g->flagged_all_selected=1;return 1;
@@ -28,6 +28,22 @@ int gsc_runtime_select_r232_actor_animations(GscRuntime *r,const GscActorAnimati
     copy=*input;if(!copy.validate||!copy.invoke||!anim_data_current(r,NULL)||memcmp(input,&copy,sizeof(copy)))return 0;
     r->actor_animations=copy;r->actor_animations_enabled=1;return 1;
 }
+/* Map Actor commands bind the existing native command implementation to
+ * a genuine map namespace. This grants neither turret nor controller state. */
+int gsc_program_select_map_actor_animations(GscProgram*g){
+ if(!g||g->invalid||g->linked||g->module_count||!g->animation_namespace_selected||
+    !g->map_animation_names.count||strcmp(g->map_animation_names.names[0],"generic_human")||
+    !g->native_animation_roots_selected||g->turret_animations_selected||g->actor_animations_selected)return 0;
+ g->actor_animations_selected=g->map_actor_animations_selected=1;return 1;
+}
+int gsc_runtime_select_map_actor_animations(GscRuntime*r,const GscActorAnimationHost*input){
+ GscActorAnimationHost h;
+ if(!input||!animation_namespace_quiescent(r)||!r->program->map_actor_animations_selected||
+    !r->program->actor_animations_selected||!r->program->map_animation_names.count||r->turret_animations_enabled||
+    !animation_namespace_scope(r)||r->actor_animations_enabled||runtime_private_overlap(r,input,sizeof(*input)))return 0;
+ h=*input;if(!h.validate||!h.invoke||!anim_data_current(r,NULL)||memcmp(input,&h,sizeof(h)))return 0;
+ r->actor_animations=h;r->actor_animations_enabled=r->map_actor_animations_enabled=1;return 1;
+}
 typedef struct {
     GscRuntime *runtime;Task *task;uint64_t serial,instance,catalog;int now,checking,flagged_all;
     GscActorAnimationHost host;GscEntityRef entity;
@@ -39,12 +55,30 @@ static int actor_animation_scope(const R232ActorAnimationLease *l) {
         r->now_ms==l->now&&r->executing_task==l->task&&l->task&&l->task->serial==l->serial&&l->task->status!=TASK_DEAD&&
         !memcmp(&r->actor_animations,&l->host,sizeof(l->host));
 }
+/* Only the explicitly bound Session allocation reader may enter this
+ * callback-free group. The caller fences the complete group on both sides;
+ * no result survives this current() invocation or any host callback. */
+static int actor_readonly_entity_live(GscRuntime *r,const GscEntityRef *ref){
+    GscEntityRef original=*ref,borrowed=original;int alive;
+    if(!original.epoch||!original.generation)return 0;
+    alive=r->entities.validate(r->entities.user,&borrowed)==1;
+    if(!state_ref_equal(&original,&borrowed))
+        return rfail(r,0,"entity validator mutated its borrowed identity");
+    return !r->error[0]&&alive;
+}
 static int r243_source_runtime_current(GscRuntime*);
 static int actor_animation_current(void *context) {
     R232ActorAnimationLease *l=context;GscRuntime *r=l->runtime;int ok;
     if(!actor_animation_scope(l)||!r243_source_runtime_current(r))return 0;
     if(l->checking)return rfail(r,0,"actor animation current callback reentered");l->checking=1;
-    ok=entity_task_current(r)&&actor_animation_scope(l)&&anim_data_current(r,l->task)&&actor_animation_scope(l)&&
+    ok=entity_task_current(r)&&actor_animation_scope(l);
+    if(ok&&r->readonly_context.frame_active&&readonly_context_selected(r,l->task)){
+        int alive=actor_readonly_entity_live(r,&l->entity);
+        /* The opening certificate already validates anim_data. All work
+         * since it is a bound allocation read; retain the closing fence
+         * even when that allocation is no longer present. */
+        ok=entity_task_current(r)&&actor_animation_scope(l)&&alive;
+    }else if(ok)ok=anim_data_current(r,l->task)&&actor_animation_scope(l)&&
         state_entity_live(r,&l->entity)==1&&actor_animation_scope(l)&&entity_task_current(r)&&actor_animation_scope(l);
     l->checking=0;if(!r243_source_runtime_current(r))return 0;return ok;
 }
@@ -102,7 +136,7 @@ static int animation_binding_limited(GscRuntime *r,const Value *v,int line,GscAn
     memset(out,0,sizeof(*out));out->runtime_identity=r->array_token;out->ordinal=entry->declaration.ordinal;out->flags=entry->declaration.flags;
     strcpy(out->tree,r->animation_namespace.catalogs[entry->catalog].tree);strcpy(out->name,entry->declaration.name);return 1;
 }
-static int actor_animation_binding(GscRuntime *r,const Value *v,int line,GscAnimationLengthRequest *out){return animation_binding_limited(r,v,line,out,2);}
+static int actor_animation_binding(GscRuntime *r,const Value *v,int line,GscAnimationLengthRequest *out){return animation_binding_limited(r,v,line,out,r->map_actor_animations_enabled?1:2);}
 static int actor_animation_float(GscRuntime *r,const Value *v,int line,int signed_value,uint32_t *bits) {
     uint32_t magnitude;
     if(!float_arithmetic_number_bits(r,v,line,bits))return 0;magnitude=*bits&UINT32_C(0x7fffffff);
@@ -128,6 +162,14 @@ static int actor_animation_invoke(GscRuntime *r,const Value *receiver,int descri
         if(strcmp(q.animation[0].tree,q.animation[1].tree)||!(q.animation[1].flags&GSC_ANIMATION_NODE_BRANCH)||q.animation[0].ordinal==q.animation[1].ordinal)return rfail(r,line,"flagged all restart requires distinct target and real same-catalog branch root");
         if(args[0].kind!=V_STRING||!(end=memchr(args[0].str,0,sizeof(args[0].str)))||end==args[0].str||(size_t)(end-args[0].str)>=sizeof(q.notify))return rfail(r,line,"flagged all restart requires bounded nonempty notify string");
         memcpy(q.notify,args[0].str,(size_t)(end-args[0].str));
+    }else if(kind==GSC_ACTOR_ANIMATION_AIM_NODES){
+        /* GAME66CF0 GetAnim(0..5, receiver tree). Only six valid current
+         * typed nodes are admitted here; getter-error partial stores remain
+         * outside this successful-call domain. */
+        for(i=0;i<6;i++)if(!actor_animation_binding(r,args+i,line,q.animation+i))return 0;
+        for(i=1;i<6;i++)if(strcmp(q.animation[0].tree,q.animation[i].tree))return rfail(r,line,"SetAimAnims requires six current same-tree animations");
+    }else if(kind==GSC_ACTOR_INTERRUPT_POINT){
+        /* GAME 66CB0 selects the receiver state without reading operands. */
     }else if(kind==GSC_ACTOR_ANIMATION_UPDATE_PRONE){
         for(i=0;i<2;i++)if(!actor_animation_binding(r,args+i,line,q.animation+i))return 0;
         if(strcmp(q.animation[0].tree,q.animation[1].tree))return rfail(r,line,"UpdateProne requires two current same-catalog animations");
@@ -135,7 +177,6 @@ static int actor_animation_invoke(GscRuntime *r,const Value *receiver,int descri
     }else if(kind==GSC_ACTOR_ANIMATION_ORIENT_MODE){
         /* Classify/copy only, without errors or foreign callbacks. Values may
          * be released by Actor validation; nothing below reads args again. */
-        if(r->r243_source_step_active)return rfail(r,line,"original-source OrientMode transport HOLD");
         memset(&orientAngle,0,sizeof(orientAngle));
         if(!argc)orientError=1;
         else if(args[0].kind!=V_STRING){
@@ -151,13 +192,13 @@ static int actor_animation_invoke(GscRuntime *r,const Value *receiver,int descri
                 else if(args[1].kind==V_UNDEFINED||args[1].kind==V_VECTOR||args[1].kind==V_LOCALIZED_STRING)orientError=2;
                 else orientHold=2;
                 if(orientError==2)q.method=GSC_ACTOR_ANIMATION_ORIENT_ERROR_PREFIX;
-            }else if(strcmp(q.notify,"face default"))orientHold=1;
+            }else if(strcmp(q.notify,"face default")&&strcmp(q.notify,"face current"))orientHold=1;
         }
     }else if(kind==GSC_ACTOR_ANIMATION_ANIM_MODE){
         if(args[0].kind!=V_STRING||!(end=memchr(args[0].str,0,sizeof(args[0].str)))||end==args[0].str||
            (size_t)(end-args[0].str)>=sizeof(q.notify))return rfail(r,line,"animation mode requires a bounded nonempty mode string");
         memcpy(q.notify,args[0].str,(size_t)(end-args[0].str));
-    }else if(kind==GSC_ACTOR_ANIMATION_KNOB_ALL){
+    }else if(kind==GSC_ACTOR_ANIMATION_KNOB_ALL||kind==GSC_ACTOR_ANIMATION_KNOB_ALL_RESTART){
         if(!actor_animation_binding(r,&args[0],line,&q.animation[0])||!actor_animation_binding(r,&args[1],line,&q.animation[1]))return 0;
         if(strcmp(q.animation[0].tree,q.animation[1].tree)||!(q.animation[1].flags&GSC_ANIMATION_NODE_BRANCH)||q.animation[0].ordinal==q.animation[1].ordinal)return rfail(r,line,"SetAnimKnobAll requires distinct target and real same-catalog branch root");
         q.scalar_bits[0]=0x3f800000;q.scalar_bits[1]=0x3e4ccccd;q.scalar_bits[2]=0x3f800000;
@@ -168,7 +209,7 @@ static int actor_animation_invoke(GscRuntime *r,const Value *receiver,int descri
     }else if(kind==GSC_ACTOR_ANIMATION_ENTER_PRONE||kind==GSC_ACTOR_ANIMATION_EXIT_PRONE){
         if(!actor_animation_float(r,&args[0],line,0,&q.scalar_bits[0]))return 0;
     }else {
-        offset=kind==GSC_ACTOR_ANIMATION_FLAGGED_RESTART?1:0;
+        offset=(kind==GSC_ACTOR_ANIMATION_FLAGGED_RESTART||kind==GSC_ACTOR_ANIMATION_FLAGGED_KNOB)?1:0;
         if(offset){
             if(args[0].kind!=V_STRING||!(end=memchr(args[0].str,0,sizeof(args[0].str)))||end==args[0].str||
                (size_t)(end-args[0].str)>=sizeof(q.notify))return rfail(r,line,"flagged animation requires a bounded nonempty notify string");
@@ -185,7 +226,7 @@ static int actor_animation_invoke(GscRuntime *r,const Value *receiver,int descri
      * A cancelled task may release its argument arena during that callback. */
     original=q;host=r->actor_animations;memset(&l,0,sizeof(l));l.runtime=r;l.task=r->executing_task;
     l.serial=l.task?l.task->serial:0;l.instance=r->array_token;l.catalog=r->animation_namespace.identity;l.now=r->now_ms;l.entity=q.entity;l.host=host;l.flagged_all=kind==GSC_ACTOR_ANIMATION_FLAGGED_ALL?2:kind==GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART;
-    if(kind==GSC_ACTOR_ANIMATION_FLAGGED_ALL){
+    if(kind==GSC_ACTOR_ANIMATION_FLAGGED_ALL&&!r->r243_source_step_active){
       if(r243CommandActive||r243CommandNonce==UINTPTR_MAX||!l.task||l.task->depth<=0||l.task->depth>MAX_FRAMES)return rfail(r,line,"method12 sealed call unavailable");
       memset(&command,0,sizeof(command));command.lease=l;command.expected=q;command.request=&q;
       command.program=r->program;command.programToken=r->program->function_program_token;
@@ -210,7 +251,7 @@ static int actor_animation_invoke(GscRuntime *r,const Value *receiver,int descri
         }
     }
     source=r->r243_source_step_active;
-    if(source&&kind==GSC_ACTOR_ANIMATION_FLAGGED_ALL){if(guarded)r243CommandActive=NULL;r->entity_method_busy=0;return rfail(r,line,"nonrestart flagged all original-source transport HOLD");}
+    if(source&&r243CommandActive){r->entity_method_busy=0;return rfail(r,line,"source animation conflicts with an outstanding ordinary command");}
     if(source&&!r243_source_begin(r,&l,&q,&dispatch))goto retired;
     error[0]=0;ok=host.invoke(host.user,&q,error,sizeof(error),call_current,call_context);error[sizeof(error)-1]=0;
     if(!call_current(call_context))goto retired;
@@ -218,6 +259,7 @@ static int actor_animation_invoke(GscRuntime *r,const Value *receiver,int descri
     if(orientError==2){
         /* Host1 acknowledges only the two committed stores. The original
          * script call still fails; no angle setter or success continuation. */
+        if(source){int accepted=r243_source_end(r,&dispatch,1);source=0;if(!accepted)goto refused;}
         r->entity_method_busy=0;return rfail(r,line,"OrientMode GetFloat(1) failed after committed face-angle prefix");
     }
     if(source){int accepted=r243_source_end(r,&dispatch,1);source=0;if(!accepted)goto refused;}

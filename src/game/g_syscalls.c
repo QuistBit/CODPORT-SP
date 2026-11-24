@@ -275,6 +275,10 @@ int trap_Cod1SpatialCapsuleTrace(const cod1SpatialTraceQuery_t *query, trace_t *
 	return syscall(G_COD1_SPATIAL_CAPSULE_TRACE, query, results);
 }
 
+int trap_Cod1SpatialBoxTrace(const cod1SpatialTraceQuery_t *query, trace_t *results) {
+ return syscall(G_COD1_SPATIAL_BOX_TRACE, query, results);
+}
+
 int trap_Cod1SpatialPointTrace(const cod1SpatialTraceQuery_t *query, trace_t *results) {
 	return syscall(G_COD1_SPATIAL_POINT_TRACE, query, results);
 }
@@ -296,6 +300,7 @@ int trap_Cod1SpatialActorUnlink(const cod1SpatialActorUnlink_t *request) {
 }
 
 int trap_Cod1PathSight(const cod1PathSightQuery_t*q,int*out){return syscall(G_COD1_PATH_SIGHT,q,out);}
+int trap_Cod1PathWorldSight(const cod1SpatialTraceQuery_t*q,int*out){return syscall(G_COD1_PATH_WORLD_SIGHT,q,out);}
 int trap_Cod1SpatialActorContents(const cod1SpatialActorContents_t *request) {
 	return syscall(G_COD1_SPATIAL_ACTOR_CONTENTS, request);
 }
@@ -962,6 +967,8 @@ int trap_GeneticParentsAndChildSelection( int numranks, float *ranks, int *paren
 	return syscall( BOTLIB_AI_GENETIC_PARENTS_AND_CHILD_SELECTION, numranks, ranks, parent1, parent2, child );
 }
 
+int trap_Cod1ModelBounds(const cod1ModelResourceReference_t*ref,cod1ModelBounds_t*out){return syscall(G_COD1_MODEL_BOUNDS,ref,out);}
+int trap_Cod1ModelPartName(const cod1ModelResourceReference_t*ref,int32_t index,cod1ModelPartNameResult_t*out){return syscall(G_COD1_MODEL_PART_NAME,ref,index,out);}
 int trap_Cod1ModelPrecache(const cod1ModelPrecache_t *request) {
 	return syscall(G_COD1_RESOURCE_MODEL_PRECACHE, request);
 }

@@ -3,7 +3,7 @@
  * refuse here; no mission name fallback or fabricated resource epoch. */
 int G_Cod1ActorPlacedCurrentResourcesLoad(void){uint64_t epoch=cod1EntityEpoch;
  if(!epoch||!level.spawning||level.restarted||!cod1EntityActive||cod1GenericLookEpoch!=epoch||!C1AUT14_Ready(&cod1GenericUnmountedBank))return 0;
- return G_Cod1ActorFaceResourcesLoad()&&G_Cod1ActorScriptedResourcesLoad()&&
+ return G_Cod1ActorFaceResourcesLoad()&&G_Cod1ActorScriptedResourcesLoad()&&ActorLocomotionLoad()&&
   (trap_Cvar_VariableIntegerValue("g_cod1GscTrainingRigs")!=1||(G_Cod1ActorJumperScriptedResourcesLoad()&&TrainingRigPlaybackLoad()))&&
   epoch==cod1EntityEpoch&&level.spawning&&!level.restarted&&ActorFaceReady(epoch)&&ActorScriptedReady(epoch);
 }

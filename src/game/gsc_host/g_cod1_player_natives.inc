@@ -91,6 +91,9 @@ static int PlayerHealthFieldStoragePrivate(const void *,size_t);
 #include "g_cod1_player_viewmodel.inc"
 #include "g_cod1_player_health_fields.inc"
 #include "g_cod1_player_max_ammo.inc"
+#include "g_cod1_player_slot_weapon.inc"
+#include "g_cod1_player_view_angles.inc"
+#include "g_cod1_player_stance_permissions.inc"
 static int PlayerNativeInvoke(void *user,const GscPlayerNativeRequest *input,
     GscPlayerNativeResult *output,char *error,size_t size,
     int (*current)(void *),void *lease) {
@@ -120,19 +123,26 @@ static int PlayerNativeInvoke(void *user,const GscPlayerNativeRequest *input,
        PlayerNativeOverlap(input,sizeof(*input),output,sizeof(*output))||
        PlayerNativeOverlap(input,sizeof(*input),error,size)||
        PlayerNativeOverlap(output,sizeof(*output),error,size))return 0;
+    if(input->kind>=GSC_PLAYER_ALLOW_STAND&&input->kind<=GSC_PLAYER_ALLOW_PRONE)return PlayerStancePermissionInvoke(input,output,error,size,current,lease);
+    if(input->kind==GSC_PLAYER_SET_ANGLES)return PlayerViewAnglesInvoke(input,output,error,size,current,lease);
+    if(input->angles_bits[0]||input->angles_bits[1]||input->angles_bits[2])return 0;
+    if(input->kind==GSC_PLAYER_SHELLSHOCK||input->kind==GSC_PLAYER_STOP_SHELLSHOCK){
+        if(!PlayerNativePlayer(&input->player))return 0;
+        return G_Cod1PlayerShellshock(input,output,error,size,current,lease);
+    }
     if(input->kind==GSC_PLAYER_GIVE_MAX_AMMO)return PlayerMaxAmmoInvoke(input,output,error,size,current,lease);
     if(input->kind==GSC_PLAYER_SET_VIEWMODEL)return PlayerViewmodelInvoke(input,output,error,size,current,lease);
     if(input->kind==GSC_PLAYER_SET_NORMAL_HEALTH||input->kind==GSC_PLAYER_GET_NORMAL_HEALTH)
         return PlayerNormalHealthInvoke(input,output,error,size,current,lease);
     request=*input;memset(&result,0,sizeof(result));
     if(request.number!=0.0f)goto refuse;
-    if(request.kind<GSC_PLAYER_GET_CURRENT_WEAPON||(request.kind>GSC_PLAYER_FREEZE_CONTROLS&&request.kind!=GSC_PLAYER_GET_STANCE)||
+    if(request.kind<GSC_PLAYER_GET_CURRENT_WEAPON||(request.kind>GSC_PLAYER_FREEZE_CONTROLS&&request.kind!=GSC_PLAYER_GET_STANCE&&request.kind!=GSC_PLAYER_GET_SLOT_WEAPON)||
        request.now_ms<0||!memchr(request.weapon,0,sizeof(request.weapon))||
        !PlayerNativePlayer(&request.player))goto refuse;
     needsWeapon=request.kind>=GSC_PLAYER_HAS_WEAPON&&request.kind<=GSC_PLAYER_SET_AMMO_STOCK&&
         request.kind!=GSC_PLAYER_TAKE_ALL_WEAPONS;
     if((needsWeapon&&!PlayerNativeWeapon(request.weapon,&definition,&weapon))||
-       (!needsWeapon&&request.weapon[0])||
+       (!needsWeapon&&request.kind!=GSC_PLAYER_GET_SLOT_WEAPON&&request.weapon[0])||
        ((request.kind!=GSC_PLAYER_SET_AMMO_CLIP&&request.kind!=GSC_PLAYER_SET_AMMO_STOCK&&
          request.kind!=GSC_PLAYER_FREEZE_CONTROLS)&&request.value)||
        ((request.kind==GSC_PLAYER_SET_AMMO_CLIP||request.kind==GSC_PLAYER_SET_AMMO_STOCK)&&request.value<0)||
@@ -146,6 +156,10 @@ static int PlayerNativeInvoke(void *user,const GscPlayerNativeRequest *input,
         memset(&freezeAfter,0,sizeof(freezeAfter));
     def=needsWeapon?CW_Get(definition):NULL;
     switch(request.kind) {
+    case GSC_PLAYER_GET_SLOT_WEAPON:
+        result.kind=GSC_PLAYER_RESULT_STRING;
+        if(!PlayerNativeSlotWeapon(request.weapon,&before,result.text,sizeof(result.text)))goto refuse;
+        break;
     case GSC_PLAYER_GET_STANCE:
         result.kind=GSC_PLAYER_RESULT_STRING;
         strcpy(result.text,(before.pm_flags&PMF_COD1_PRONE)?"prone":(before.pm_flags&PMF_DUCKED)?"crouch":"stand");
@@ -182,7 +196,7 @@ static int PlayerNativeInvoke(void *user,const GscPlayerNativeRequest *input,
     case GSC_PLAYER_TAKE_ALL_WEAPONS:
         memset(after.weapons,0,sizeof(after.weapons));memset(after.cod1Slots,0,sizeof(after.cod1Slots));
         memset(after.ammo,0,sizeof(after.ammo));memset(after.ammoclip,0,sizeof(after.ammoclip));
-        after.stats[STAT_COD1_MODE]=0;sendWeapon=WP_NONE;PlayerNativeActionReset(&after,WP_NONE);break;
+        after.stats[STAT_COD1_MODE]&=COD1_STANCE_PERMISSION_MASK;sendWeapon=WP_NONE;PlayerNativeActionReset(&after,WP_NONE);break;
     case GSC_PLAYER_SWITCH_TO_WEAPON:
         if(!COM_BitCheck(before.weapons,weapon))goto refuse;
         CW_SetMode(&after,weapon,definition);sendWeapon=weapon;PlayerNativeActionReset(&after,weapon);break;
@@ -230,7 +244,7 @@ static int PlayerNativeInvoke(void *user,const GscPlayerNativeRequest *input,
        memcmp(&commandBefore,&client->pers.cmd,sizeof(commandBefore))||
        memcmp(&freezeBefore,&cod1PlayerFreezeOwners[request.player.slot],sizeof(freezeBefore)))goto busyRefuse;
     /* No callbacks occur between the final identity check and this commit. */
-    client->ps=after;cod1PlayerFreezeOwners[request.player.slot]=freezeAfter;
+    if(request.kind!=GSC_PLAYER_GET_SLOT_WEAPON){client->ps=after;cod1PlayerFreezeOwners[request.player.slot]=freezeAfter;}
     if(sendWeapon>=0) {
         snprintf(command,sizeof(command),"cod1scriptweapon %d",sendWeapon);
         trap_SendServerCommand((int)request.player.slot,command);

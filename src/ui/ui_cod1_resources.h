@@ -32,6 +32,29 @@ static void CoD_UIStore(const char *key, const char *value) {
     codStrings[i].value=codPool+codPoolUsed; codPoolUsed+=n;
 }
 
+/* StringEd writes one LANG value per line. Its outer quotation marks
+ * delimit the field; names and quotations within it may contain literal ". */
+static void CoD_UIReadLanguageValue(char **cursor, char *value, size_t capacity) {
+    char *start = *cursor;
+    char *lineEnd, *end;
+    size_t len;
+    while (*start == ' ' || *start == '\t') ++start;
+    if (*start == '"') {
+        lineEnd = start + strcspn(start, "\r\n");
+        end = lineEnd;
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t')) --end;
+        if (end > start + 1 && end[-1] == '"') {
+            len = (size_t)(end - start - 2);
+            *cursor = lineEnd;
+            if (len >= capacity) { value[0] = 0; return; }
+            memcpy(value, start + 1, len);
+            value[len] = 0;
+            return;
+        }
+    }
+    Q_strncpyz(value, COM_ParseExt(cursor, qfalse), capacity);
+}
+
 static void CoD_UILoadStrings(const char *package, const char *language) {
     char path[256], reference[96], key[128], lang[64], tokenCopy[MAX_TOKEN_CHARS];
     char *data, *cursor, *token;
@@ -47,7 +70,7 @@ static void CoD_UILoadStrings(const char *package, const char *language) {
         if (!Q_stricmp(token,"REFERENCE")) {
             Q_strncpyz(reference,COM_ParseExt(&cursor,qfalse),sizeof(reference));
         } else if (!Q_stricmp(token,lang)) {
-            Q_strncpyz(tokenCopy,COM_ParseExt(&cursor,qfalse),sizeof(tokenCopy));
+            CoD_UIReadLanguageValue(&cursor,tokenCopy,sizeof(tokenCopy));
             if (reference[0] && tokenCopy[0] && Q_stricmp(tokenCopy,"#same")) {
                 Com_sprintf(key,sizeof(key),"%s_%s",package,reference);
                 CoD_UIStore(key,tokenCopy);

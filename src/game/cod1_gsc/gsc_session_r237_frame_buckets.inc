@@ -64,8 +64,26 @@ int gsc_session_r237_frame_begin(GscSession *s,uint64_t id,int64_t now,
         return session_failed(s,"R237 frame resources retired during begin",error,cap);
     *out_generation=generation;s->busy=0;return 1;
 }
-static int session_r237_frame_phase(GscSession *s,uint64_t id,uint64_t generation,
-    int exclusive,char *error,size_t cap) {
+/* GAME crossed a presentation boundary outside a VM dispatch. Check the
+ * original map/animation resources before the next world operation. The VM
+ * phase entry already checks these itself when it is the next operation. */
+int gsc_session_resume_game_frame(GscSession *s,uint64_t id,int now,uint64_t generation,int open){
+    GscR237FrameView frame;
+    int valid;
+    if(!session_enter(s,NULL,0))return 0;
+    valid=session_id_matches(s,id) && s->runtime && !s->view.error[0] &&
+          (s->view.state==GSC_SESSION_RUNNING || s->view.state==GSC_SESSION_COMPLETED) &&
+          s->view.last_host_ms==now;
+    if(valid && generation){
+        valid=gsc_runtime_r237_frame_view(s->runtime,&frame) && frame.frame_generation==generation &&
+              frame.frame_open==open && frame.host_now_ms==s->view.logical_ms;
+    }
+    if(valid)valid=session_r237_frame_resources_current(s) && !s->abort_requested;
+    s->busy=0;
+    return valid;
+}
+int gsc_session_r237_frame_phase_slice(GscSession *s,uint64_t id,uint64_t generation,
+    int exclusive,int (*expired)(void),char *error,size_t cap) {
     GscR237FrameView frame;int ok;
     if((cap&&!error)||session_r237_frame_private(s,error,cap))return 0;
     if(!session_enter(s,error,cap))return 0;
@@ -76,19 +94,25 @@ static int session_r237_frame_phase(GscSession *s,uint64_t id,uint64_t generatio
         return session_leave_rejected(s,"R237 frame Session or generation stale",error,cap);
     if(frame.host_now_ms!=s->view.logical_ms)
         return session_failed(s,"R237 frame physical host time differs",error,cap);
+    if((exclusive!=0 && exclusive!=1) || (s->r237_suspended_phase && s->r237_suspended_phase!=1+exclusive))
+        return session_leave_rejected(s,"R237 unfinished frame phase differs",error,cap);
     if(!session_r237_frame_resources_current(s))
         return session_failed(s,"R237 frame resources retired before phase",error,cap);
-    ok=exclusive?gsc_r237_advance_exclusive(s->runtime,generation):
-                 gsc_r237_run_current_bucket(s->runtime,generation);
+    ok=gsc_r237_frame_phase_slice(s->runtime,generation,exclusive,expired);
+    if(ok==2 && !s->abort_requested){
+        s->r237_suspended_phase=1+exclusive;s->busy=0;
+        return 2;
+    }
+    s->r237_suspended_phase=0;
     if(ok&&!s->abort_requested&&!session_r237_frame_resources_current(s))
         return session_failed(s,"R237 frame resources retired during phase",error,cap);
     return session_after_vm(s,ok,error,cap);
 }
 int gsc_session_r237_run_current_bucket(GscSession *s,uint64_t id,uint64_t generation,
     char *error,size_t cap) {
-    return session_r237_frame_phase(s,id,generation,0,error,cap);
+    return gsc_session_r237_frame_phase_slice(s,id,generation,0,NULL,error,cap);
 }
 int gsc_session_r237_advance_exclusive(GscSession *s,uint64_t id,uint64_t generation,
     char *error,size_t cap) {
-    return session_r237_frame_phase(s,id,generation,1,error,cap);
+    return gsc_session_r237_frame_phase_slice(s,id,generation,1,NULL,error,cap);
 }

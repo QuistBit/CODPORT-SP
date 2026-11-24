@@ -1,6 +1,18 @@
 /* A fixed canonical initial invocation, not the factory-issued spawn lane.
  * Exact Session/cache/row admission happens above. Map and Actor authorities
  * are copied into the root and its real children; no facade pointer survives. */
+/* A configured controller does not own a placed INIT return.
+ * Its entry must be idle, and only the bound placed return may complete
+ * this frame (see r243_pop_normal_frame). Never share a pending grant. */
+static int placed_controller_idle(const GscRuntime *r){
+    size_t i;
+    if(r->r243s_profile.enabled || r->factory_init_entry || r->r243_controller_busy ||
+       r->r243_controller_callback_busy || r->r243_controller_capture)return 0;
+    for(i=0;i<sizeof(r->r243_controller_main)/sizeof(r->r243_controller_main[0]);i++){
+        if(r->r243_controller_main[i].used)return 0;
+    }
+    return 1;
+}
 static int execute_placed_init_selected(GscRuntime*r,const GscEntityRef*input,
  const GscEntityExecutionCertificate*authority,const GscMapExecutionCertificate*mapInput,
  const GscPlacedInitReturnHost*hostInput,int cohort,GscPlacedInitRun*out,char*error,size_t cap){
@@ -21,7 +33,7 @@ static int execute_placed_init_selected(GscRuntime*r,const GscEntityRef*input,
  if(!cert.serial||!cert.current||!state_ref_equal(&cert.owner,&row)||!map.receipt||!map.current||
     !r->started||r->error[0]||r->advancing||r->executing_task||r->entity_entry_depth||r->entity_sequence_busy||
     r->entity_prepare_busy||r->entity_certificate_busy||r->entity_inheritance_busy||r->entity_field_busy||r->entity_method_busy||
-    r->r243_controller_enabled||r->placed_return||r->placed_init_initial_scope||(!cohort&&gsc_active_threads(r)))
+    (r->r243_controller_enabled && (!hostInput || !placed_controller_idle(r)))||r->placed_return||r->placed_init_initial_scope||(!cohort&&gsc_active_threads(r)))
   return inherited_entry_error(error,cap,"placed INIT requires quiescent first-row scope; owned controller return profile remains open");
  instance=gsc_runtime_instance_identity(r);program=gsc_runtime_program_identity(r);catalog=r->animation_namespace.identity;
  if(!instance||!program||!catalog||!gsc_runtime_script_function_available(r,"animscripts/init","main"))

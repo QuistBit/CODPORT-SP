@@ -6,7 +6,7 @@
  * copies exact worldModel bytes and never registers or prefixes models. */
 static cod1WeaponModelHost_t cod1CWWeaponModelStage;
 static int Cod1CWWeaponModelCurrent(uint64_t receipt){unsigned revision=CW_RegistryRevision();return revision&&receipt==(uint64_t)revision;}
-static int G_Cod1SelectCWWeaponModels(char *error,size_t size){
+static int Cod1CWWeaponModelsSelect(const GscMapExecutionCertificate*program,char *error,size_t size){
     int i,n=CW_Count(),field=CW_FieldIndex("worldModel");unsigned revision=CW_RegistryRevision();cod1WeaponModelHost_t *host=&cod1CWWeaponModelStage;
     if(!revision||n<0||n>CW_MAX_DEFS||field<0)return 0;
     memset(host,0,sizeof(*host));host->receipt=revision;host->current=Cod1CWWeaponModelCurrent;host->rowCount=1;
@@ -23,6 +23,8 @@ static int G_Cod1SelectCWWeaponModels(char *error,size_t size){
         if(model){size_t len=strlen(model);if(len>=sizeof(row->model))return 0;row->modelPresent=1;memcpy(row->model,model,len+1);}
     }
     if(revision!=CW_RegistryRevision())return 0;
-    return G_Cod1SelectWeaponModelTable(host,error,size);
+    return program?G_Cod1SelectWeaponModelTableForProgram(host,program,error,size):G_Cod1SelectWeaponModelTable(host,error,size);
 }
+static int G_Cod1SelectCWWeaponModels(char*error,size_t size){return Cod1CWWeaponModelsSelect(NULL,error,size);}
+static int G_Cod1SelectCWWeaponModelsForProgram(const GscMapExecutionCertificate*program,char*error,size_t size){return program&&Cod1CWWeaponModelsSelect(program,error,size);}
 #endif

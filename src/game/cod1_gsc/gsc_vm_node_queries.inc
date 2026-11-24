@@ -74,6 +74,7 @@ int gsc_runtime_select_node_queries(GscRuntime *r,const GscNodeQueryHost *host) 
 static int node_query_call(GscRuntime *r,int kind,const Value *args,int argc,int line,Value *out) {
     GscNodeQueryRequest request,expected;GscNodeRef refs[GSC_NODE_QUERY_CAPACITY];
     NodeQueryLease lease;Value staged,member;char error[256];size_t count=(size_t)-1,n;int ok,alive;
+    if(kind==GSC_VEHICLE_QUERY_ONE||kind==GSC_VEHICLE_QUERY_ARRAY)return vehicle_node_query_call(r,kind,args,argc,line,out);
     if(!out||node_query_static_issues(r->program,kind,NULL,argc)||(!args&&argc))
         return rfail(r,line,"invalid node query arity");
     memset(&request,0,sizeof(request));memset(&staged,0,sizeof(staged));

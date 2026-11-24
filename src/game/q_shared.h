@@ -799,7 +799,7 @@ SAVE
 */
 
 #define SAVE_VERSION    25 /* R243: view-hands field changes raw saved client layout. */
-#define COD1_STATE_ABI 73 /* Paired pregame fade ownership and raw-save admission; coherent rebuild. */
+#define COD1_STATE_ABI 77 /* Paired original path capsule sight. No snapshot layout change. */
 #define COD1_STATE_PROTOCOL 58 /* R243: selected view-hands playerstate delta field. */
 #define SAVE_INFOSTRING_LENGTH  256
 

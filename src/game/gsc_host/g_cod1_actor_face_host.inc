@@ -22,10 +22,11 @@ static void ActorFaceReset(void){unsigned i;C1FaceResources*r=&cod1FaceResources
  for(i=0;i<5;i++){C1AR14_Free(r->root[i]);C1AB14_Free(r->body[i]);r->root[i]=NULL;r->body[i]=NULL;}memset(r->metadata,0,sizeof(r->metadata));r->epoch=0;
  /* Retain a loading callback's busy/stage lease until its owner unwinds. */
 }
-static int ActorFaceReady(uint64_t epoch){unsigned i;C1FaceResources*r=&cod1FaceResources;
- if(!epoch||r->epoch!=epoch||r->busy||cod1GenericLookEpoch!=epoch||!C1AUT14_Ready(&cod1GenericUnmountedBank))return 0;
- for(i=0;i<5;i++)if(!C1AFU14_ValidFace(i,r->root[i],r->body[i])||!C1ANM14_Valid(r->metadata+i))return 0;
- return 1;
+/* Each bank is immutable after its complete load-time validation.
+ * The epoch is published last and revoked by the corresponding reset. */
+static int ActorFaceReady(uint64_t epoch){
+ return epoch && cod1FaceResources.epoch==epoch && !cod1FaceResources.busy &&
+    cod1GenericLookEpoch==epoch && !cod1GenericLookBusy;
 }
 /* Borrow existing map-owned banks for synchronous sampling only. This stack
  * aggregate owns nothing and MUST NOT be passed to C1AFU14_Free. Callers fence
@@ -79,7 +80,7 @@ int G_Cod1ActorFaceUnmountedSample(const GscEntityRef *input,int now,float outpu
     memcmp(actorCopy,cod1Actors+lease.actorIndex,sizeof(*actorCopy))||memcmp(entityCopy,g_entities+owner.slot,sizeof(*entityCopy))||
     memcmp(copy,saved.nodes,C1GA_COUNT*sizeof(*copy))||!ActorFaceReady(epoch))goto done;
  memcpy(output,values,sizeof(values));memcpy(phases,times,sizeof(times));ok=1;
-done:free(copy);free(actorCopy);free(entityCopy);cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.busy=0;return ok;
+done:free(copy);free(actorCopy);free(entityCopy);cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.nameStage=NULL;cod1GenericOperation.nameBytes=0;cod1GenericOperation.busy=0;return ok;
 }
 
 int G_Cod1ActorFaceUnmountedPublish(const GscEntityRef*input,int now,int(*current)(void*),void*ctx){

@@ -54,9 +54,9 @@ static int ActorFloatPlayers(R243ActorFloatGameFrame*f,int capture){
 static int ActorFloatRosterCurrent(R243ActorFloatGameFrame*f){
  unsigned i;cod1ActorLease_t lease;cod1AiDomainSnapshot_t domain;
  if(f->allocationSerial!=cod1ActorSerial||
-    memcmp(f->sentients,cod1Sentients,sizeof(f->sentients))||
-    memcmp(f->actorByEntity,cod1ActorByEntity,sizeof(f->actorByEntity))||
-    memcmp(f->sentientByEntity,cod1SentientByEntity,sizeof(f->sentientByEntity))||
+    !R242ExactATRBytesEqual(f->sentients,cod1Sentients,sizeof(f->sentients))||
+    !R242ExactATRBytesEqual(f->actorByEntity,cod1ActorByEntity,sizeof(f->actorByEntity))||
+    !R242ExactATRBytesEqual(f->sentientByEntity,cod1SentientByEntity,sizeof(f->sentientByEntity))||
     !G_Cod1AiDomainRead(&domain,NULL,0)||memcmp(&domain,&f->domain,sizeof(domain))||
     !domain.sealed||!domain.complete||domain.invalid||domain.unaccountedRows||!ActorFloatPlayers(f,0))return 0;
  for(i=0;i<COD1_SENTIENT_CAPACITY;i++){
@@ -87,9 +87,9 @@ static int r243_actor_float_game_scope(R243ActorFloatGameFrame*f){
   ActorMapAvailable()&&cod1EntityReady&&!level.spawning&&!level.restarted&&f->hostNow==level.time&&
   !ActorFloatPrivate(f->source,sizeof(*f->source))&&!memcmp(f->source,&f->seal,sizeof(f->seal))&&
   ActorFloatLease(&f->seal.entity,&after)&&!memcmp(&after,&f->lease,sizeof(after))&&
-  !memcmp(cod1Actors+f->lease.actorIndex,&f->actor,sizeof(f->actor))&&
-  !memcmp(g_entities+f->seal.entity.slot,&f->body,sizeof(f->body))&&
-  (f->seal.method==R243_ACTOR_FLOAT_PATH?
+  R242ExactATRBytesEqual(cod1Actors+f->lease.actorIndex,&f->actor,sizeof(f->actor))&&
+  R242ExactATRBytesEqual(g_entities+f->seal.entity.slot,&f->body,sizeof(f->body))&&
+  (f->seal.method!=R243_ACTOR_FLOAT_ENEMY?
    (f->actor.dataInitialized&&f->ownActorRegistry==cod1ActorByEntity[f->seal.entity.slot]&&
     f->ownSentientRegistry==cod1SentientByEntity[f->seal.entity.slot]&&
     !memcmp(cod1Sentients+f->lease.sentientIndex,&f->ownSentient,sizeof(f->ownSentient))):
@@ -99,6 +99,53 @@ static int r243_actor_float_game_fence(void*opaque){R243ActorFloatGameFrame*f=op
  return r243_actor_float_game_scope(f)&&R243ActorFloatSessionHostTimeCurrent(&f->seal,f->hostNow)&&
   R243ActorFloatExactCallCurrent(&f->seal,f->current,f->context)&&r243_actor_float_game_scope(f);
 }
+/* GAME 20068F40. In this profile the Training mover owns both the
+ * current path segment and the velocity after collision. */
+static int ActorCourseMotionAngle(const R243ActorFloatGameFrame *f,float *out){
+ const cod1ActorMotion_t *m=&f->actor.motion;
+ const float *direction;
+ float heading;
+ /* A factory-owned jumper has a real mounted-graph path. Read its
+  * calculated lookahead, never the seed vector used while building it. */
+ if(TrainingJumperAllocation(&f->seal.entity)){
+  const cod1TowerPath_t*p=&m->route.tower;
+  if(!m->active||m->busy||m->model||m->arrived||!f->actor.goal.assigned||
+     m->assignment!=f->actor.goal.assignment||m->route.phase!=2||
+     p->length<1||p->length>6||
+     !TrainingJumperExitNode(&f->seal.entity,m->assignment,&f->actor.goal.node))return 0;
+  direction=p->aim;
+  if(!isfinite(direction[0])||!isfinite(direction[1])||
+     !isfinite(f->body.r.currentAngles[YAW])||fabsf(f->body.r.currentAngles[YAW])>360.f)return 0;
+  /* Native vectoyaw stores FLOAT after double atan2 *180 /pi. */
+  heading=(direction[0]==0&&direction[1]==0)?0:
+   (float)((atan2((double)direction[1],(double)direction[0])*180.0)/M_PI);
+  if(heading<0)heading+=360;
+  heading-=f->body.r.currentAngles[YAW];
+  while(heading>180)heading-=360;
+  while(heading<-180)heading+=360;
+  *out=heading;return 1;
+ }
+ if(m->busy || m->model || !f->body.targetname ||
+    strcmp(f->body.targetname,"runner") || !TrainingCurrentRoute(&f->seal.entity))return 0;
+ /* A placed runner is already a live Actor before the mover owns a path.
+  * Read zero only for its untouched, stationary pre-movement state. */
+ if(!m->active){
+    if(m->assignment || m->moving || m->route.headingValid ||
+       m->velocity[0]!=0 || m->velocity[1]!=0 || m->velocity[2]!=0)return 0;
+    *out=0;return 1;
+ }
+ if(m->route.headingValid && !m->arrived && f->actor.goal.assigned && m->assignment==f->actor.goal.assignment)
+    direction=m->route.heading;
+ else if(VectorLengthSquared(m->velocity)>1.0f)direction=m->velocity;
+ else{*out=0;return 1;}
+ if(!isfinite(direction[0]) || !isfinite(direction[1]) || !isfinite(f->body.r.currentAngles[YAW]))return 0;
+ heading=(direction[0]==0 && direction[1]==0)?0:atan2f(direction[1],direction[0])*(180.0f/(float)M_PI);
+ if(heading<0)heading+=360;
+ heading-=f->body.r.currentAngles[YAW];
+ while(heading>180)heading-=360;
+ while(heading<-180)heading+=360;
+ *out=heading;return 1;
+}
 static int r243_actor_float_game_query(void*u,const R243ActorFloatRequest*input,R243ActorFloatReply*out,char*error,size_t cap,int(*current)(void*),void*context){
  R243ActorFloatGameFrame*f=NULL;R243ActorFloatRequest q;cod1ActorLease_t lease;
  const GscAiArrayHost*census=NULL;unsigned i,ownTeam,opposing,count=0,active=0;int ok=0;(void)u;
@@ -106,7 +153,7 @@ static int r243_actor_float_game_query(void*u,const R243ActorFloatRequest*input,
     !R243ActorFloatNativeBuffersCurrent(input,out,error,cap,current,context)||
     ActorFloatPrivate(input,sizeof(*input))||ActorFloatPrivate(out,sizeof(*out))||ActorFloatPrivate(error,cap))return 0;
  q=*input;
- if((q.method!=R243_ACTOR_FLOAT_PATH&&q.method!=R243_ACTOR_FLOAT_ENEMY)||!q.program||!q.runtime||!q.catalog||!q.call||
+ if(!R243ActorFloatMask(q.method)||!q.program||!q.runtime||!q.catalog||!q.call||
     !R243ActorFloatSessionHostTimeCurrent(&q,level.time)||
     !R243ActorFloatExactCallCurrent(&q,current,context)||!ActorFloatLease(&q.entity,&lease))return 0;
  if(q.method==R243_ACTOR_FLOAT_ENEMY){census=G_Cod1AiArrayHost();if(!census||!census->query||!census->validate)return 0;}
@@ -119,6 +166,13 @@ static int r243_actor_float_game_query(void*u,const R243ActorFloatRequest*input,
  f->reply.bits=0x7fc00000u;f->censusRequest.now_ms=q.now;f->censusRequest.team_mask=14;
  if(q.method==R243_ACTOR_FLOAT_ENEMY&&(!G_Cod1AiDomainRead(&f->domain,NULL,0)||!ActorFloatPlayers(f,1)))goto done;
  r243ActorFloatGameActive=f;
+ if(q.method==COD1_ACTOR_MOTION_ANGLE){
+  float angle;
+  if(!r243_actor_float_game_fence(f)||!R243ActorFloatNativeBuffersCurrent(input,out,error,cap,current,context)||
+     !r243_actor_float_game_scope(f)||!ActorCourseMotionAngle(f,&angle))goto done;
+  memcpy(&f->reply.bits,&angle,sizeof(angle));*out=f->reply;ok=1;
+  goto done;
+ }
  if(q.method==R243_ACTOR_FLOAT_PATH){
   if(!r243_actor_float_game_fence(f)||!R243ActorFloatNativeBuffersCurrent(input,out,error,cap,current,context)||!r243_actor_float_game_scope(f))goto done;
   /* Original63010 tests only lowWORD actor6F4. No goal/path repair, no

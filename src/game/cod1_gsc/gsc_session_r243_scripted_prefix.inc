@@ -18,10 +18,14 @@ int gsc_session_select_r243_scripted_prefix(GscSession*s,const GscActorScriptedP
 }
 typedef struct {
  SessionTurretAnimationLease base;GscActorScriptedPrefixHost host;
- const GscActorScriptedPrefixRequest*input;GscActorScriptedPrefixRequest copy;
+ const GscActorScriptedPrefixRequest *input,*upstream;
+ GscActorScriptedPrefixRequest copy,logical;
 } SessionScriptedPrefixLease;
 static int session_scripted_prefix_scope(const SessionScriptedPrefixLease*l){
- return session_turret_animation_scope(&l->base)&&l->base.session->r243_scripted_prefix_enabled&&
+ int hostNow;
+ return r243_command_host_time(l->base.session,l->base.now,&hostNow) &&
+  hostNow==l->copy.now_ms && !memcmp(l->upstream,&l->logical,sizeof(l->logical)) &&
+  session_turret_animation_scope(&l->base)&&l->base.session->r243_scripted_prefix_enabled&&
   !memcmp(&l->base.session->r243_scripted_prefix,&l->host,sizeof(l->host))&&
   !memcmp(l->input,&l->copy,sizeof(l->copy));
 }
@@ -46,11 +50,16 @@ static int session_scripted_prefix_invoke(void*user,const GscActorScriptedPrefix
     session_animation_namespace_overlap(out,sizeof(*out),admitted,sizeof(*admitted))||
     session_animation_namespace_overlap(out,sizeof(*out),error,cap)||
     session_animation_namespace_overlap(admitted,sizeof(*admitted),error,cap))return 0;
- memset(&l,0,sizeof(l));q=*input;l.input=&q;l.copy=q;
+ memset(&l,0,sizeof(l));q=*input;l.input=&q;l.upstream=input;l.logical=q;
  session_turret_animation_lease(s,&l.base,current,context);l.host=s->r243_scripted_prefix;
- if(q.runtime_identity!=l.base.instance||q.now_ms!=l.base.now||!session_scripted_prefix_current(&l))return 0;
+ /* VM timers start at map entry. GAME owns the pose and queued AI
+  * operation at the corresponding absolute server tick. */
+ if(q.runtime_identity!=l.base.instance || q.now_ms!=l.base.now ||
+    !r243_command_host_time(s,l.base.now,&q.now_ms))return 0;
+ l.copy=q;
+ if(!session_scripted_prefix_current(&l))return 0;
  memset(&certificate,0,sizeof(certificate));
  ok=l.host.invoke(l.host.user,&q,&certificate,&result,error,cap,session_scripted_prefix_current,&l);
- if(ok!=1||!session_scripted_prefix_current(&l)||memcmp(input,&l.copy,sizeof(l.copy)))return 0;
+ if(ok!=1||!session_scripted_prefix_current(&l)||memcmp(input,&l.logical,sizeof(l.logical)))return 0;
  *out=certificate;*admitted=result;return 1;
 }

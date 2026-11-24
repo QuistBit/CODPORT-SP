@@ -8,12 +8,14 @@ int G_Cod1EntitySelectCarbineSpawn(cod1CarbineSpawnCallback_t);
 int G_Cod1SpawnTrainingWeapon(const char *,const float[3],int32_t,GscEntityRef *,char *,size_t);
 #include "cod1_dobj.h"
 #include "g_cod1_actor.h"
+int G_Cod1PlayerShellshock(const GscPlayerNativeRequest *,GscPlayerNativeResult *,char *,size_t,int (*)(void *),void *);
 void G_Cod1EntityMapBegin( void );
 void G_Cod1EntityMapReady( void );
 void G_Cod1EntityMapEnd( void );
 void G_Cod1EntityBorn( gentity_t *ent );
 void G_Cod1EntityLinkOriginBorn(const GscEntityRef*);
 int G_Cod1EntityLinksBeforeFree(const GscEntityRef*);
+int G_Cod1ScriptMotionFrame(gentity_t*);
 int G_Cod1EntityLinkRunEntity(gentity_t*);
 const GscEntityLinkHost*G_Cod1EntityLinkHost(void);
 const GscWeaponClassnameHost*G_Cod1WeaponClassnameHost(void);
@@ -193,6 +195,7 @@ int G_Cod1ActorBootstrapDeleteCurrent(const cod1ActorDeleteReceipt_t *);
 int G_Cod1ActorBootstrapDeleteCommit(const cod1ActorDeleteReceipt_t *);
 void G_Cod1ActorBootstrapDeleteFail(const cod1ActorDeleteReceipt_t *);
 int G_Cod1EntityDeleteRetiredIdentity(const GscEntityRef *,const cod1ActorLease_t *);
+int G_Cod1TrainingJumperDeleteCommitted(const GscEntityRef *,const cod1ActorLease_t *);
 const GscSpatialNativeHost *G_Cod1SpatialNativeHost( void );
 /* R202 read-only actor query. A sealed census with a skipped constructor is
  * deliberately incomplete; reservations alone never prove an empty AI world.

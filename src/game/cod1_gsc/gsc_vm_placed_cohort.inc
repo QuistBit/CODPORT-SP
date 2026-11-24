@@ -2,6 +2,7 @@
  * Only real canonical INIT/pop + released entry + synchronous native return
  * can publish it. Generic entry, factory and final nochild gates stay separate. */
 #include "gsc_postcohort_private.h"
+#include "../../qcommon/cod1_exact_bytes_r242.h"
 #include "gsc_vm_cohort_storage.inc"
 enum {PLACED_COHORT_READY=1,PLACED_COHORT_AITYPED,PLACED_COHORT_BUSY,PLACED_COHORT_FAILED,PLACED_COHORT_POST,PLACED_COHORT_LATE,PLACED_COHORT_LATE_DONE};
 typedef struct {int slot;Task*allocation;unsigned char*task_bytes;unsigned char*results_bytes;} PlacedCohortMember;
@@ -42,7 +43,7 @@ static int placed_cohort_private(const GscRuntime*r,const void*p,size_t size){re
 static int placed_cohort_quiet(GscRuntime*r){return r&&r->started&&!r->error[0]&&!r->bsp_construction_only&&r->lifetime_enabled&&
  !r->advancing&&!r->executing_task&&!r->entity_entry_depth&&!r->execution_budget&&!r->entity_sequence_busy&&
  !r->entity_prepare_busy&&!r->entity_certificate_busy&&!r->entity_inheritance_busy&&!r->entity_field_busy&&!r->entity_method_busy&&
- !r->r243_controller_enabled&&!r->placed_return&&!r->placed_init_initial_scope;}
+ (!r->r243_controller_enabled||placed_controller_idle(r))&&!r->placed_return&&!r->placed_init_initial_scope;}
 static void placed_cohort_clock(GscRuntime*r,PlacedCohortWitness*w){
  w->instance=r->array_token;w->program=r->program;w->program_id=gsc_runtime_program_identity(r);w->catalog=r->animation_namespace.identity;
  w->now=r->now_ms;w->bucket=r237_bucket(r);w->cadence=r->cadence_drain_ms;w->next_serial=r->next_serial;
@@ -62,8 +63,8 @@ static int placed_cohort_same(GscRuntime*r,const PlacedCohortWitness*w,int extra
   r->task_count<0||r->task_count>GSC_LIFETIME_TASK_CAPACITY)return 0;
  for(n=0;n<w->count;n++){const PlacedCohortMember*m=&w->members[n];Task*t;
   if(m->slot<0||m->slot>=r->task_count||(t=task_at(r,m->slot))!=m->allocation||!t||
-   memcmp(t,m->task_bytes,sizeof(*t))||t->status==TASK_DEAD)return 0;
-  if(t->results&&(!m->results_bytes||memcmp(t->results,m->results_bytes,sizeof(*t->results))))return 0;
+   !R242ExactATRBytesEqual(t,m->task_bytes,sizeof(*t))||t->status==TASK_DEAD)return 0;
+  if(t->results&&(!m->results_bytes||!R242ExactATRBytesEqual(t->results,m->results_bytes,sizeof(*t->results))))return 0;
  }
  for(n=0;n<r->task_count;n++){Task*t=task_at(r,n);if(!t)return 0;if(t->status==TASK_DEAD)continue;live++;
   for(k=0;k<w->count;k++)if(w->members[k].slot==n&&w->members[k].allocation==t)break;

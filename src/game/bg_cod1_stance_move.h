@@ -12,6 +12,11 @@ static qboolean BG_Cod1CheckStance(pmove_t*m){
  old=(s->pm_flags&PMF_COD1_PRONE)?2:((s->pm_flags&PMF_DUCKED)?1:0);
  want=(m->cmd.wbuttons&WBUTTON_COD1_PRONE)?2:(m->cmd.upmove<0?1:0);
  if((m->cmd.buttons&BUTTON_TALK) || (s->pm_flags&PMF_IGNORE_INPUT) || !(m->cmd.wbuttons&WBUTTON_COD1_STANCE))want=old;
+ /* Apply the same ordinary permission arbitration in GAME and prediction.
+  * The original reports an impossible three-way ban when movement consumes it,
+  * not while sequential script setters are still running. */
+ want=BG_Cod1PermittedStance((unsigned)s->stats[STAT_COD1_MODE]>>COD1_STANCE_PERMISSION_SHIFT,old,want);
+ if(want<0){Com_Error(ERR_DROP,"All stances disallowed for player");return qfalse;}
  /* Swimming/ladder prone requires its own original transition behavior. */
  if(want==2 && (m->waterlevel>1 || (s->pm_flags&PMF_LADDER)))want=1;
  oldtop=feet+height[old];top=feet+height[want];

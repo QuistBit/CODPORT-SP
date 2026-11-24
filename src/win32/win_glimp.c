@@ -1244,16 +1244,17 @@ void GLimp_EndFrame( void ) {
 
 		if ( !glConfig.stereoEnabled ) {    // why?
 			if ( qwglSwapIntervalEXT ) {
-				CL_R241TraceSwapIntervalResult(qwglSwapIntervalEXT( r_swapInterval->integer ));
+				int result = qwglSwapIntervalEXT( r_swapInterval->integer );
+				if ( !glConfig.smpActive ) CL_R241TraceSwapIntervalResult( result );
 			}
 		}
 	}
 
 
-    CL_R241TracePresent(r_swapInterval->integer,qwglSwapIntervalEXT!=NULL,glConfig.stereoEnabled,1);
+    if ( !glConfig.smpActive ) CL_R241TracePresent(r_swapInterval->integer,qwglSwapIntervalEXT!=NULL,glConfig.stereoEnabled,1);
 	// don't flip if drawing to front buffer
 	if ( Q_stricmp( r_drawBuffer->string, "GL_FRONT" ) != 0 ) {
-        CL_R241TraceMark(CT241_SWAP_ENTER);
+        if ( !glConfig.smpActive ) CL_R241TraceMark(CT241_SWAP_ENTER);
 		if ( glConfig.driverType > GLDRV_ICD ) {
 			if ( !qwglSwapBuffers( glw_state.hDC ) ) {
 				ri.Error( ERR_FATAL, "GLimp_EndFrame() - SwapBuffers() failed!\n" );
@@ -1262,7 +1263,7 @@ void GLimp_EndFrame( void ) {
 		{
 			SwapBuffers( glw_state.hDC );
 		}
-        CL_R241TraceMark(CT241_SWAP_EXIT);
+        if ( !glConfig.smpActive ) CL_R241TraceMark(CT241_SWAP_EXIT);
 	}
 
 	// check logging
@@ -1536,101 +1537,105 @@ SMP acceleration
 ===========================================================
 */
 
-HANDLE renderCommandsEvent;
-HANDLE renderCompletedEvent;
-HANDLE renderActiveEvent;
+static volatile LONG wglErrors;
+static HANDLE renderCommandsEvent;
+static HANDLE renderCompletedEvent;
+static HANDLE renderActiveEvent;
+static HANDLE renderThreadHandle;
+static void ( *glimpRenderThread )( void );
+static void *smpData;
+/* Only the renderer thread uses this after CreateThread and before join. */
+static qboolean renderContextBound;
 
-void ( *glimpRenderThread )( void );
-
-void GLimp_RenderThreadWrapper( void ) {
+static DWORD WINAPI GLimp_RenderThreadWrapper( LPVOID parameter ) {
+	(void)parameter;
 	glimpRenderThread();
-
-	// unbind the context before we die
-	qwglMakeCurrent( glw_state.hDC, NULL );
+	return 0;
 }
 
-/*
-=======================
-GLimp_SpawnRenderThread
-=======================
-*/
-HANDLE renderThreadHandle;
-int renderThreadId;
-qboolean GLimp_SpawnRenderThread( void ( *function )( void ) ) {
+static void GLimp_CloseRenderThreadHandles( void ) {
+	if ( renderThreadHandle ) CloseHandle( renderThreadHandle );
+	if ( renderActiveEvent ) CloseHandle( renderActiveEvent );
+	if ( renderCompletedEvent ) CloseHandle( renderCompletedEvent );
+	if ( renderCommandsEvent ) CloseHandle( renderCommandsEvent );
+	renderThreadHandle = renderActiveEvent = renderCompletedEvent = renderCommandsEvent = NULL;
+	glimpRenderThread = NULL;
+}
 
+qboolean GLimp_SpawnRenderThread( void ( *function )( void ) ) {
+	DWORD threadId;
+	if ( renderThreadHandle ) {
+		/* A repeated registration can keep the same idle command worker. */
+		return glimpRenderThread == function &&
+			WaitForSingleObject( renderThreadHandle, 0 ) == WAIT_TIMEOUT;
+	}
+	if ( !function || !qwglGetCurrentContext || !qwglGetCurrentDC ) return qfalse;
 	renderCommandsEvent = CreateEvent( NULL, TRUE, FALSE, NULL );
 	renderCompletedEvent = CreateEvent( NULL, TRUE, FALSE, NULL );
-	renderActiveEvent = CreateEvent( NULL, TRUE, FALSE, NULL );
-
-	glimpRenderThread = function;
-
-	renderThreadHandle = CreateThread(
-		NULL,   // LPSECURITY_ATTRIBUTES lpsa,
-		0,      // DWORD cbStack,
-		(LPTHREAD_START_ROUTINE)GLimp_RenderThreadWrapper,  // LPTHREAD_START_ROUTINE lpStartAddr,
-		0,          // LPVOID lpvThreadParm,
-		0,          //   DWORD fdwCreate,
-		&renderThreadId );
-
-	if ( !renderThreadHandle ) {
-		return qfalse;
+	/* One waiter consumes each acknowledgement, including very short command lists. */
+	renderActiveEvent = CreateEvent( NULL, FALSE, FALSE, NULL );
+	if ( renderCommandsEvent && renderCompletedEvent && renderActiveEvent ) {
+		glimpRenderThread = function;
+		renderContextBound = qfalse;
+		renderThreadHandle = CreateThread( NULL, 0, GLimp_RenderThreadWrapper, NULL, 0, &threadId );
 	}
-
-	return qtrue;
+	if ( renderThreadHandle ) return qtrue;
+	GLimp_CloseRenderThreadHandles();
+	return qfalse;
 }
 
-static void    *smpData;
-static int wglErrors;
-
 void *GLimp_RendererSleep( void ) {
-	void    *data;
-
-	if ( !qwglMakeCurrent( glw_state.hDC, NULL ) ) {
-		wglErrors++;
+	void *data;
+	if ( renderContextBound ) {
+		if ( qwglMakeCurrent( glw_state.hDC, NULL ) ) renderContextBound = qfalse;
+		else InterlockedIncrement( &wglErrors );
 	}
-
-	ResetEvent( renderActiveEvent );
-
-	// after this, the front end can exit GLimp_FrontEndSleep
 	SetEvent( renderCompletedEvent );
-
 	WaitForSingleObject( renderCommandsEvent, INFINITE );
 
-	if ( !qwglMakeCurrent( glw_state.hDC, glw_state.hGLRC ) ) {
-		wglErrors++;
-	}
-
+	data = smpData;
+	if ( !data ) return NULL;
+	if ( qwglMakeCurrent( glw_state.hDC, glw_state.hGLRC ) ) renderContextBound = qtrue;
+	else InterlockedIncrement( &wglErrors );
 	ResetEvent( renderCompletedEvent );
 	ResetEvent( renderCommandsEvent );
-
-	data = smpData;
-
-	// after this, the main thread can exit GLimp_WakeRenderer
 	SetEvent( renderActiveEvent );
-
 	return data;
 }
 
-
 void GLimp_FrontEndSleep( void ) {
 	WaitForSingleObject( renderCompletedEvent, INFINITE );
-
-	if ( !qwglMakeCurrent( glw_state.hDC, glw_state.hGLRC ) ) {
-		wglErrors++;
-	}
+	if ( !qwglMakeCurrent( glw_state.hDC, glw_state.hGLRC ) ) InterlockedIncrement( &wglErrors );
 }
-
 
 void GLimp_WakeRenderer( void *data ) {
-	smpData = data;
-
-	if ( !qwglMakeCurrent( glw_state.hDC, NULL ) ) {
-		wglErrors++;
+	if ( !data ) {
+		if ( !renderThreadHandle ) return;
+		if ( WaitForSingleObject( renderCompletedEvent, INFINITE ) != WAIT_OBJECT_0 ) {
+			ri.Error( ERR_FATAL, "Cannot wait for idle renderer thread" );
+			return;
+		}
+		smpData = NULL;
+		if ( !SetEvent( renderCommandsEvent ) ||
+			WaitForSingleObject( renderThreadHandle, INFINITE ) != WAIT_OBJECT_0 ) {
+			ri.Error( ERR_FATAL, "Cannot stop renderer thread" );
+			return;
+		}
+		GLimp_CloseRenderThreadHandles();
+		if ( InterlockedExchange( &wglErrors, 0 ) ) {
+			ri.Printf( PRINT_WARNING, "OpenGL context transfer failed during threaded rendering\n" );
+		}
+		if ( glw_state.hGLRC && ( qwglGetCurrentContext() != glw_state.hGLRC ||
+				qwglGetCurrentDC() != glw_state.hDC ) ) {
+			if ( !qwglMakeCurrent( glw_state.hDC, glw_state.hGLRC ) ) {
+				InterlockedIncrement( &wglErrors );
+				ri.Error( ERR_FATAL, "Cannot restore renderer context for shutdown" );
+			}
+		}
+		return;
 	}
-
-	// after this, the renderer can continue through GLimp_RendererSleep
+	smpData = data;
+	if ( !qwglMakeCurrent( glw_state.hDC, NULL ) ) InterlockedIncrement( &wglErrors );
 	SetEvent( renderCommandsEvent );
-
 	WaitForSingleObject( renderActiveEvent, INFINITE );
 }
-

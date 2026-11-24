@@ -41,7 +41,7 @@ typedef struct {float start[3],end[3],delta[3],delta2,size0[3],size1[3],corners[
  uint32_t flags,contents,material;unsigned char tail[6],allsolid,startsolid;
  uint32_t capsule;float radius,halfheight,offset[3],extents[3];} trace_work;
 typedef char tw_size_check[sizeof(trace_work)==280?1:-1];
-struct v59_context {const v59_world *w;trace_work prep,t;int stationary;
+struct v59_context {const v59_world *w;trace_work prep,t;int stationary,unsupported;
  unsigned char *brushseen,*surfaceseen,*edgeseen,*vertexseen;
  int (*events)[2],*gathered;size_t nevents,eventcap,nleaves;
 

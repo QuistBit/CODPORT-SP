@@ -215,10 +215,16 @@ static int CS_PointMissesArea(const float *start,const float *end,const float *l
 
 static int CS_TargetTrace( trace_t *trace, int slot, const sharedEntity_t *ent,
     const float *start, const float *end, const float *mins, const float *maxs,
-    uint32_t mask, int capsule, uint32_t contents ) {
+    uint32_t mask, int capsule, uint32_t contents, int locational ) {
     clipHandle_t model;
     const float *angles=vec3_origin;
-    if (cod1SpatialActors[slot].active && cod1SpatialActors[slot].hasDObj &&
+    /* Original44E6C0 dispatches every nonzero hull to44DFF0. That
+     * target path uses44DA80 primitive/brush shape even for a DObj actor.
+     * Zero-extent point queries select44E110. Its +54 locational flag
+     * must also be set before a DObj/flag8 may select model narrowphase.
+     * Native syscall50/51 explicitly supply locational=0. */
+    if (locational && mins[0]==maxs[0] && mins[1]==maxs[1] && mins[2]==maxs[2] &&
+        cod1SpatialActors[slot].active && cod1SpatialActors[slot].hasDObj &&
         (cod1SpatialActors[slot].flags & COD1_SPATIAL_NATIVE_DOBJ_FLAG))
         return COD1_SPATIAL_UNAVAILABLE;
     if (!CS_Finite(ent->r.currentOrigin) || !CS_Finite(ent->r.currentAngles) ||
@@ -270,9 +276,10 @@ static int CS_TargetTrace( trace_t *trace, int slot, const sharedEntity_t *ent,
 }
 
 #include "sv_cod1_path_sight.inc"
+#include "sv_cod1_path_world_sight.inc"
 
 static int CS_QueryTrace( trace_t *output, const float *start, const float *end,
-    const float *mins, const float *maxs, const int32_t *passes, uint32_t mask, int capsule, int sight ) {
+    const float *mins, const float *maxs, const int32_t *passes, uint32_t mask, int capsule, int sight, int locational ) {
     trace_t result;
     cod1SpatialArea_t area;
     int i, status;
@@ -321,15 +328,15 @@ static int CS_QueryTrace( trace_t *output, const float *start, const float *end,
         if (CS_Ignored(slot,ent,passes)) continue;
         status=CS_Contents(slot,ent,&contents);
         if (status!=COD1_SPATIAL_OK) return status;
-        if(!capsule && !sight && mask==UINT32_C(0x0280e031) &&
+        if(locational && !capsule && !sight && (mask==UINT32_C(0x0280e031)||mask==UINT32_C(0x0200c061)) &&
            cod1SpatialActors[slot].active && cod1SpatialActors[slot].hasDObj &&
            (cod1SpatialActors[slot].flags & COD1_SPATIAL_NATIVE_DOBJ_FLAG) &&
            VectorCompare(mins,vec3_origin) && VectorCompare(maxs,vec3_origin) &&
            CS_PointMissesArea(start,end,cod1SpatialActors[slot].areaMins,cod1SpatialActors[slot].areaMaxs))
             continue;
-        status=CS_TargetTrace(&candidate,slot,ent,start,end,mins,maxs,mask,capsule,contents);
+        status=CS_TargetTrace(&candidate,slot,ent,start,end,mins,maxs,mask,capsule,contents,locational);
         if (status!=COD1_SPATIAL_OK) {
-            if(mask==UINT32_C(0x0280e031)) Com_Printf("[R234] shot target trace refusal status=%d slot=%d native=%d dobj=%d flags=%08x svFlags=%08x bmodel=%d contents=%08x origin=(%g %g %g) mins=(%g %g %g) maxs=(%g %g %g) start=(%g %g %g) end=(%g %g %g) worldFraction=%g\n",status,slot,cod1SpatialActors[slot].active,cod1SpatialActors[slot].hasDObj,cod1SpatialActors[slot].flags,ent->r.svFlags,ent->r.bmodel,contents,ent->r.currentOrigin[0],ent->r.currentOrigin[1],ent->r.currentOrigin[2],ent->r.mins[0],ent->r.mins[1],ent->r.mins[2],ent->r.maxs[0],ent->r.maxs[1],ent->r.maxs[2],start[0],start[1],start[2],end[0],end[1],end[2],result.fraction);
+            Com_Printf("[R234] shot target trace refusal status=%d slot=%d native=%d dobj=%d flags=%08x svFlags=%08x bmodel=%d contents=%08x origin=(%g %g %g) mins=(%g %g %g) maxs=(%g %g %g) start=(%g %g %g) end=(%g %g %g) worldFraction=%g\n",status,slot,cod1SpatialActors[slot].active,cod1SpatialActors[slot].hasDObj,cod1SpatialActors[slot].flags,ent->r.svFlags,ent->r.bmodel,contents,ent->r.currentOrigin[0],ent->r.currentOrigin[1],ent->r.currentOrigin[2],ent->r.mins[0],ent->r.mins[1],ent->r.mins[2],ent->r.maxs[0],ent->r.maxs[1],ent->r.maxs[2],start[0],start[1],start[2],end[0],end[1],end[2],result.fraction);
             return status;
         }
         if (candidate.fraction<result.fraction) {
@@ -356,7 +363,7 @@ static int CS_QueryTrace( trace_t *output, const float *start, const float *end,
 int SV_Cod1SpatialCapsuleTrace( const cod1SpatialTraceQuery_t *query, trace_t *output ) {
     cod1SpatialTraceQuery_t input;
     trace_t result;
-    int status;
+    int status,zeroHull;
     double widthX, widthY, height;
     if (!query || !output) return COD1_SPATIAL_INVALID;
     input=*query;
@@ -366,10 +373,11 @@ int SV_Cod1SpatialCapsuleTrace( const cod1SpatialTraceQuery_t *query, trace_t *o
     widthX=(double)input.maxs[0]-input.mins[0];
     widthY=(double)input.maxs[1]-input.mins[1];
     height=(double)input.maxs[2]-input.mins[2];
-    if (!(widthX>0 && widthX==widthY && widthX<=FLT_MAX && height>0 && height<=FLT_MAX))
+    zeroHull=input.mins[0]==0&&input.mins[1]==0&&input.mins[2]==0&&input.maxs[0]==0&&input.maxs[1]==0&&input.maxs[2]==0;
+    if (!zeroHull&&!(widthX>0 && widthX==widthY && widthX<=FLT_MAX && height>0 && height<=FLT_MAX))
         return COD1_SPATIAL_INVALID;
     status=CS_QueryTrace(&result,input.start,input.end,input.mins,input.maxs,
-        input.passEntity,input.contentsMask,qtrue,qfalse);
+        input.passEntity,input.contentsMask,qtrue,qfalse,qfalse);
     if (status==COD1_SPATIAL_OK) *output=result;
     return status;
 }
@@ -378,6 +386,20 @@ int SV_Cod1SpatialCapsuleTrace( const cod1SpatialTraceQuery_t *query, trace_t *o
  * Preserve raw contents and both exclusions through the existing native-only
  * nearest-hit lane. Unsupported capsule/DObj geometry remains unavailable;
  * a failure never publishes an incomplete world or dynamic result. */
+/* Ordinary syscall50: explicit bounds (including zero extent), locational0.
+ * Preserve masks/exclusions and unsupported swept-box/target-capsule checks.
+ * The old point-ray entry retains its conservative model-aware domain. */
+int SV_Cod1SpatialBoxTrace(const cod1SpatialTraceQuery_t *query,trace_t *output){
+ cod1SpatialTraceQuery_t input;trace_t result;int status;
+ if(!query||!output)return COD1_SPATIAL_INVALID;
+ input=*query;
+ if(input.version!=COD1_SPATIAL_VERSION||input.bytes!=sizeof(input)||
+    !CS_Finite(input.start)||!CS_Finite(input.end)||!CS_Bounds(input.mins,input.maxs))return COD1_SPATIAL_INVALID;
+ status=CS_QueryTrace(&result,input.start,input.end,input.mins,input.maxs,input.passEntity,input.contentsMask,qfalse,qfalse,qfalse);
+ if(status==COD1_SPATIAL_OK)*output=result;
+ return status;
+}
+
 int SV_Cod1SpatialPointTrace( const cod1SpatialTraceQuery_t *query, trace_t *output ) {
     cod1SpatialTraceQuery_t input;
     trace_t result;
@@ -389,7 +411,7 @@ int SV_Cod1SpatialPointTrace( const cod1SpatialTraceQuery_t *query, trace_t *out
     for (i=0;i<3;++i)
         if (input.mins[i]!=0.0f || input.maxs[i]!=0.0f) return COD1_SPATIAL_INVALID;
     status=CS_QueryTrace(&result,input.start,input.end,input.mins,input.maxs,
-        input.passEntity,input.contentsMask,qfalse,qfalse);
+        input.passEntity,input.contentsMask,qfalse,qfalse,qtrue);
     if (status==COD1_SPATIAL_OK) *output=result;
     return status;
 }
@@ -403,7 +425,7 @@ int SV_Cod1SpatialSight( const cod1SpatialSightQuery_t *query, int *blocked ) {
     if (input.version!=COD1_SPATIAL_VERSION || input.bytes!=sizeof(input) ||
         !CS_Finite(input.start) || !CS_Finite(input.end)) return COD1_SPATIAL_INVALID;
     status=CS_QueryTrace(&result,input.start,input.end,vec3_origin,vec3_origin,
-        input.passEntity,input.contentsMask,qfalse,qtrue);
+        input.passEntity,input.contentsMask,qfalse,qtrue,qtrue);
     if (status==COD1_SPATIAL_OK)
         *blocked=result.fraction<1.0f || result.startsolid || result.allsolid;
     return status;

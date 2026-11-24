@@ -101,6 +101,9 @@ int     trap_FS_FOpenFile( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
 void    trap_FS_Read( void *buffer, int len, fileHandle_t f ) {
 	syscall( CG_FS_READ, buffer, len, f );
 }
+int trap_FS_ReadCount(void *buffer,int len,fileHandle_t f) {
+    return syscall(CG_FS_READ,buffer,len,f);
+}
 
 void    trap_FS_Write( const void *buffer, int len, fileHandle_t f ) {
 	syscall( CG_FS_WRITE, buffer, len, f );

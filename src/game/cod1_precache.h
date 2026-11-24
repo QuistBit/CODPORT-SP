@@ -36,6 +36,11 @@ typedef struct {
 typedef char cod1ModelResourceReferenceMustBe96[
     sizeof(cod1ModelResourceReference_t) == 96 ? 1 : -1];
 
+/* Paired GAME/engine ABI74. Names belong to decoded LOD0, not a live pose. */
+enum {COD1_MODEL_PART_RANGE=-5,COD1_MODEL_PART_BAD_MODEL=-6};
+typedef struct {int32_t count;char name[128];} cod1ModelPartNameResult_t;
+/* Paired ABI76: copied unposed bounds from an owned registered model. */
+typedef struct {float mins[3],maxs[3];} cod1ModelBounds_t;
 /* Validate a bounded relative name. Slash and backslash remain distinct
  * resource/table identities; only a copied path at the FS boundary normalizes
  * separators. This port refuses traversal and filesystem metacharacters. */

@@ -13,17 +13,34 @@ int gsc_session_select_r233_actor_presence(GscSession *s,const GscActorPresenceH
   return session_leave_rejected(s,"actor presence selection expired",error,cap);
  s->actor_presence=copy;s->actor_presence_enabled=1;s->busy=0;return 1;
 }
-typedef struct {GscSession*s;GscRuntime*r;GscActorPresenceHost host;uint64_t id,instance;int now;} SessionActorPresenceLease;
+int gsc_session_select_map_actor_presence(GscSession*s,const GscActorPresenceHost*input,char*error,size_t cap){
+ GscActorPresenceHost copy;
+ if((cap&&!error)||session_animation_namespace_private(s,input,sizeof(*input))||session_animation_namespace_private(s,error,cap)||session_animation_namespace_overlap(input,sizeof(*input),error,cap))return 0;
+ if(!s||!input)return session_reject(error,cap,"map actor presence requires Session/provider");copy=*input;
+ if(!session_enter(s,error,cap))return 0;
+ if(s->view.state!=GSC_SESSION_EMPTY||s->program||s->runtime||!s->root_map_enabled||s->actor_presence_enabled||!copy.read||!copy.current)
+  return session_leave_rejected(s,"map actor presence requires idle map Session",error,cap);
+ s->actor_presence=copy;s->actor_presence_enabled=1;s->map_actor_presence_enabled=1;s->busy=0;return 1;
+}
+typedef struct {GscSession*s;GscRuntime*r;GscActorPresenceHost host;uint64_t id,instance;int now;GscMapExecutionCertificate map;} SessionActorPresenceLease;
 static int session_actor_presence_scope(const SessionActorPresenceLease*l){
  GscSession*s=l->s;return s&&s->busy&&!s->abort_requested&&s->view.state==GSC_SESSION_RUNNING&&
  s->actor_presence_enabled&&s->runtime==l->r&&s->view.session_id==l->id&&s->view.logical_ms==l->now&&
  l->instance&&gsc_runtime_instance_identity(l->r)==l->instance&&
  !memcmp(&s->actor_presence,&l->host,sizeof(l->host));
 }
+static int session_actor_presence_resources(const SessionActorPresenceLease*l){
+ GscSession*s=l->s;
+ if(!s->map_actor_presence_enabled)return session_animation_resources_current(s);
+ return session_actor_presence_scope(l)&&s->root_map_enabled&&l->map.receipt&&l->map.current&&
+  s->root_map.receipt==l->map.receipt&&s->root_map.current==l->map.current&&
+  l->map.current(l->map.receipt)==1&&session_actor_presence_scope(l)&&s->root_map_enabled&&
+  s->root_map.receipt==l->map.receipt&&s->root_map.current==l->map.current;
+}
 static int session_actor_presence_lease(GscSession*s,SessionActorPresenceLease*l){
- memset(l,0,sizeof(*l));if(!s)return 0;l->s=s;l->r=s->runtime;l->host=s->actor_presence;
+ memset(l,0,sizeof(*l));if(!s)return 0;l->s=s;l->r=s->runtime;l->host=s->actor_presence;l->map=s->root_map;
  l->id=s->view.session_id;l->now=s->view.logical_ms;l->instance=gsc_runtime_instance_identity(l->r);
- return session_actor_presence_scope(l)&&session_animation_resources_current(s)&&session_actor_presence_scope(l);
+ return session_actor_presence_scope(l)&&session_actor_presence_resources(l)&&session_actor_presence_scope(l);
 }
 static int session_actor_presence_read(void*user,const GscEntityRef*input,uint64_t*out,char*error,size_t cap){
  GscSession*s=user;SessionActorPresenceLease l;GscEntityRef ref,original;uint64_t serial=0;int ok;
@@ -33,7 +50,7 @@ static int session_actor_presence_read(void*user,const GscEntityRef*input,uint64
     session_animation_namespace_overlap(error,cap,input,sizeof(*input))||session_animation_namespace_overlap(error,cap,out,sizeof(*out)))return 0;
  ref=original=*input;if(!session_actor_presence_lease(s,&l))return 0;
  ok=l.host.read(l.host.user,&ref,&serial,error,cap);
- if(ok!=1||!session_actor_presence_scope(&l)||!session_animation_resources_current(s)||
+ if(ok!=1||!session_actor_presence_scope(&l)||!session_actor_presence_resources(&l)||
     !session_actor_presence_scope(&l)||memcmp(&ref,&original,sizeof(ref))||memcmp(input,&original,sizeof(ref)))return 0;
  *out=serial;return 1;
 }
@@ -42,7 +59,7 @@ static int session_actor_presence_current(void*user,const GscEntityRef*input,uin
  if(!input||session_animation_namespace_private(s,input,sizeof(*input)))return 0;
  ref=original=*input;if(!session_actor_presence_lease(s,&l))return 0;
  ok=l.host.current(l.host.user,&ref,serial);
- if((ok!=0&&ok!=1)||!session_actor_presence_scope(&l)||!session_animation_resources_current(s)||
+ if((ok!=0&&ok!=1)||!session_actor_presence_scope(&l)||!session_actor_presence_resources(&l)||
     !session_actor_presence_scope(&l)||memcmp(&ref,&original,sizeof(ref))||memcmp(input,&original,sizeof(ref)))return -1;
  return ok;
 }

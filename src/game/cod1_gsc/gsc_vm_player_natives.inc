@@ -16,6 +16,10 @@ int gsc_program_select_player_max_ammo(GscProgram *g) {
     if(!g||g->invalid||g->linked||!g->player_natives_selected||g->player_max_ammo_selected)return 0;
     g->player_max_ammo_selected=1;return 1;
 }
+int gsc_program_select_player_stance_permissions(GscProgram *g) {
+    if(!g||g->invalid||g->linked||!g->player_natives_selected||g->player_stance_permissions_selected)return 0;
+    g->player_stance_permissions_selected=1;return 1;
+}
 int gsc_runtime_select_player_natives(GscRuntime *r,const GscPlayerNativeHost *host) {
     if(!r||!host||!host->invoke||r->started||r->advancing||r->error[0]||
        !r->program->player_natives_selected||r->player_natives_enabled||
@@ -44,7 +48,17 @@ static int player_native_invoke(GscRuntime *r,const Value *receiver,int descript
     memset(&request,0,sizeof(request));memset(&result,0,sizeof(result));
     memset(&staged,0,sizeof(staged));owner=receiver->entity;
     request.player=owner;request.kind=kind;request.now_ms=r->now_ms;
-    if(kind==GSC_PLAYER_HAS_WEAPON||kind==GSC_PLAYER_GIVE_WEAPON||
+    if(kind>=GSC_PLAYER_ALLOW_STAND&&kind<=GSC_PLAYER_ALLOW_PRONE){
+        if(!r->program->player_stance_permissions_selected||
+           !scalar_get_integer(r,&args[0],line,&request.value))return 0;
+    }
+    if(kind==GSC_PLAYER_SET_ANGLES){
+        if(args[0].kind!=V_VECTOR)return rfail(r,line,"setPlayerAngles requires a vector");
+        memcpy(request.angles_bits,args[0].vector,sizeof(request.angles_bits));
+        {unsigned i;for(i=0;i<3;i++)if((request.angles_bits[i]&0x7f800000u)==0x7f800000u)
+            return rfail(r,line,"setPlayerAngles requires finite coordinates");}
+    }
+    if(kind==GSC_PLAYER_GET_SLOT_WEAPON||kind==GSC_PLAYER_HAS_WEAPON||kind==GSC_PLAYER_GIVE_WEAPON||
        kind==GSC_PLAYER_TAKE_WEAPON||kind==GSC_PLAYER_SWITCH_TO_WEAPON||
        kind==GSC_PLAYER_SET_AMMO_CLIP||kind==GSC_PLAYER_SET_AMMO_STOCK||
        kind==GSC_PLAYER_GET_FRACTION_MAX_AMMO||kind==GSC_PLAYER_GIVE_MAX_AMMO){
@@ -58,6 +72,12 @@ static int player_native_invoke(GscRuntime *r,const Value *receiver,int descript
         if(!scalar_get_integer(r,&args[index],line,&request.value))return 0;
         if(request.value<0||(kind==GSC_PLAYER_FREEZE_CONTROLS&&request.value>1))
             return rfail(r,line,"player native integer is outside its supported range");
+    }
+    if(kind==GSC_PLAYER_SHELLSHOCK){
+        if(args[0].kind!=V_STRING||!memchr(args[0].str,0,sizeof(args[0].str)))
+            return rfail(r,line,"shellshock requires a registered effect name");
+        memcpy(request.weapon,args[0].str,sizeof(request.weapon));
+        if(!scalar_float(r,args+1,line,&request.number))return 0;
     }
     if(kind==GSC_PLAYER_SET_VIEWMODEL) {
         if(!r->program->player_viewmodel_selected||args[0].kind!=V_STRING||

@@ -1,3 +1,8 @@
+static int ActorJumperSourcePoseSelected(const C1GARecord*);
+static int ActorSourcePoseSelection(const C1GARecord*);
+#include "../source_pose_wire.h"
+#include "../source_walk_wire.h"
+static int ActorSourcePoseSample(const GscEntityRef*,int,c1asp14Packet_t*,int(*)(void*),void*);
 #include "../scripted_wire.h"
 #include "../g_cod1_actor_scripted_frame.h"
 /* Separate current unmounted publication; no synthetic gun or pose clock.
@@ -18,14 +23,26 @@ typedef struct {const GscEntityRef*borrowed;GscEntityRef actor;cod1ActorLease_t 
 static int ActorUnmountedPublishCurrent(C1UAPCall*c){cod1ActorLease_t lease;
  if(!c||c->now!=level.time||c->epoch!=cod1EntityEpoch||c->serial!=cod1UnmountedPublishSerial||cod1UnmountedPublishBusy!=c->epoch||
     !cod1EntityReady||level.spawning||level.restarted||cod1TurretActorConfigEpoch!=c->epoch||memcmp(c->borrowed,&c->actor,sizeof(c->actor))||
-    !ActorGoalLease(&c->actor,&lease)||memcmp(&lease,&c->lease,sizeof(lease))||memcmp(cod1Actors+c->lease.actorIndex,&c->record,sizeof(c->record))||
-    memcmp(g_entities+c->actor.slot,&c->body,sizeof(c->body))||memcmp(cod1GenericActors+c->lease.actorIndex,&c->generic,sizeof(c->generic)))return 0;
+    !ActorGoalLease(&c->actor,&lease)||memcmp(&lease,&c->lease,sizeof(lease))||!R242ExactATRBytesEqual(cod1Actors+c->lease.actorIndex,&c->record,sizeof(c->record))||
+    !R242ExactATRBytesEqual(g_entities+c->actor.slot,&c->body,sizeof(c->body))||memcmp(cod1GenericActors+c->lease.actorIndex,&c->generic,sizeof(c->generic)))return 0;
  return !c->record.turretMount.mounted&&(c->body.r.svFlags&SVF_NOCLIENT)&&c->body.r.linked&&c->record.spatial.linked&&c->record.dobj.present&&!c->record.dobj.busy&&!c->record.dobj.summary.skippedCount&&
   c->record.dobj.summary.modelCount==c->record.modelComposition.descriptorCount;
 }
 static int ActorUnmountedPublishFence(void*ctx){C1UAPCall*c=ctx;return ActorUnmountedPublishCurrent(c)&&c->current(c->ctx)==1&&ActorUnmountedPublishCurrent(c);}
 static int TrainingCoursePoseActive(const cod1ActorRecord_t *actor){
-    return (((actor->goal.assignment==19 || actor->goal.assignment==21) && actor->motion.route.ladderFrame && !actor->motion.arrived) || (G_Cod1ElderStandingRun(actor->goal.assignment) && actor->nativeData.actor.cell0234==1 && actor->motion.moving && !actor->motion.arrived) || actor->nativeData.actor.cell0234==2 || actor->nativeData.actor.cell0234==4);
+    return (((G_Cod1RunnerStep(&actor->owner,&actor->goal.node)==19 || G_Cod1RunnerStep(&actor->owner,&actor->goal.node)==21) && actor->motion.route.ladderFrame && !actor->motion.arrived) || (G_Cod1ElderStandingRun(G_Cod1RunnerStep(&actor->owner,&actor->goal.node)) && actor->nativeData.actor.cell0234==1 && actor->motion.moving && !actor->motion.arrived) || actor->nativeData.actor.cell0234==2 || actor->nativeData.actor.cell0234==4);
+}
+/* The retained Training mover owns the traversal clip and its committed phase.
+ * Only the current course assignment can override an ordinary running pose. */
+static int TrainingTraversalPoseCurrent(const cod1ActorRecord_t*a){
+ int kind;
+ if(!a->goal.assigned||!a->motion.active||a->motion.busy||a->motion.model||
+    a->motion.assignment!=a->goal.assignment||a->motion.arrived||
+    !a->motion.route.diveArmed||a->motion.route.diveTime<=0||
+    !isfinite(a->motion.route.divePhase)||a->motion.route.divePhase<0||a->motion.route.divePhase>1)return 0;
+ kind=G_Cod1RunnerCourseGoal(&a->owner,a->goal.assignment,&a->goal.node);
+ return (kind==3&&!a->motion.route.ladderFrame)||
+        (kind==4&&COD1_IS_LADDER_FRAME(a->motion.route.ladderFrame));
 }
 static void TrainingStandingPose(entityState_t *wire,const cod1ActorMotion_t *motion){
     float cycles=motion->travelled/COD1_PRECOMBAT_RUN_FORWARD;
@@ -47,7 +64,7 @@ static void TrainingCrawlPose(entityState_t *wire,const cod1ActorMotion_t *motio
     wire->cod1TurretActorPhases[1][10]=cycles-floorf(cycles);
 }
 static void TrainingFinishTrace(const char *name,const cod1ActorRecord_t *actor,const GscEntityRef *owner,int now){
-    if(g_debugMove.integer && actor->goal.assignment==22 && actor->motion.arrived && now%500==0)
+    if(g_debugMove.integer && G_Cod1RunnerStep(&actor->owner,&actor->goal.node)==22 && actor->motion.arrived && now%500==0)
         G_Printf("[%s finish] owner=%u/%u notified=%llu interval=%.1f stance=%u\n",name,
             owner->slot,owner->generation,(unsigned long long)actor->motion.notified,
             actor->defaults.allocation.interval,(unsigned)actor->nativeData.actor.cell0234);
@@ -130,14 +147,32 @@ int G_Cod1ActorUnmountedPublish(const GscEntityRef*input,int now,int(*current)(v
  }
  saved=next=cod1UnmountedPublished[c->lease.actorIndex];if(next.used&&!ActorRefEqual(&next.owner,&c->actor))goto done;
  if(!next.used){next.used=1;next.owner=c->actor;next.previous=c->body.s;next.oldFlags=c->body.flags;next.oldSvFlags=c->body.r.svFlags;}
- wire=c->body.s;wire.eType=ET_GENERAL;wire.cod1TurretVersion=0;wire.cod1TurretEpochLo=(int)(uint32_t)c->epoch;wire.cod1TurretEpochHi=(int)(uint32_t)(c->epoch>>32);
+ wire=c->body.s;C1SourceWalkClear(&wire);wire.eType=ET_GENERAL;wire.cod1TurretVersion=0;wire.cod1TurretEpochLo=(int)(uint32_t)c->epoch;wire.cod1TurretEpochHi=(int)(uint32_t)(c->epoch>>32);
  scripted=ActorScriptedClockSelected(c->lease.actorIndex);
  wire.cod1TurretActorVersion=scripted?COD1_SCRIPTED_ACTOR_WIRE_VERSION:COD1_UNMOUNTED_ACTOR_WIRE_VERSION;wire.cod1TurretActorGeneration=c->actor.generation;wire.cod1TurretActorGun=-1;wire.cod1TurretActorGunGeneration=0;
- wire.cod1TurretActorTick=now;wire.cod1TurretActorConfig=CS_COD1_TURRET_ACTORS+slot;wire.cod1TurretActorFlags=1;wire.pos.trType=wire.apos.trType=TR_STATIONARY;wire.eFlags&=~EF_NODRAW;
+ wire.cod1TurretActorTick=now;wire.cod1TurretActorConfig=CS_COD1_TURRET_ACTORS+slot;wire.cod1TurretActorFlags=c->generic.detachedMG && !scripted?COD1_UNMOUNTED_MG_FLAGS:1;wire.pos.trType=wire.apos.trType=TR_STATIONARY;wire.eFlags&=~EF_NODRAW;
  VectorCopy(c->body.r.currentOrigin,wire.pos.trBase);VectorCopy(c->body.r.currentAngles,wire.apos.trBase);memset(wire.cod1TurretActorCurrent,0,sizeof(wire.cod1TurretActorCurrent));
+ if(scripted){
+  int jumper=TrainingJumperAllocation(&c->actor);
+  int selected=jumper?ActorJumperSourcePoseSelected(&c->generic):ActorSourcePoseSelection(&c->generic);if(selected<0)goto done;
+  if(!selected){if(!jumper&&g_debugMove.integer>1&&now%500==0)G_Printf("[381 body scope] owner=%u tick=%d source_body_absent=1 prior_profile_retained=1\n",c->actor.slot,now);goto prior_pose_profile;}
+  c1asp14Packet_t packet;
+  if(!ActorSourcePoseSample(&c->actor,now,&packet,ActorUnmountedPublishFence,c)||!C1SourcePoseWireWrite(&wire,&packet))goto done;
+  /* Ordinary MAIN remains live while the retained mover executes its current
+   * traversal. Publish that mover's original clip instead of hiding it behind
+   * the running source-pose packet. No script events or movement are changed. */
+  if(TrainingTraversalPoseCurrent(&c->record))goto prior_pose_profile;
+  wire.cod1TurretActorVersion=COD1_SOURCE_POSE_WIRE_VERSION;wire.cod1TurretActorFlags=1;wire.frame=0;
+  if(jumper&&g_debugMove.integer>1)G_Printf("[385 jumper source] owner=%u/%u tick=%d phase=%.6f nodes=%u\n",c->actor.slot,c->actor.generation,now,c->generic.nodes[892].phase,packet.count);
+  if(g_debugMove.integer>1)G_Printf("[378 source pose] tick=%d owner=%u nodes=%u source_clock=1 route_overlay=0\n",now,c->actor.slot,packet.count);
+  goto source_pose_ready;
+ }
+prior_pose_profile:
  if(scripted){
   if(!G_Cod1ActorScriptedSampleFull(&c->actor,now,wire.cod1TurretActorGenericCurrent,
       wire.cod1TurretActorPhases,wire.cod1TurretActorCurrent,ActorUnmountedPublishFence,c))goto done;
+  if(wire.cod1TurretActorGenericCurrent[97])memcpy(&wire.effect2Time,&wire.cod1TurretActorPhases[1][16],4);
+  wire.cod1TurretActorPhases[1][16]=0;
  }else if(!G_Cod1ActorUnmountedSample(&c->actor,now,wire.cod1TurretActorGenericCurrent,
       wire.cod1TurretActorPhases,ActorUnmountedPublishFence,c))goto done;
  /* The mover owns world translation. Wire phase follows only swept distance;
@@ -155,7 +190,7 @@ int G_Cod1ActorUnmountedPublish(const GscEntityRef*input,int now,int(*current)(v
  if(scripted && c->record.goal.assigned && c->record.motion.active && !c->record.motion.busy &&
     !c->record.motion.model && c->record.motion.assignment==c->record.goal.assignment &&
     c->body.classname && !strcmp(c->body.classname,"actor_ally_airborne_garand") &&
-    c->body.targetname && !strcmp(c->body.targetname,"runner") && TrainingCoursePoseActive(&c->record) &&
+    c->body.targetname && !strcmp(c->body.targetname,"runner") && (TrainingCoursePoseActive(&c->record)||TrainingTraversalPoseCurrent(&c->record)) &&
     G_Cod1RunnerCourseGoal(&c->actor,c->record.goal.assignment,&c->record.goal.node)){
     float stride,cycles;
     wire.frame=Cod1CourseCrouchFrame(c->actor.slot);
@@ -185,8 +220,8 @@ int G_Cod1ActorUnmountedPublish(const GscEntityRef*input,int now,int(*current)(v
     /* An allowed stance can change during the standing script's wait.
      * A crouch stop first needs a crouch pose to blend out of. */
     if((COD1_IS_RIFLE_CROUCHRUN(wire.frame) || COD1_IS_COURSE_WALK_FRAME(wire.frame) || COD1_IS_REST_FRAME(wire.frame)) &&
-       c->record.motion.route.stopTick && now-c->record.motion.route.stopTick<=600 && c->record.goal.assignment==22 && c->record.nativeData.actor.cell0234==2 &&
-       c->record.motion.notified==22 && MotionSharedTerminal(&c->record,&c->actor))
+       c->record.motion.route.stopTick && now-c->record.motion.route.stopTick<=600 && G_Cod1RunnerStep(&c->actor,&c->record.goal.node)==22 && c->record.nativeData.actor.cell0234==2 &&
+       c->record.motion.notified==c->record.goal.assignment && MotionSharedTerminal(&c->record,&c->actor))
         TrainingStopPose(&wire,&c->record.motion.route,now);
     if(c->record.motion.route.approachTime>0 && c->record.motion.route.approachTime<600 &&
        !c->record.motion.arrived && c->record.nativeData.actor.cell0234==2 && COD1_IS_RIFLE_CROUCHRUN(wire.frame)){
@@ -216,8 +251,24 @@ int G_Cod1ActorUnmountedPublish(const GscEntityRef*input,int now,int(*current)(v
     wire.effect1Time=0x4a5202;
     memcpy(&wire.effect2Time,&leaf->currentWeight,4);memcpy(&wire.effect3Time,&leaf->phase,4);
  }
+source_pose_ready:
+ if(wire.cod1TurretActorVersion==COD1_SOURCE_POSE_WIRE_VERSION &&
+    c->body.targetname && !strcmp(c->body.targetname,"foley") &&
+    c->record.goal.assigned && G_Cod1FoleyCourseGoal(c->record.goal.assignment,&c->record.goal.node) &&
+    c->record.motion.active && c->record.motion.moving &&
+    !c->record.motion.blocked && !c->record.motion.arrived && !c->record.motion.busy &&
+    !c->record.motion.model && c->record.motion.assignment==c->record.goal.assignment){
+  float cycles=c->record.motion.travelled/63.4768f;
+  if(!isfinite(cycles)||cycles<0||!C1SourceWalkWrite(&wire,cycles-floorf(cycles)))goto done;
+ }
+ if(g_debugMove.integer&&now%250==0&&c->body.targetname&&!strcmp(c->body.targetname,"foley")){
+  float p=0;int active=C1SourceWalkRead(&wire,&p);
+  G_Printf("[572 Foley walk wire] tick=%d owner=%u assignment=%llu moving=%d blocked=%d arrived=%d active=%d phase=%.6f distance=%.4f allowedPoses=%d\n",now,c->actor.slot,(unsigned long long)c->record.goal.assignment,c->record.motion.moving,c->record.motion.blocked,c->record.motion.arrived,active,p,c->record.motion.travelled,c->record.nativeData.actor.cell0234);
+ }
  ActorHudPublish(&wire,&next,&c->lease);
- if(!(scripted?C1ScriptedWireValid(&wire,now):C1UAW_Valid(&wire,now))||!ActorUnmountedPublishCurrent(c)||memcmp(cod1UnmountedPublished+c->lease.actorIndex,&saved,sizeof(saved)))goto done;
+ if(!(wire.cod1TurretActorVersion==COD1_SOURCE_POSE_WIRE_VERSION?C1SourcePoseWireValid(&wire,now):(scripted?C1ScriptedWireValid(&wire,now):C1UAW_Valid(&wire,now)))||!ActorUnmountedPublishCurrent(c)||memcmp(cod1UnmountedPublished+c->lease.actorIndex,&saved,sizeof(saved)))goto done;
+ if(g_debugMove.integer && now%250==0 && TrainingTraversalPoseCurrent(&c->record))
+  G_Printf("[570 traversal wire] tick=%d owner=%u assignment=%llu clip=%d phase=%.6f version=%d frame=%d flags=%d\n",now,c->actor.slot,(unsigned long long)c->record.goal.assignment,c->record.motion.route.ladderFrame?c->record.motion.route.ladderFrame:COD1_FRAME_WALL_DIVE,c->record.motion.route.divePhase,wire.cod1TurretActorVersion,wire.frame,wire.cod1TurretActorFlags);
  e=g_entities+c->actor.slot;e->s=wire;e->flags&=~FL_NODRAW;cod1UnmountedPublished[c->lease.actorIndex]=next;
  /* Origin, bounds and contents stay at the already linked actual pose.
   * The checked spatial lane remains NOCLIENT. The server admits only the

@@ -38,6 +38,7 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "../game/q_shared.h"
 #include "qcommon.h"
+#include "cod1_jobs.h"
 #include "unzip.h"
 
 /*
@@ -419,10 +420,25 @@ static FILE *FS_FileForHandle( fileHandle_t f ) {
 	return fsh[f].handleFiles.file.o;
 }
 
+static void FS_LogIoResult(int ok){
+ static int reported;
+ if(!ok && !reported){reported=1;Sys_Print("Async logfile I/O failed; use mt_status for counters.\n");}
+}
+void FS_EnableAsyncLog(fileHandle_t f,int enabled){
+ FILE *file=FS_FileForHandle(f);
+ if(enabled){if(!C1L_Matches(file))C1L_Attach(file);}
+ else if(C1L_Matches(file))FS_LogIoResult(C1L_Detach(file));
+}
+void FS_FlushLog(fileHandle_t f,int wait){
+ FILE *file=FS_FileForHandle(f);
+ if(C1L_Matches(file))FS_LogIoResult(C1L_Flush(file,wait));
+ else FS_LogIoResult(fflush(file)==0);
+}
 void    FS_ForceFlush( fileHandle_t f ) {
 	FILE *file;
 
 	file = FS_FileForHandle( f );
+	FS_LogIoResult(C1L_Detach(file));
 	setvbuf( file, NULL, _IONBF, 0 );
 }
 
@@ -441,6 +457,7 @@ int FS_filelength( fileHandle_t f ) {
 	FILE*   h;
 
 	h = FS_FileForHandle( f );
+	FS_LogIoResult(C1L_Detach(h));
 	pos = ftell( h );
 	fseek( h, 0, SEEK_END );
 	end = ftell( h );
@@ -889,6 +906,7 @@ void FS_FCloseFile( fileHandle_t f ) {
 
 	// we didn't find it as a pak, so close it as a unique file
 	if ( fsh[f].handleFiles.file.o ) {
+		FS_LogIoResult(C1L_Detach(fsh[f].handleFiles.file.o));
 		fclose( fsh[f].handleFiles.file.o );
 	}
 	Com_Memset( &fsh[f], 0, sizeof( fsh[f] ) );
@@ -1412,6 +1430,7 @@ int FS_Read( void *buffer, int len, fileHandle_t f ) {
 	fs_readCount += len;
 
 	if ( fsh[f].zipFile == qfalse ) {
+		FS_LogIoResult(C1L_Detach(fsh[f].handleFiles.file.o));
 		remaining = len;
 		tries = 0;
 		while ( remaining ) {
@@ -1463,6 +1482,11 @@ int FS_Write( const void *buffer, int len, fileHandle_t h ) {
 	}
 
 	f = FS_FileForHandle( h );
+ if(C1L_Matches(f)){
+  int ok=len>=0 && C1L_Write(f,buffer,(size_t)len);
+  if(ok && fsh[h].handleSync)ok=C1L_Flush(f,1);
+  FS_LogIoResult(ok);return ok?len:0;
+ }
 	buf = (byte *)buffer;
 
 	remaining = len;
@@ -1559,6 +1583,7 @@ int FS_Seek( fileHandle_t f, long offset, int origin ) {
 			break;
 		}
 
+		FS_LogIoResult(C1L_Detach(file));
 		return fseek( file, offset, _origin );
 	}
 }
@@ -1949,6 +1974,9 @@ static int FS_ReturnPath( const char *zname, char *zpath, int *depth ) {
 	}
 	strcpy( zpath, zname );
 	zpath[len] = 0;
+	/* CoD ENGINE423D60: a final separator names a directory itself,
+	 * not an additional child level. */
+	if ( len + 1 == at ) --newdep;
 	*depth = newdep;
 
 	return len;
@@ -2009,13 +2037,17 @@ char **FS_ListFilteredFiles( const char *path, const char *extension, char *filt
 		extension = "";
 	}
 
+	/* Original423E60 normalizes one leading separator before calculating
+	 * the immediate-child depth. Filtered wildcard traversal is separate. */
+	if ( path[0] == '/' || path[0] == '\\' ) ++path;
 	pathLength = strlen( path );
-	if ( path[pathLength - 1] == '\\' || path[pathLength - 1] == '/' ) {
+	if ( pathLength && (path[pathLength - 1] == '\\' || path[pathLength - 1] == '/') ) {
 		pathLength--;
 	}
 	extensionLength = strlen( extension );
 	nfiles = 0;
 	FS_ReturnPath( path, zpath, &pathDepth );
+	if ( path[0] ) ++pathDepth;
 
 	//
 	// search through the path, one element at a time, adding to list
@@ -2051,7 +2083,8 @@ char **FS_ListFilteredFiles( const char *path, const char *extension, char *filt
 
 					zpathLen = FS_ReturnPath( name, zpath, &depth );
 
-					if ( ( depth - pathDepth ) > 2 || pathLength > zpathLen || Q_stricmpn( name, path, pathLength ) ) {
+					if ( depth != pathDepth || pathLength > zpathLen ||
+					     (pathLength && name[pathLength] != '/') || Q_stricmpn( name, path, pathLength ) ) {
 						continue;
 					}
 
@@ -2070,7 +2103,15 @@ char **FS_ListFilteredFiles( const char *path, const char *extension, char *filt
 					if ( pathLength ) {
 						temp++;     // include the '/'
 					}
-					nfiles = FS_AddFileToList( name + temp, list, nfiles );
+					if ( !Q_stricmp(extension,"/") ) {
+						/* Native directory query returns the child basename
+						 * without its terminal slash. */
+						char directory[MAX_ZPATH];
+						Q_strncpyz(directory,name+temp,sizeof(directory));
+						length=strlen(directory);
+						if(length)directory[length-1]=0;
+						nfiles=FS_AddFileToList(directory,list,nfiles);
+					} else nfiles = FS_AddFileToList( name + temp, list, nfiles );
 				}
 			}
 		} else if ( search->dir ) { // scan for files in the filesystem
@@ -3506,12 +3547,13 @@ int     FS_FTell( fileHandle_t f ) {
 	if ( fsh[f].zipFile == qtrue ) {
 		pos = unztell( fsh[f].handleFiles.file.z );
 	} else {
+		FS_LogIoResult(C1L_Detach(fsh[f].handleFiles.file.o));
 		pos = ftell( fsh[f].handleFiles.file.o );
 	}
 	return pos;
 }
 
 void    FS_Flush( fileHandle_t f ) {
-	fflush( fsh[f].handleFiles.file.o );
+ FS_FlushLog(f,1);
 }
 

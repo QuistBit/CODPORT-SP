@@ -371,6 +371,8 @@ svEntity_t  *SV_SvEntityForGentity( sharedEntity_t *gEnt );
 sharedEntity_t *SV_GEntityForSvEntity( svEntity_t *svEnt );
 void        SV_InitGameProgs( void );
 void        SV_ShutdownGameProgs( void );
+void SV_SetFrameSliceSupport( qboolean supported );
+void SV_ResetFrameSlices( void );
 void        SV_RestartGameProgs( void );
 qboolean    SV_inPVS( const vec3_t p1, const vec3_t p2 );
 qboolean SV_GetTag( int clientNum, char *tagname, orientation_t * or );
@@ -439,6 +441,7 @@ int SV_Cod1SpatialSight(const cod1SpatialSightQuery_t *query, int *blocked);
 int SV_Cod1SpatialActorLink(const cod1SpatialActorLink_t *request);
 int SV_Cod1SpatialActorUnlink(const cod1SpatialActorUnlink_t *request);
 int SV_Cod1PathSight(const cod1PathSightQuery_t*,int*);
+int SV_Cod1PathWorldSight(const cod1SpatialTraceQuery_t*,int*);
 int SV_Cod1SpatialActorContents(const cod1SpatialActorContents_t *request);
 int SV_Cod1SpatialSceneReset(const cod1SpatialSceneReset_t *request);
 int SV_Cod1DObjBuild(const cod1DObjBuild_t *request, cod1DObjSummary_t *summary);
@@ -478,6 +481,8 @@ qboolean SV_Netchan_Process( client_t *client, msg_t *msg );
 int SV_Cod1ModelPrecache(const cod1ModelPrecache_t *request);
 int SV_Cod1ModelResourceReference(const cod1ModelResourceReference_t *request,
                                 cod1ModelResourceReference_t *out);
+int SV_Cod1ModelBounds(const cod1ModelResourceReference_t*,cod1ModelBounds_t*);
+int SV_Cod1ModelPartName(const cod1ModelResourceReference_t*,int32_t,cod1ModelPartNameResult_t*);
 int SV_Cod1CopyRegisteredModel(const cod1ModelResourceReference_t *reference,
     c1mrResource_t *out);
 int SV_Cod1ActorModelApply(const cod1ActorModelApply_t *request,

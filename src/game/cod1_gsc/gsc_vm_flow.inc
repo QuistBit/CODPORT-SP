@@ -66,6 +66,8 @@ static int flow_mutation(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int o
     memset(&result,0,sizeof(result));
     if(r->integer_bitwise_enabled&&integer_bitwise_mutation_op(op)) {
         if(!integer_bitwise_mutation(r,op,&current,&arg,line,&result))return 0;
+    } else if(op==GSC_MUT_ADD&&string_vector_concat_pair(r,&current,&arg)) {
+        if(!string_vector_concat(r,&current,&arg,line,&result))return 0;
     } else if(r->vector_arithmetic_enabled&&(current.kind==V_VECTOR||arg.kind==V_VECTOR)) {
         if(!vector_arithmetic_mutation(r,op,&current,&arg,line,&result))return 0;
     } else if(current.kind==V_VECTOR&&arg.kind==V_VECTOR&&op==GSC_MUT_ADD&&

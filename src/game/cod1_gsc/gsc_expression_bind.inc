@@ -41,7 +41,7 @@ static ExpressionBinding resolve_expression_binding(const GscProgram *g,const Ex
     }
     if(r.kind==GSC_EXPR_TARGET_NONE&&move_delta_descriptor(g,name)){r.kind=R243_EXPR_TARGET_MOVE_DELTA;r.target=1;r.arity=-1;r.issues=move_delta_static_issues(g,e->args,argc);}
     if(r.kind==GSC_EXPR_TARGET_NONE&&start_origin_descriptor(g,name)) {
-        r.kind=GSC_EXPR_TARGET_START_ORIGIN_NATIVE;r.target=1;r.arity=3;
+        r.kind=GSC_EXPR_TARGET_START_ORIGIN_NATIVE;r.target=start_origin_descriptor(g,name);r.arity=g->map_start_pose_selected?-1:3;
         r.issues=start_origin_static_issues(g,e->args,argc);
     }
     if(r.kind==GSC_EXPR_TARGET_NONE&&ai_array_descriptor(g,name)) {
@@ -136,6 +136,11 @@ static ExpressionBinding resolve_expression_binding(const GscProgram *g,const Ex
         r.kind=GSC_EXPR_TARGET_ANIMATION_LENGTH_NATIVE;r.target=1;r.arity=-1;
         r.issues=argc>=0&&argc<=MAX_PARAMS?0u:GSC_LINK_ISSUE_BUILTIN_ARITY;
     }
+    if(r.kind==GSC_EXPR_TARGET_NONE&&bullet_trace_descriptor(g,name)){r.kind=GSC_EXPR_TARGET_BULLET_TRACE_NATIVE;r.target=1;r.arity=-1;r.issues=bullet_trace_issues(g,e->args,argc);}
+    if(r.kind==GSC_EXPR_TARGET_NONE&&vehicle_spawn_descriptor(g,name)){r.kind=GSC_EXPR_TARGET_VEHICLE_SPAWN_NATIVE;r.target=1;r.arity=-1;r.issues=vehicle_spawn_issues(g,e->args,argc);}
+    if(r.kind==GSC_EXPR_TARGET_NONE&&turret_precache_descriptor(g,name)){r.kind=GSC_EXPR_TARGET_TURRET_PRECACHE_NATIVE;r.target=1;r.arity=-1;r.issues=turret_precache_issues(g,e->args,argc);}
+    if(r.kind==GSC_EXPR_TARGET_NONE&&turret_spawn_descriptor(g,name)){r.kind=GSC_EXPR_TARGET_TURRET_SPAWN_NATIVE;r.target=1;r.arity=-1;r.issues=turret_spawn_issues(g,e->args,argc);}
+    if(r.kind==GSC_EXPR_TARGET_NONE&&model_part_descriptor(g,name)){r.kind=GSC_EXPR_TARGET_MODEL_PART_NATIVE;r.target=1;r.arity=-1;r.issues=argc>=0&&argc<=MAX_PARAMS?0u:GSC_LINK_ISSUE_BUILTIN_ARITY;}
     if(r.kind==GSC_EXPR_TARGET_NONE&&weapon_classname_descriptor(g,name)){r.kind=GSC_EXPR_TARGET_WEAPON_CLASSNAME_NATIVE;r.target=1;r.arity=-1;r.issues=argc>=0&&argc<=MAX_PARAMS?0u:GSC_LINK_ISSUE_BUILTIN_ARITY;}
     if(r.kind==GSC_EXPR_TARGET_NONE&&weapon_model_descriptor(g,name)) {
         r.kind=GSC_EXPR_TARGET_WEAPON_MODEL_NATIVE;r.target=1;r.arity=-1;

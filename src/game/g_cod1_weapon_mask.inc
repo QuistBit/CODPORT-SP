@@ -3,6 +3,7 @@
  * lookup selects1C5A0. Native item row = CW definition index+1, NOT WPslot.
  * This receipt grants no weapon, registration completion or item geometry. */
 #include "bg_cod1_weapondef.h"
+#include "../qcommon/cod1_exact_bytes_r242.h"
 typedef struct {unsigned revision;int count;const cwDef_t*owner;cwDef_t bytes;} C1WeaponDefinition;
 typedef struct {unsigned revision;int cwIndex,nativeItemIndex;} C1WeaponMaskBinding;
 static C1WeaponDefinition cod1WeaponMaskDefinitions[CW_MAX_DEFS];
@@ -36,7 +37,7 @@ static int Cod1WeaponMaskCurrent(unsigned slot){
  if(count<1||count>CW_MAX_DEFS||b->cwIndex>=count)return 0;
  /* Earlier dynamic radiantName rows affect original first-match dispatch. */
  for(i=0;i<count;i++){c=cod1WeaponMaskDefinitions+i;d=CW_Get(i);
-  if(c->revision!=b->revision||c->count!=count||!d||d!=c->owner||memcmp(d,&c->bytes,sizeof(*d)))return 0;
+  if(c->revision!=b->revision||c->count!=count||!d||d!=c->owner||!R242ExactATRBytesEqual(d,&c->bytes,sizeof(*d)))return 0;
  }
  return CW_RegistryRevision()==b->revision;
 }

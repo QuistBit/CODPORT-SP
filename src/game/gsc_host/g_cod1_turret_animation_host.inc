@@ -1,4 +1,5 @@
 #include "../../qcommon/cod1_exact_bytes_r242.h"
+#include "g_cod1_atr_seal.h"
 #include "g_cod1_atr_write_watch.h"
 /* Real selected MG42 resource/tree owner, included after the mount owner.
  * No event queue, native tree ID, guessed clock or completion notification. */
@@ -11,6 +12,7 @@ static int ActorGenericTurretCommit(const GscTurretAnimationRequest *,const C1TA
 static C1TARecord cod1TurretAnimations[C1T_CAPACITY];
 static GscAnimationCatalogEntry cod1TurretAnimationDeclarations[2][2];
 static Cod1ATRWatch cod1TurretWatches[2];
+static Cod1ATRSeal cod1TurretSeals[2];
 static unsigned char *cod1TurretAnimationReference[2];
 static unsigned char *cod1TurretAnimationATR[2];static size_t cod1TurretAnimationATRBytes[2];
 static uint64_t cod1TurretAnimationHash[2],cod1TurretAnimationEpoch,cod1TurretAnimationReceipt,cod1TurretAnimationSerial;
@@ -19,7 +21,7 @@ static struct {uint64_t epoch,serial;int busy,cancelled;void *bytes;size_t size;
 static uint64_t TurretAnimationHash(const void *bytes,size_t size){const unsigned char*p=bytes;uint64_t h=UINT64_C(1469598103934665603);size_t n;for(n=0;n<size;n++){h^=p[n];h*=UINT64_C(1099511628211);}return h;}
 static int TurretAnimationPrivate(const void *p,size_t n) {
  int i;
- if(ActorOverlap(p,n,cod1TurretWatches,sizeof(cod1TurretWatches))||
+ if(ActorOverlap(p,n,cod1TurretSeals,sizeof(cod1TurretSeals))||ActorOverlap(p,n,cod1TurretWatches,sizeof(cod1TurretWatches))||
     ActorOverlap(p,n,cod1TurretAnimations,sizeof(cod1TurretAnimations))||
     ActorOverlap(p,n,cod1TurretAnimationDeclarations,sizeof(cod1TurretAnimationDeclarations))||
     ActorOverlap(p,n,cod1TurretAnimationReference,sizeof(cod1TurretAnimationReference))||
@@ -38,7 +40,8 @@ static int TurretAnimationPrivate(const void *p,size_t n) {
 static void TurretAnimationReset(void) {
  int i;if(cod1TurretAnimationOperation.busy)cod1TurretAnimationOperation.cancelled=1;
  for(i=0;i<2;i++){
-  if(cod1TurretWatches[i].base) Cod1ATRWatchFree(&cod1TurretWatches[i]);
+  if(cod1TurretSeals[i].base)Cod1ATRSealFree(&cod1TurretSeals[i]);
+  else if(cod1TurretWatches[i].base) Cod1ATRWatchFree(&cod1TurretWatches[i]);
   else {free(cod1TurretAnimationReference[i]);free(cod1TurretAnimationATR[i]);}
   cod1TurretAnimationReference[i]=NULL;cod1TurretAnimationATR[i]=NULL;cod1TurretAnimationATRBytes[i]=0;}
  memset(cod1TurretAnimations,0,sizeof(cod1TurretAnimations));
@@ -47,14 +50,16 @@ static void TurretAnimationReset(void) {
  cod1TurretAnimationEpoch=cod1TurretAnimationReceipt=0;
 }
 static int TurretAnimationBanks(void) {
- unsigned i,j;
+ unsigned i,j;int sealed;
  if(!cod1TurretAnimationEpoch||cod1TurretAnimationEpoch!=cod1EntityEpoch||
     cod1TurretBankEpoch!=cod1EntityEpoch||cod1TurretResourceEpoch!=cod1EntityEpoch)return 0;
+ sealed=TurretClipSealedCurrent(cod1SealedTurretClips,&cod1TurretClips,cod1TurretBankEpoch);
  for(i=0;i<2;i++){
   if(!cod1TurretAnimationATR[i]||!cod1TurretAnimationATRBytes[i]||
-     !cod1TurretAnimationReference[i]||(!Cod1ATRWatchClean(&cod1TurretWatches[i],cod1TurretAnimationATR[i],cod1TurretAnimationReference[i],cod1TurretAnimationATRBytes[i]) &&
-      !R242ExactATRBytesEqual(cod1TurretAnimationATR[i],cod1TurretAnimationReference[i],cod1TurretAnimationATRBytes[i]))||
-     !cod1TurretGunRoots[i]||cod1TurretGunRoots[i]->magic!=C1AR14_MAGIC||cod1TurretGunRoots[i]->noteCount||
+     !cod1TurretAnimationReference[i]||(!Cod1ATRSealCurrent(&cod1TurretSeals[i],cod1TurretAnimationATR[i],cod1TurretAnimationReference[i],cod1TurretAnimationATRBytes[i]) && !Cod1ATRWatchClean(&cod1TurretWatches[i],cod1TurretAnimationATR[i],cod1TurretAnimationReference[i],cod1TurretAnimationATRBytes[i]) &&
+      !R242ExactATRBytesEqual(cod1TurretAnimationATR[i],cod1TurretAnimationReference[i],cod1TurretAnimationATRBytes[i])))return 0;
+  if(sealed)continue;
+  if(!cod1TurretGunRoots[i]||cod1TurretGunRoots[i]->magic!=C1AR14_MAGIC||cod1TurretGunRoots[i]->noteCount||
      !cod1TurretGunBodies[i]||cod1TurretGunBodies[i]->magic!=C1AB14_MAGIC)return 0;
   for(j=0;j<21;j++)if(!cod1TurretRoots[i][j]||cod1TurretRoots[i][j]->magic!=C1AR14_MAGIC||cod1TurretRoots[i][j]->noteCount||
       !cod1TurretBodies[i][j]||cod1TurretBodies[i][j]->magic!=C1AB14_MAGIC)return 0;
@@ -114,7 +119,11 @@ static int TurretAnimationLoad(void) {
  for(t=0;t<2;t++){cod1TurretAnimationReference[t]=reference[t];reference[t]=NULL;cod1TurretAnimationATR[t]=bytes[t];bytes[t]=NULL;cod1TurretAnimationATRBytes[t]=sizes[t];cod1TurretAnimationHash[t]=TurretAnimationHash(cod1TurretAnimationATR[t],sizes[t]);}
  /* No callback occurs between committing these allocations and publishing the receipt. */
  for(t=0;t<2;t++){
-  if(Cod1ATRWatchCreate(&cod1TurretWatches[t],cod1TurretAnimationATR[t],sizes[t])){
+  if(Cod1ATRSealCreate(&cod1TurretSeals[t],cod1TurretAnimationATR[t],sizes[t])){
+   free(cod1TurretAnimationATR[t]);free(cod1TurretAnimationReference[t]);
+   cod1TurretAnimationATR[t]=(unsigned char*)cod1TurretSeals[t].base;
+   cod1TurretAnimationReference[t]=(unsigned char*)cod1TurretSeals[t].base+sizes[t];
+  }else if(Cod1ATRWatchCreate(&cod1TurretWatches[t],cod1TurretAnimationATR[t],sizes[t])){
    free(cod1TurretAnimationATR[t]);free(cod1TurretAnimationReference[t]);
    cod1TurretAnimationATR[t]=cod1TurretWatches[t].base;
    cod1TurretAnimationReference[t]=cod1TurretWatches[t].base+sizes[t];
@@ -209,6 +218,7 @@ static int TurretAnimationGunRestart(c1atl14Node_t nodes[2],int which,float weig
 #endif
  if(!ok)return 0;memcpy(nodes,next,sizeof(next));return 1;
 }
+static int ActorDismountRestore(C1TARecord *,int);
 static int TurretAnimationInitialize(C1TARecord *row,C1TRecord *r,int now,uint64_t runtime,uint64_t catalog) {
  unsigned notes[21],i,j;const c1ar14Root_t *runtimeBank[21];cod1ActorLease_t lease;GscEntityRef actor;
  if(!runtime||!catalog||!TurretMountOwnerCurrent(r,now,&actor)||!TurretMountLease(&actor,&lease))return 0;
@@ -219,7 +229,7 @@ static int TurretAnimationInitialize(C1TARecord *row,C1TRecord *r,int now,uint64
   * independently of the public declared ordinal/source-bank order. */
  for(i=0;i<2;i++){for(j=0;j<21;j++){runtimeBank[j]=cod1TurretRoots[i][20-j];notes[j]=runtimeBank[j]->noteCount;}
   if(!C1ATT14_Init(&row->actorTree[i],runtimeBank,notes,now))return 0;row->gunNode[i].rate=1;
- }return 1;
+ }return ActorDismountRestore(row,now);
 }
 static int TurretAnimationEnter(void) {
  if(cod1TurretAnimationOperation.busy){cod1TurretAnimationOperation.cancelled=1;return 0;}

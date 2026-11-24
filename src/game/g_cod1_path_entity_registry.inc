@@ -436,3 +436,7 @@ fail:Cod1PathNodeWorldReset();return 0;
 }
 #include "g_cod1_late_disconnect_world.inc"
 #endif
+
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+#include "g_cod1_navigation_world.inc"
+#endif

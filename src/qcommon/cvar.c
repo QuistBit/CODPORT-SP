@@ -137,25 +137,27 @@ typedef struct {
     size_t queryAddress;
     cvar_t *record;
 } cvarIntegerLookup_t;
-static cvarIntegerLookup_t cvarIntegerLookups[256];
+/* Four independent literal addresses may share a bucket. In particular
+ * developer_script and g_cod1GscMoveDelta collide in the actor game DLL.
+ * Cache only the record lookup; validate spelling and read the live integer
+ * every time. Existing creation/restart invalidation clears whole buckets. */
+typedef struct { cvarIntegerLookup_t ways[4]; unsigned next; } cvarIntegerBucket_t;
+static cvarIntegerBucket_t cvarIntegerLookups[256];
 
 int Cvar_VariableIntegerValue( const char *var_name ) {
-	cvar_t *var;
-	size_t address = (size_t)var_name;
-	cvarIntegerLookup_t *entry = &cvarIntegerLookups[((address >> 2) ^ (address >> 10)) & 255];
-
-	if ( entry->record && entry->queryAddress == address && !strcmp(var_name, entry->record->name) ) {
-		return entry->record->integer;
-	}
-	var = Cvar_FindVar( var_name );
-	entry->queryAddress = address;
-	entry->record = var;
-	if ( !var ) {
-		return 0;
-	}
-	return var->integer;
+ cvar_t *var;unsigned i;size_t address=(size_t)var_name;
+ cvarIntegerBucket_t *bucket=&cvarIntegerLookups[((address>>2)^(address>>10))&255];
+ cvarIntegerLookup_t *entry;
+ for(i=0;i<4;i++){
+  entry=bucket->ways+i;
+  if(entry->record && entry->queryAddress==address && !strcmp(var_name,entry->record->name))
+   return entry->record->integer;
+ }
+ var=Cvar_FindVar(var_name);
+ entry=bucket->ways+(bucket->next++&3);
+ entry->queryAddress=address;entry->record=var;
+ return var?var->integer:0;
 }
-
 
 /*
 ============

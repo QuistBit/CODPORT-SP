@@ -4,6 +4,7 @@
 /* Real generic tree commands plus exact fresh ExitProne and face-default/finite bounded face-angle
  * immediate branches. Active prone/other orientation modes remain refused. */
 const GscActorAnimationHost *G_Cod1ActorComposedAnimationHost(void);
+const GscActorAnimationHost *G_Cod1ActorSourceAnimationHost(void);
 /* Read-only duration metadata from already decoded current generic clips.
  * Catalog membership alone does not load or certify a clip. */
 const GscAnimationLengthHost *G_Cod1LoadedAnimationLengthHost(void);

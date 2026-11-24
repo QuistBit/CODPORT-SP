@@ -105,13 +105,14 @@ static int ActorAcquireModelRegistration( const cod1ActorLease_t *input,
         if ( !text[0] ) break;
         if ( !Q_stricmp( text, request.name ) ) { found = 1; break; }
     }
-    if ( index == MAX_MODELS || ( !found && !spawning ) ) goto done;
+    if ( index == MAX_MODELS || ( !found && !spawning &&
+        !(methodOwned && G_Cod1MapModelStarting(lease.entity.epoch)) ) ) goto done;
     /* A CS string is not proof of a loaded model. A pure bank query admits
      * genuine reuse outside registration; missing acquisition needs the gate. */
     status = ActorModelQuery( 0, request.name, &result.resource );
     if ( !ActorModelStage( &lease, spawning ) ) goto done;
     if ( status != 1 ) {
-        if ( status != COD1_PRECACHE_UNAVAILABLE || !spawning ) goto done;
+        if ( status != COD1_PRECACHE_UNAVAILABLE || (!spawning && !(methodOwned && G_Cod1MapModelStarting(lease.entity.epoch))) ) goto done;
         slot = trap_Cod1ModelPrecache( &request );
         if ( !ActorModelStage( &lease, spawning ) || slot < 1 || slot > COD1_PRECACHE_MODELS ) goto done;
         if ( ActorModelQuery( (uint32_t)slot, request.name, &result.resource ) != 1 ||
@@ -122,6 +123,7 @@ static int ActorAcquireModelRegistration( const cod1ActorLease_t *input,
     if ( found && !text[0] ) goto done;
     if ( !ActorModelValidateResource( &result.resource ) || !ActorModelStage( &lease, spawning ) ) goto done;
     if ( !text[0] ) {
+        if(!spawning && !(methodOwned && G_Cod1MapModelStarting(lease.entity.epoch)))goto done;
         trap_SetConfigstring( CS_MODELS + index, request.name );
         if ( !ActorModelStage( &lease, spawning ) ||
              !ActorModelReadCS( &lease, spawning, index, text ) || strcmp( text, request.name ) ) goto done;

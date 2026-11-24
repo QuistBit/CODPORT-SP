@@ -18,7 +18,7 @@ typedef struct {
 } Cod1SoundPacket;
 static int C1S_Valid(const Cod1SoundPacket *s) {
  char path[COD1_SS_PATH_BYTES];int i;
- if(!s||!Cod1SS_Length(s->path,sizeof(s->path),NULL)||!s->epoch||!s->sequence||s->entity>=1024||s->channel>4||
+ if(!s||!Cod1SS_Length(s->path,sizeof(s->path),NULL)||!s->epoch||!s->sequence||s->entity>=1024||s->channel>5||
     strncmp(s->path,"sound/",6)||!Cod1SS_Path(s->path+6,path)||strcmp(path,s->path))return 0;
  for(i=0;i<3;++i)if(!CQ_Finite(s->origin[i]))return 0;
  return CQ_Finite(s->gain)&&s->gain>=0&&s->gain<=C1S_GAIN_MAX&&CQ_Finite(s->pitch)&&s->pitch>0&&s->pitch<=4&&

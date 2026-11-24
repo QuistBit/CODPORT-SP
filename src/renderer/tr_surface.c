@@ -28,6 +28,9 @@ If you have questions concerning this license or the applicable additional terms
 
 // tr_surf.c
 #include "tr_local.h"
+#if defined(_MSC_VER) && defined(_M_IX86) && _M_IX86_FP >= 2
+#include "cod1_triangle_copy.h"
+#endif
 
 /*
 
@@ -502,6 +505,19 @@ void RB_SurfaceTriangles( srfTriangles_t *srf ) {
     RB_Cod1TrackModelDiffuse(prepared);
     tess.dlightBits |= dlightBits;
 
+#if defined(_MSC_VER) && defined(_M_IX86) && _M_IX86_FP >= 2
+    /* Keep the original refusal/prefix path for malformed static precalc.
+     * The normal route only copies bytes into the same reserved tess slots. */
+    if(srf->numVerts>=0 && srf->numIndexes>=0 && !(srf->numIndexes%3) &&
+       (!tess.shader->cod1StaticModelSource || srf->cod1PrecalcValid)){
+        C1T_CopyIndexes(srf->indexes,tess.indexes+tess.numIndexes,srf->numIndexes,(unsigned)tess.numVertexes);
+        tess.numIndexes+=srf->numIndexes;
+        C1T_CopyVertices(srf->verts,srf->numVerts,tess.xyz+tess.numVertexes,tess.normal+tess.numVertexes,
+            tess.texCoords+tess.numVertexes,tess.vertexColors+tess.numVertexes,tess.vertexDlightBits+tess.numVertexes,
+            tess.cod1PrecalcColors+tess.numVertexes,tess.shader->needsNormal,dlightBits,tess.shader->cod1StaticModelSource,srf->cod1PrecalcRGBA,modelColors);
+        tess.numVertexes+=srf->numVerts;return;
+    }
+#endif
 	for ( i = 0 ; i < srf->numIndexes ; i += 3 ) {
 		tess.indexes[ tess.numIndexes + i + 0 ] = tess.numVertexes + srf->indexes[ i + 0 ];
 		tess.indexes[ tess.numIndexes + i + 1 ] = tess.numVertexes + srf->indexes[ i + 1 ];

@@ -7,7 +7,7 @@ static int session_animation_namespace_overlap(const void *a,size_t na,
 }
 static int session_animation_namespace_private(const GscSession *s,
     const void *p,size_t n) {
-    return s&&(r243_critical_session_private(p,n)||r243_command_session_private(p,n)||r243_move_delta_session_private(p,n)||r243_actor_float_session_private(p,n)||r243_stance_session_private(p,n)||r243_animtime_session_private(p,n)||session_animation_namespace_overlap(p,n,s,sizeof(*s))||session_source_private(s,p,n)||
+    return s&&(r243_critical_session_private(p,n)||r243_command_session_private(p,n)||r243_move_delta_session_private(p,n)||r243_actor_float_session_private(p,n)||r243_stance_session_private(p,n)||r243_animtime_session_private(p,n)||session_animation_namespace_overlap(p,n,s,sizeof(*s))||session_source_private(s,p,n)||session_source_look_private(s,p,n)||
         session_animation_namespace_overlap(p,n,s->turret_program_bytes[0],s->turret_program_sizes[0])||
         session_animation_namespace_overlap(p,n,s->turret_program_bytes[1],s->turret_program_sizes[1])||
         session_animation_namespace_overlap(p,n,s->turret_program_bytes[2],s->turret_program_sizes[2])||
@@ -34,7 +34,7 @@ static int session_animation_namespace_map_current(GscSession *s) {
     int n;
     if(!s)return 0;
     if(!s->animation_namespace_enabled)return 1;
-    for(n=0;n<(s->training_rigs?4:s->turret_animations_enabled?2:3);n++)if(!s->animation_namespace_catalogs[n])return 0;
+    for(n=0;n<(s->map_animation_names.count?(int)s->map_animation_names.count:s->training_rigs?4:s->turret_animations_enabled?2:3);n++)if(!s->animation_namespace_catalogs[n])return 0;
     if(s->turret_program_enabled){
         if(!session_turret_program_current(s))return 0;
         if(!s->turret_program_admitted)return !s->runtime&&
@@ -50,12 +50,12 @@ static int session_animation_resources_current(GscSession *s) {
 static void session_animation_namespace_destroy(GscSession *s) {
     int n;
     if(!s)return;
-    for(n=0;n<4;n++) {
+    for(n=0;n<GSC_MAP_ANIMATION_CATALOGS;n++) {
         gsc_animation_catalog_free(s->animation_namespace_catalogs[n]);
         s->animation_namespace_catalogs[n]=NULL;
     }
     memset(&s->animation_namespace_map,0,sizeof(s->animation_namespace_map));
-    s->animation_namespace_enabled=0;
+    s->animation_namespace_enabled=0;memset(&s->map_animation_names,0,sizeof(s->map_animation_names));
     for(n=0;n<4;n++){GSC_SESSION_FREE(s->turret_program_bytes[n]);s->turret_program_bytes[n]=NULL;s->turret_program_sizes[n]=0;}
     s->training_rigs=0;memset(&s->training_rig_map,0,sizeof(s->training_rig_map));
     s->turret_program_enabled=0;
@@ -157,4 +157,32 @@ int gsc_session_training_rigs(GscSession *s,const GscSessionAnimationNamespaceSe
 done:
  for(i=0;i<2;i++){GSC_SESSION_FREE(bytes[i]);gsc_animation_catalog_free(parsed[i]);}
  s->busy=0;return ok?1:session_reject(error,cap,"Training rig declaration or mounted bytes unavailable");
+}
+
+int gsc_session_select_map_animation_namespace(GscSession*s,const GscSessionMapAnimationSelection*input,char*error,size_t cap){
+ GscSessionMapAnimationSelection copy;GscAnimationCatalog*catalogs[GSC_MAP_ANIMATION_CATALOGS]={0};
+ void*bytes=NULL;char why[GSC_SESSION_ERROR_CAP]={0};unsigned i,j,k;int ok=0;
+ if((cap&&!error)||!s||!input||session_animation_namespace_private(s,input,sizeof(*input))||session_animation_namespace_private(s,error,cap)||session_animation_namespace_overlap(input,sizeof(*input),error,cap))return 0;
+ copy=*input;if(!copy.names.count||copy.names.count>GSC_MAP_ANIMATION_CATALOGS)return session_reject(error,cap,"map animation catalog count outside selected capacity");
+ for(i=0;i<copy.names.count;i++){
+  if(!copy.names.names[i][0]||!memchr(copy.names.names[i],0,64))return 0;
+  for(k=0;copy.names.names[i][k];k++)if(!((copy.names.names[i][k]>='a'&&copy.names.names[i][k]<='z')||(copy.names.names[i][k]>='0'&&copy.names.names[i][k]<='9')||copy.names.names[i][k]=='_'))return 0;
+  for(j=0;j<i;j++)if(!strcmp(copy.names.names[i],copy.names.names[j]))return 0;
+  if(!copy.catalogs[i].atr_bytes||!copy.catalogs[i].atr_size||copy.catalogs[i].atr_size>131072||session_animation_namespace_private(s,copy.catalogs[i].atr_bytes,copy.catalogs[i].atr_size)||session_animation_namespace_overlap(error,cap,copy.catalogs[i].atr_bytes,copy.catalogs[i].atr_size)||session_animation_namespace_overlap(input,sizeof(*input),copy.catalogs[i].atr_bytes,copy.catalogs[i].atr_size))return 0;
+ }
+ if(!session_enter(s,error,cap))return 0;
+ if(!s->host.enabled||!s->dynamic_randomfloat_enabled||s->view.state!=GSC_SESSION_EMPTY||s->program||s->runtime||s->animation_namespace_enabled||s->start_origin_enabled||s->actor_bootstrap_enabled||!s->root_map_enabled||(copy.map_certificate.receipt!=s->root_map.receipt||copy.map_certificate.current!=s->root_map.current))
+  return session_leave_rejected(s,"map namespace requires idle exclusive map-certified Session",error,cap);
+ for(i=0;i<copy.names.count;i++){
+  bytes=GSC_SESSION_MALLOC(copy.catalogs[i].atr_size);if(!bytes)goto done;
+  memcpy(bytes,copy.catalogs[i].atr_bytes,copy.catalogs[i].atr_size);
+  catalogs[i]=gsc_animation_catalog_parse(copy.names.names[i],bytes,copy.catalogs[i].atr_size,why,sizeof(why));GSC_SESSION_FREE(bytes);bytes=NULL;
+  if(!catalogs[i]||!gsc_animation_catalog_count(catalogs[i]))goto done;
+ }
+ if(!session_animation_namespace_certificate(s,&copy.map_certificate)||s->view.state!=GSC_SESSION_EMPTY||s->program||s->runtime||s->animation_namespace_enabled||s->start_origin_enabled||memcmp(input,&copy,sizeof(copy))||(copy.map_certificate.receipt!=s->root_map.receipt||copy.map_certificate.current!=s->root_map.current))goto done;
+ for(i=0;i<copy.names.count;i++){s->animation_namespace_catalogs[i]=catalogs[i];catalogs[i]=NULL;}
+ s->map_animation_names=copy.names;s->animation_namespace_map=copy.map_certificate;s->animation_namespace_enabled=1;ok=1;
+done:
+ GSC_SESSION_FREE(bytes);for(i=0;i<GSC_MAP_ANIMATION_CATALOGS;i++)gsc_animation_catalog_free(catalogs[i]);s->busy=0;
+ return ok?1:session_reject(error,cap,why[0]?why:"map animation metadata selection refused");
 }

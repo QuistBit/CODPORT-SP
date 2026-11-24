@@ -696,6 +696,7 @@ static void CM_LoadCod1Map( const char *name, const cod1Bsp_t *bsp,
 		if ( COD1_BSP_FillCollisionTriangles( bsp, cm.cod1Triangles, triangleCount,
 				&trianglesWritten, collisionMins, collisionMaxs ) && trianglesWritten > 0 ) {
 			cm.cod1NumTriangles = trianglesWritten;
+            (void)COD1_CollisionIndexBuild(cm.cod1Triangles,cm.cod1NumTriangles);
 			VectorCopy( collisionMins, cm.cmodels[0].mins );
 			VectorCopy( collisionMaxs, cm.cmodels[0].maxs );
 			Com_DPrintf( "CM_LoadCod1Map: collision triangles %d bounds (%g %g %g)-(%g %g %g)\n",
@@ -1060,6 +1061,7 @@ void CM_ModelBounds( clipHandle_t model, vec3_t mins, vec3_t maxs ) {
 }
 
 void CM_ClearMap(void) {
+    COD1_CollisionIndexReset();
     CM_ClearV59();
     Com_Memset(&cm, 0, sizeof(cm));
     CM_ClearLevelPatches();

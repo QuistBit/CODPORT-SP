@@ -47,16 +47,54 @@ static int session_hud_element_retire(void *user,uint64_t owner,char *err,size_t
  if(!s||!owner||!s->hud_elements_enabled||!s->hud_elements.retire)return session_reject(err,cap,"HUD retirement service unavailable");
  return s->hud_elements.retire(s->hud_elements.user,owner,err,cap)==1;
 }
-static int session_entity_notsolid(void *user,const GscEntityRef *ref,int now,char *err,size_t cap,
+static int session_entity_world_action(GscEntityWorldAction action,void *user,const GscEntityRef *ref,int now,char *err,size_t cap,
  int (*current)(void *),void *context){
  GscSession *s=user;GscEntityRef copy,expected;SessionPlayerLease lease;int ok;
- if(!s||!ref||!s->entity_collision_enabled)return session_reject(err,cap,"collision service outside selected session");
+ if(!s||!ref||!action||!s->entity_collision_enabled)return session_reject(err,cap,"collision service outside selected session");
  lease.session=s;lease.id=s->view.session_id;lease.current=current;lease.context=context;
  if(!session_player_current(&lease))return session_reject(err,cap,"collision Session lease expired");
  copy=*ref;expected=copy;
- ok=s->entity_collision.notsolid(s->entity_collision.user,&copy,now,err,cap,session_player_current,&lease);
+ ok=action(s->entity_collision.user,&copy,now,err,cap,session_player_current,&lease);
  if(ok!=1||!session_player_current(&lease))return 0;
  if(copy.epoch!=expected.epoch||copy.slot!=expected.slot||copy.generation!=expected.generation)
   return session_reject(err,cap,"collision host mutated its borrowed identity");
  return 1;
+}
+
+static int session_entity_notsolid(void *user,const GscEntityRef *ref,int now,char *err,size_t cap,int (*current)(void *),void *ctx){
+ GscSession *s=user;
+ return s && session_entity_world_action(s->entity_collision.notsolid,user,ref,now,err,cap,current,ctx);
+}
+static int session_entity_solid(void *user,const GscEntityRef *ref,int now,char *err,size_t cap,int (*current)(void *),void *ctx){
+ GscSession *s=user;
+ return s && session_entity_world_action(s->entity_collision.solid,user,ref,now,err,cap,current,ctx);
+}
+static int session_entity_grenade_touch(void *user,const GscEntityRef *ref,int now,char *err,size_t cap,int (*current)(void *),void *ctx){
+ GscSession *s=user;
+ return s && session_entity_world_action(s->entity_collision.grenade_touch,user,ref,now,err,cap,current,ctx);
+}
+static int session_entity_grenade_bounce(void *user,const GscEntityRef *ref,int now,char *err,size_t cap,int (*current)(void *),void *ctx){
+ GscSession *s=user;
+ return s && session_entity_world_action(s->entity_collision.grenade_bounce,user,ref,now,err,cap,current,ctx);
+}
+static int session_entity_connectpaths(void *user,const GscEntityRef *ref,int now,char *err,size_t cap,int (*current)(void *),void *ctx){
+ GscSession *s=user;
+ return s && session_entity_world_action(s->connectpaths,user,ref,now,err,cap,current,ctx);
+}
+int gsc_session_select_connectpaths(GscSession *s,GscEntityWorldAction action){
+ if(!s||!action||s->busy||s->program||s->runtime||!s->entity_collision_enabled||s->connectpaths)return 0;
+ s->connectpaths=action;return 1;
+}
+
+static int session_entity_disconnectpaths(void*user,const GscEntityRef*ref,int now,char*error,size_t cap,int(*current)(void*),void*ctx){
+ GscSession*s=user;return s&&session_entity_world_action(s->disconnectpaths,user,ref,now,error,cap,current,ctx);
+}
+int gsc_session_select_disconnectpaths(GscSession*s,GscEntityWorldAction action){
+ if(!s||!action||s->busy||s->view.state!=GSC_SESSION_EMPTY||s->program||s->runtime||!s->entity_collision_enabled||!s->connectpaths||s->disconnectpaths)return 0;
+ s->disconnectpaths=action;return 1;
+}
+int gsc_session_running_path_graph(const GscSession *s,uint64_t id,uint64_t receipt){
+ return s && s->connectpaths && id && receipt && s->busy && !s->abort_requested &&
+    s->view.state==GSC_SESSION_RUNNING && !s->view.error[0] && s->view.session_id==id &&
+    s->node_graph_id==id && s->node_graph_receipt==receipt && !s->node_graph_pin && s->node_graph_retire;
 }

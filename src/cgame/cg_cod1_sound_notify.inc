@@ -7,7 +7,7 @@ static uint64_t cgNotifySoundIncarnation;
 static void CG_Cod1NotifySoundCommand(void) {
  char copied[C1N_ARGC][COD1_SS_PATH_BYTES],reply[C1D_CAPACITY];const char *argv[C1N_ARGC];
  C1NPacket packet;C1DReport report;uint64_t incarnation,epoch;int i,duration;
- int channels[5]={CHAN_AUTO,CHAN_BODY,CHAN_WEAPON,CHAN_VOICE,CHAN_ITEM};sfxHandle_t sound;
+ int channels[6]={CHAN_AUTO,CHAN_BODY,CHAN_WEAPON,CHAN_VOICE,CHAN_ITEM,CHAN_LOCAL};sfxHandle_t sound;
  epoch=cgCod1ScriptQuakeEpoch;incarnation=cgCod1ScriptQuakeIncarnation;
  if(!epoch||trap_Argc()!=C1N_ARGC)return;
  for(i=0;i<C1N_ARGC;i++){
@@ -21,7 +21,7 @@ static void CG_Cod1NotifySoundCommand(void) {
  cgSoundSequence=packet.sound.sequence;
  sound=trap_S_RegisterSound(packet.sound.path);
  if(!sound||incarnation!=cgCod1ScriptQuakeIncarnation||epoch!=cgCod1ScriptQuakeEpoch||cgSoundSequence!=packet.sound.sequence)return;
- trap_Cod1StartAliasSound(packet.sound.origin,(int)packet.sound.entity,channels[packet.sound.channel],sound,
+ trap_Cod1StartAliasSound(packet.sound.channel==5?NULL:packet.sound.origin,packet.sound.channel==5?cg.clientNum:(int)packet.sound.entity,channels[packet.sound.channel],sound,
     packet.sound.gain,packet.sound.pitch,packet.sound.dist_min,packet.sound.dist_max);
  if(incarnation!=cgCod1ScriptQuakeIncarnation||epoch!=cgCod1ScriptQuakeEpoch||cgSoundSequence!=packet.sound.sequence)return;
  duration=trap_Cod1SoundDuration(sound,packet.sound.pitch);

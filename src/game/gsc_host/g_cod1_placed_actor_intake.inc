@@ -1,13 +1,30 @@
+#include "../../qcommon/cod1_exact_bytes_r242.h"
+#include "g_cod1_bsp_pages592.h"
 /* Explicit original-allocation BSP intake. No automatic actor dispatch. */
 typedef struct {
     cod1PlacedActorSnapshot_t snapshot;
-    unsigned short keyOffset[MAX_SPAWN_VARS],valueOffset[MAX_SPAWN_VARS];
+    C1BSP592_ALIGN unsigned short keyOffset[MAX_SPAWN_VARS];
+    unsigned short valueOffset[MAX_SPAWN_VARS];
     unsigned short privateDecl[MAX_SPAWN_VARS],privateValue[MAX_SPAWN_VARS];
     char raw[MAX_SPAWN_VARS_CHARS];
     char originalClassname[128];
     uint64_t declarationReceipt;
 } Cod1PlacedActorRecord;
 static Cod1PlacedActorRecord cod1PlacedActors[MAX_GENTITIES];
+typedef struct {int sealed;uint64_t receipt;const char *bytes;const unsigned short *keys,*values;size_t size,pairs;} C1Bsp592Match;
+static C1Bsp592Match cod1PlacedFieldProof[MAX_GENTITIES];
+_Static_assert(offsetof(Cod1PlacedActorRecord,keyOffset)==4096 && sizeof(Cod1PlacedActorRecord)%4096==0,"isolated placed BSP pages");
+static size_t PlacedFieldPageBytes(void){return sizeof(Cod1PlacedActorRecord)-offsetof(Cod1PlacedActorRecord,keyOffset);}
+static int PlacedFieldProofPrivate(const void*p,size_t n){return ActorOverlap(p,n,cod1PlacedFieldProof,sizeof(cod1PlacedFieldProof));}
+static int PlacedFieldsUnseal(unsigned i){
+ cod1PlacedFieldProof[i].receipt=0;
+ if(cod1PlacedFieldProof[i].sealed&&!C1Bsp592Pages(cod1PlacedActors[i].keyOffset,PlacedFieldPageBytes(),1))return 0;
+ memset(cod1PlacedFieldProof+i,0,sizeof(cod1PlacedFieldProof[i]));return 1;
+}
+static int PlacedFieldsUnsealAll(void){unsigned i;
+ for(i=0;i<MAX_GENTITIES;i++)if(!PlacedFieldsUnseal(i))return 0;
+ return 1;
+}
 static cod1BspFieldDeclarationHost_t cod1BspDeclarations;
 static uint64_t cod1BspDeclarationEpoch;
 static int cod1PlacedBusy;
@@ -16,6 +33,7 @@ static uint64_t cod1BspTextSerial;
 static int cod1BspTextBusy;
 static void ActorAitypeResourcesReset(void);
 static void ActorPlacedFieldsReset(void) {
+    if(!PlacedFieldsUnsealAll()){G_Error("BSP field protection could not be released");return;}
     memset(cod1PlacedActors,0,sizeof(cod1PlacedActors));
     memset(&cod1BspDeclarations,0,sizeof(cod1BspDeclarations));cod1BspDeclarationEpoch=0;
     cod1BspTextReceipt=cod1BspTextEpoch=cod1BspTextPending=cod1BspTextPendingEpoch=0;
@@ -147,7 +165,10 @@ int G_Cod1PlacedActorIntake(struct gentity_s *ent,char *error,size_t size) {
     ent->s.eType=ET_GENERAL;ent->s.modelindex=0;ent->s.groundEntityNum=ENTITYNUM_NONE;
     ent->r.svFlags=SVF_USE_CURRENT_ORIGIN|SVF_NOCLIENT;ent->r.contents=0;ent->takedamage=qfalse;
     G_SetOrigin(ent,ent->s.origin);G_SetAngle(ent,ent->s.angles);
-    cod1PlacedActors[ref.slot]=copy;cod1PlacedBusy=0;return 1;
+    if(!PlacedFieldsUnseal(ref.slot)){G_Error("BSP field replacement protection could not be released");cod1PlacedBusy=0;return 0;}
+    cod1PlacedActors[ref.slot]=copy;
+    cod1PlacedFieldProof[ref.slot].sealed=C1Bsp592Pages(cod1PlacedActors[ref.slot].keyOffset,PlacedFieldPageBytes(),0);
+    cod1PlacedBusy=0;return 1;
 }
 int G_Cod1PlacedActorCapture(const struct gentity_s *ent,GscEntityRef *out) {
     GscEntityRef ref;if(!out||!G_Cod1EntityCapture(ent,&ref)||!PlacedFind(&ref))return 0;*out=ref;return 1;
@@ -157,6 +178,53 @@ int G_Cod1PlacedActorRead(const GscEntityRef *input,cod1PlacedActorSnapshot_t *o
     if(!input||!out||!ActorArguments(input,sizeof(*input),out,sizeof(*out),error,size))return 0;
     ref=*input;record=PlacedFind(&ref);if(!record){EntityError(error,size,"placed allocation is unavailable");return 0;}
     *out=record->snapshot;return 1;
+}
+/* The two owners independently retained the ordered field spans. Read
+ * live allocation state, bytes and offsets together without exporting the
+ * private snapshot. A missing or replaced entity still fails PlacedFind. */
+int G_Cod1PlacedActorMatchesFields(const GscEntityRef *ref,const char *bytes,size_t size,size_t pairs,
+    const unsigned short *keys,const unsigned short *values){
+ const Cod1PlacedActorRecord *record=PlacedFind(ref);C1Bsp592Match *proof;uint64_t receipt;int equal;
+ if(!record || !bytes || !keys || !values || !size || size>sizeof(record->raw) ||
+    !pairs || pairs>MAX_SPAWN_VARS)return 0;
+ if(record->snapshot.rawBytes!=size || record->snapshot.rawFieldCount!=pairs ||
+    !record->snapshot.startupConsumed || !record->snapshot.privateFieldsAvailable || !record->snapshot.nativeStaticAvailable)return 0;
+ proof=&cod1PlacedFieldProof[ref->slot];
+ receipt=proof->sealed?G_Cod1Bsp592FieldsSealed(bytes,size,pairs,keys,values):0;
+ if(receipt&&proof->receipt==receipt&&proof->bytes==bytes&&proof->keys==keys&&proof->values==values&&proof->size==size&&proof->pairs==pairs)return 1;
+ equal=R242ExactATRBytesEqual(record->keyOffset,keys,pairs*sizeof(*keys)) &&
+    R242ExactATRBytesEqual(record->valueOffset,values,pairs*sizeof(*values)) && R242ExactATRBytesEqual(record->raw,bytes,size);
+ /* No callback between the exact comparison and capture. Both actual byte
+  * spans must remain in their respective owners' protected pages. */
+ if(equal&&receipt){proof->receipt=receipt;proof->bytes=bytes;proof->keys=keys;proof->values=values;proof->size=size;proof->pairs=pairs;}
+ return equal;
+}
+/* One pure batch. Allocation validity covers both the placed row and
+ * its actor lease; entity and sentient generations are still read live. */
+int G_Cod1BspLiveRows(const cod1BspLiveRow_t *rows,unsigned count,uint64_t receipt){
+    unsigned i;
+    if(!rows || !count || count>COD1_ACTOR_CAPACITY || !receipt || !ActorMapAvailable())return 0;
+    for(i=0;i<count;i++){
+        const cod1BspLiveRow_t *row=rows+i;
+        const cod1ActorLease_t *lease=&row->lease;
+        const GscEntityRef *ref=&lease->entity;
+        const cod1ActorRecord_t *actor;
+        const cod1PlacedActorSnapshot_t *placed;
+        const C1Bsp592Match *proof;
+        if(!G_Cod1EntitySameAllocation(ref) || !ActorLeaseRecordsValid(lease) ||
+           lease->actorIndex>=COD1_ACTOR_CAPACITY)return 0;
+        actor=cod1Actors+lease->actorIndex;
+        if(!actor->alive || !actor->nativeDataInitialized || !actor->spatial.linked)return 0;
+        placed=&cod1PlacedActors[ref->slot].snapshot;
+        proof=cod1PlacedFieldProof+ref->slot;
+        if(!ActorRefEqual(&placed->entity,ref) || !placed->startupConsumed ||
+           !placed->privateFieldsAvailable || !placed->nativeStaticAvailable ||
+           placed->rawBytes!=row->size || placed->rawFieldCount!=row->pairs ||
+           !proof->sealed || proof->receipt!=receipt || proof->bytes!=row->bytes ||
+           proof->keys!=row->keys || proof->values!=row->values ||
+           proof->size!=row->size || proof->pairs!=row->pairs)return 0;
+    }
+    return 1;
 }
 int G_Cod1PlacedActorRawField(const GscEntityRef *input,size_t index,char *key,size_t key_size,char *value,size_t value_size,char *error,size_t size) {
     GscEntityRef ref;Cod1PlacedActorRecord *record;const char *k,*v;

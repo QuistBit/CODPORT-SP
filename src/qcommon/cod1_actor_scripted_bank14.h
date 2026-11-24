@@ -32,7 +32,8 @@
 #define COD1_BRIEFING_READSIGNS
 #define COD1_BRIEFING_COMPASS_SEQUENCE
 #if defined(COD1_TOWER_GREETING)
-#define C1ASB14_COUNT 54
+#define C1ASB14_COUNT 60
+#define C1ASB14_STANDING 5
 #define C1ASB14_FACIALS 25
 #elif defined(COD1_BRIEFING_EXIT)
 #define C1ASB14_COUNT 24
@@ -65,11 +66,16 @@
 #define C1ASB14_FACIALS 0
 #endif
 #define C1ASB14_NODES (58+C1ASB14_COUNT)
-#define C1ASB14_BASE_NODES (C1ASB14_NODES-C1ASB14_FACIALS)
+#ifndef C1ASB14_STANDING
+#define C1ASB14_STANDING 0
+#endif
+#define C1ASB14_BASE_NODES (C1ASB14_NODES-C1ASB14_FACIALS-C1ASB14_STANDING-(C1ASB14_STANDING?1:0))
+#define C1ASB14_STAND_FIRST (C1ASB14_BASE_NODES+C1ASB14_FACIALS)
+static int C1ASB14_Standing(unsigned n){return C1ASB14_STANDING && ((n>=107 && n<=109)||n==117||n==118||n==131);}
 #define C1ASB14_LEAVES (47+C1ASB14_COUNT)
 #ifdef COD1_TOWER_GREETING
 /* Slot 31 carries grounded gait separately from the scripted tree. */
-#define C1ASB14_PHASES 37
+#define C1ASB14_PHASES 38
 #else
 #define C1ASB14_PHASES (7+C1ASB14_COUNT)
 #endif
@@ -113,7 +119,8 @@ static const c1afu14Definition_t c1asb14Additional[]={
  {1675,50,88,-1}, {1676,50,89,-1}, {1677,50,90,-1}, {1678,50,91,-1},
  {1679,50,92,-1}, {1681,50,93,-1}, {1683,50,94,-1}, {1684,50,95,-1},
  {1685,50,96,-1}, {1687,50,97,-1}, {1688,50,98,-1}, {1689,50,99,-1},
- {1690,50,100,-1}
+ {1690,50,100,-1},
+ {107,3,101,-1},{108,3,102,-1},{109,3,103,-1},{117,3,104,-1},{118,3,105,-1},{131,3,106,-1}
 #endif
 #endif
 #endif
@@ -180,7 +187,8 @@ static const char*const c1asb14Names[]={"training_foley_todayobstacle","Training
  "Training_facial_Moody_037_lazerexplosives",
  "Training_facial_Moody_038_notestopwatch",
  "Training_facial_Moody_039_fireinthehole",
- "Training_facial_Moody_040_goodjob"
+ "Training_facial_Moody_040_goodjob",
+ "stand_alert_1","stand_alert_2","stand_alert_3","stand_alertb_idle1","stand_alertb_twitch1","stand2crouch_attack"
 #endif
 #endif
 #endif
@@ -207,6 +215,23 @@ static int C1ASB14_Valid(unsigned i,const c1ar14Root_t*r,const c1ab14Clip_t*c){
  unsigned ordinal,loop,bones,flags,note;
  if(i>=C1ASB14_COUNT)return 0;
  ordinal=c1asb14Additional[2+i].ordinal;
+ if(ordinal==131)return r&&c&&r->magic==C1AR14_MAGIC&&c->magic==C1AB14_MAGIC&&
+   r->frames==31&&c->frames==31&&r->serializedFrames==31&&c->serializedFrames==31&&
+   r->intervals==30&&c->intervals==30&&r->fps==30&&c->fps==30&&r->bones==54&&c->bones==54&&
+   r->flags==2&&c->flags==2&&!r->rotationKeys&&r->translationKeys==5&&r->prefixBytes==78&&!r->noteCount;
+ if(C1ASB14_Standing(ordinal)){
+  static const unsigned lengths[]={80,72,89,100,158},flags[]={3,3,2,3,2},notes[]={0,0,2,0,4};
+  static const char *const named[]={"footscrape","footscrape","reload done","finish","reload done","finish"};
+  static const unsigned positions[]={25,62,54,73,135,149};
+  unsigned clip=i-54,j,start=ordinal==118?2:0;
+  if(clip>=5||!r||!c||r->magic!=C1AR14_MAGIC||c->magic!=C1AB14_MAGIC||r->frames!=lengths[clip]||
+     c->frames!=r->frames||r->bones!=55||c->bones!=55||r->flags!=flags[clip]||c->flags!=r->flags||
+     r->fps!=30||c->fps!=30||r->serializedFrames!=r->frames+(r->flags&1)||
+     c->serializedFrames!=r->serializedFrames||r->intervals+1!=r->serializedFrames||c->intervals!=r->intervals||
+     r->rotationKeys||r->translationKeys||r->prefixBytes!=13||r->noteCount!=notes[clip])return 0;
+  for(j=0;j<notes[clip];++j)if(strcmp(r->notes[j].name,named[start+j])||r->notes[j].frame!=positions[start+j])return 0;
+  return 1;
+ }
  loop=C1ASB14_TowerLoop(ordinal);
  bones=body?54:19;flags=(body?2:0)|loop;note=body?1:(ordinal>=1660 && ordinal<=1669?5:3);
  return i<C1ASB14_COUNT&&r&&c&&r->magic==C1AR14_MAGIC&&c->magic==C1AB14_MAGIC&&r->frames==frames[i]&&c->frames==frames[i]&&
@@ -249,7 +274,7 @@ static int C1ASB14_NodesFull(const float current[98],const float phases[2][21],
     C1AB14_Overlap(phases,42*4,out,sizeof(stage))||(facial && C1AB14_Overlap(facial,50*4,out,sizeof(stage)))||
     C1AB14_Overlap(c1afu14Definitions,sizeof(c1afu14Definitions),out,sizeof(stage))||
     C1AB14_Overlap(c1asb14Additional,sizeof(c1asb14Additional),out,sizeof(stage)))return 0;
- for(i=0;i<98;i++)if(!(current[i]>=0 && current[i]<=1) || (i>=C1ASB14_BASE_NODES && current[i]!=0))return 0;
+ for(i=0;i<98;i++)if(!(current[i]>=0 && current[i]<=1) || (i>=C1ASB14_BASE_NODES+2*C1ASB14_STANDING+(C1ASB14_STANDING?1:0) && current[i]!=0))return 0;
  if(current[0]!=1)return 0;
  for(g=0;g<2;g++)for(i=0;i<21;i++)if(!(phases[g][i]>=0 && phases[g][i]<=1) ||
     (g*21+i>=C1ASB14_PHASES && phases[g][i]!=0))return 0;
@@ -258,6 +283,13 @@ static int C1ASB14_NodesFull(const float current[98],const float phases[2][21],
   stage[i].ordinal=d->ordinal;stage[i].parent=d->parent;stage[i].leaf=d->leaf;
   if(i<C1ASB14_BASE_NODES){
    stage[i].currentWeight=current[i];stage[i].phase=d->phase<0?0:phases[d->phase/21][d->phase%21];
+  }else if(d->ordinal==131 && C1ASB14_STANDING){
+   stage[i].currentWeight=current[97];stage[i].phase=phases[1][16];
+   if(!current[97] && stage[i].phase)return 0;
+  }else if(i>=C1ASB14_STAND_FIRST){
+   unsigned wire=C1ASB14_BASE_NODES+i-C1ASB14_STAND_FIRST;
+   stage[i].currentWeight=current[wire];stage[i].phase=current[wire+C1ASB14_STANDING];
+   if(!stage[i].currentWeight && stage[i].phase)return 0;
   }else{
    unsigned slot=i-C1ASB14_BASE_NODES;
    float weight=facial?facial[0][slot]:0,phase=facial?facial[1][slot]:0;

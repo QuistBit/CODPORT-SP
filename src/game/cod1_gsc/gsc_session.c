@@ -52,12 +52,12 @@ struct GscSession { int actor_graph_query,actor_graph_check_busy;GscEntityRef ac
     GscRuntime *runtime;
     GscSessionSnapshot view;
     int busy, abort_requested;
-    int r237_frame_buckets_enabled,owned_wait_delivery_enabled;
+    int r237_frame_buckets_enabled,owned_wait_delivery_enabled,r237_suspended_phase;
     int r243_scripted_init_dependency_enabled;
     int r243_scripted_prefix_enabled;GscActorScriptedPrefixHost r243_scripted_prefix;
     int r243_scripted_start_enabled;GscActorScriptedStartHost r243_scripted_start;
-    int r243_controller_enabled;GscActorScriptedControllerHost r243_controller;GscControllerSelectWithCleanup r243_select_with_cleanup;void*r243_source_controller,*r243_source_active;
-    int r243_script_state_enabled;GscActorScriptStateHost r243_script_state;
+    int r243_controller_enabled;GscActorScriptedControllerHost r243_controller;GscControllerSelectWithCleanup r243_select_with_cleanup;void*r243_source_controller,*r243_source_active,*r402_source_active;
+    int r243_script_state_enabled,map_script_state_enabled;GscActorScriptStateHost r243_script_state;
     GscEntityHost entities;
     int entities_enabled;
     GscEntityAccessHost access;
@@ -79,7 +79,7 @@ struct GscSession { int actor_graph_query,actor_graph_check_busy;GscEntityRef ac
     GscSessionMissionHost mission;int mission_enabled;
     GscSessionBlastHost blast;int blast_enabled,blast_notify_completed;
     int training_opening_enabled;int local_identifier_case_enabled;GscLoopSoundHost loop_sound;int loop_sound_enabled;GscSoundNotifyHost sound_notify;int sound_notify_enabled,sound_notify_call_active;GscScriptSoundHost script_sound;int script_sound_enabled;
-    GscPlayerNativeHost player_natives;int execution_extensions,player_normal_health_enabled,player_viewmodel_enabled,player_max_ammo_enabled,map_game_array_enabled;
+    GscPlayerNativeHost player_natives;int execution_extensions,player_normal_health_enabled,player_viewmodel_enabled,player_max_ammo_enabled,player_stance_permissions_enabled,map_game_array_enabled;
     GscEntityDeleteHost entity_delete;int entity_operations_enabled;
     GscEntityOriginMethodHost origin_method;int origin_method_enabled;
     GscEntityLinkHost entity_links;int entity_links_enabled;
@@ -87,16 +87,24 @@ struct GscSession { int actor_graph_query,actor_graph_check_busy;GscEntityRef ac
     GscLoopFxHost loop_fx;int loop_fx_enabled;
     GscSpatialNativeHost spatial_natives;int spatial_natives_enabled;
     GscNodeQueryHost node_queries;int node_queries_enabled;
+    GscVehicleNodeHost vehicle_nodes;int vehicle_nodes_enabled;
     GscAiArrayHost ai_arrays;int ai_arrays_enabled;
-    GscEntityFieldHost grenade_item_fields;int grenade_items_enabled,carbine_items_enabled;
+    GscEntityFieldHost grenade_item_fields;int grenade_items_enabled,carbine_items_enabled,composed_map_items_enabled;
     GscYawMotionHost yaw_motion;int yaw_motion_enabled;
-    GscActorGoalHost actor_goal;int actor_goal_enabled;
+    GscActorGoalHost actor_goal;int actor_goal_enabled,map_actor_goal_enabled;
     GscSessionTurretProgramPlan turret_program;
     unsigned char *turret_program_bytes[4];size_t turret_program_sizes[4];int training_rigs;GscMapExecutionCertificate training_rig_map;
     int turret_program_enabled,turret_program_busy,turret_program_admitted,turret_admission_attempted;
-    GscTurretAnimationHost turret_animations;int turret_animations_enabled;GscActorAnimationHost actor_animations;int actor_animations_enabled;int flagged_all_restart_enabled,flagged_all_method_enabled;GscActorAnimationHost command_provider;GscActorCriticalHost critical_provider;int critical_selected;int actor_animation_end_enabled;uint64_t actor_animation_end_runtime,actor_animation_end_catalog;GscActorLookHost actor_look;int actor_look_enabled;GscActorPresenceHost actor_presence;int actor_presence_enabled;GscActorDropHost actor_drop;int actor_drop_enabled;GscAnimationLengthHost namespace_length;int namespace_length_enabled;int random_range_enabled;int r232_source_float_enabled;int quoted_strings_enabled;int function_admission_selected;int developer_selected;GscDeveloperScriptSelection developer;
+    GscTurretAnimationHost turret_animations;int turret_animations_enabled;GscActorAnimationHost actor_animations;int actor_animations_enabled,map_actor_animations_enabled;GscActorAnimationHost source_actor_animations;int source_actor_animations_enabled;int flagged_all_restart_enabled,flagged_all_method_enabled,map_flagged_all_enabled;GscActorAnimationHost command_provider;GscActorCriticalHost critical_provider;int critical_selected;int actor_animation_end_enabled;uint64_t actor_animation_end_runtime,actor_animation_end_catalog;GscActorLookHost actor_look;int actor_look_enabled,map_actor_look_enabled;GscActorLookHost source_actor_look;int source_actor_look_enabled;GscActorPresenceHost actor_presence;int actor_presence_enabled,map_actor_presence_enabled;GscActorDropHost actor_drop;int actor_drop_enabled;GscAnimationLengthHost namespace_length;int namespace_length_enabled,map_animation_length_enabled;int random_range_enabled;int r232_source_float_enabled;int quoted_strings_enabled;int function_admission_selected;int developer_selected,map_developer_selected;GscDeveloperScriptSelection developer;
+    GscModelPartHost model_part;int model_part_enabled;
+ GscVehicleSpawnHost vehicle_spawn;int vehicle_spawn_enabled;
+ GscTurretPrecacheHost turret_precache;int turret_precache_enabled;
+ GscTurretSpawnHost turret_spawn;int turret_spawn_enabled;
+ GscBulletTraceHost bullet_trace;int bullet_trace_enabled;
+ GscVehicleMethodHost vehicle_methods;int vehicle_methods_enabled;
+ GscMapExecutionCertificate root_map;int root_map_enabled,map_source_float_enabled,map_moveto_enabled,map_actor_program_enabled;
     GscWeaponClassnameHost weapon_classname;int weapon_classname_enabled,weapon_classname_busy;
-    GscWeaponModelHost weapon_model;int weapon_model_enabled;
+    GscWeaponModelHost weapon_model;int weapon_model_enabled,map_weapon_model_enabled;
     GscTurretHost turrets;int turrets_enabled;
     GscSessionActorProgramPlan actor_program;GscEntityAccessHost actor_program_base_access;
     GscSessionScriptRootsPlan script_roots;
@@ -117,7 +125,7 @@ struct GscSession { int actor_graph_query,actor_graph_check_busy;GscEntityRef ac
     uint32_t actor_construct_count;
     GscEntityScriptEntry actor_construct_entries[GSC_AI_ARRAY_CAPACITY];
     GscHudElemHost hud_elements;int hud_elements_enabled;
-    GscEntityCollisionHost entity_collision;int entity_collision_enabled;
+    GscEntityCollisionHost entity_collision;int entity_collision_enabled;GscEntityWorldAction connectpaths,disconnectpaths;
     GscSessionQuakeHost quake;int quake_enabled;
     GscSessionFxHost fx;int fx_enabled;
     GscSessionCvarHost cvars;int cvars_enabled;
@@ -145,12 +153,12 @@ struct GscSession { int actor_graph_query,actor_graph_check_busy;GscEntityRef ac
     GscStartOriginHost start_origin_host;
     uint32_t start_origin_ordinal;
     int start_origin_enabled,start_origin_map_busy;
-    GscAnimationCatalog *animation_namespace_catalogs[4];
+    GscAnimationCatalog *animation_namespace_catalogs[GSC_MAP_ANIMATION_CATALOGS];GscMapAnimationNames map_animation_names;
     GscMapExecutionCertificate animation_namespace_map;
     int animation_namespace_enabled,animation_namespace_map_busy;
     GscStartOriginHost namespace_start_origin_host;
     uint32_t namespace_start_origin_ordinals[2];
-    int namespace_start_origin_enabled;
+    int namespace_start_origin_enabled,map_start_pose_enabled;
     GscRuntime *bsp_runtime;void *bsp_scope;int bsp_promoted;uint32_t bsp_count;GscEntityScriptEntry bsp_entries[GSC_AI_ARRAY_CAPACITY];
 };
 static void session_message(char *dst, size_t cap, const char *text) {
@@ -177,6 +185,7 @@ static int session_actor_program_current(GscSession*);
 static int session_script_roots_current(GscSession*);
 static int session_script_roots_cache_current(const GscSession*);
 static int session_source_private(const GscSession*,const void*,size_t);
+static int session_source_look_private(const GscSession*,const void*,size_t);
 static int session_node_scripts_current(GscSession*);
 static int session_node_scripts_publish(GscSession*);
 static void session_capture(GscSession *s) {
@@ -217,6 +226,7 @@ static int session_drop(GscSession *s) {
 }
 static void session_clear(GscSession *s) {
     uint64_t id = s->view.session_id;
+    s->r237_suspended_phase=0;
     s->actor_bootstrap_attempted=s->actor_bootstrap_running=s->actor_map_busy=0;
     s->actor_construct_attempted=s->actor_construct_running=s->actor_construct_complete=0;
     s->actor_construct_program=0;s->actor_construct_count=0;
@@ -1237,7 +1247,7 @@ static int session_mission_gate(void *user,int logical_ms,int kind,int *enabled,
     GscSession *s=user;int accepted,copy=-1;
     if(!s||!s->busy||s->abort_requested||!s->mission_enabled||
        s->view.state!=GSC_SESSION_RUNNING||!s->view.session_id||logical_ms<0||!enabled||
-       (kind!=GSC_MISSION_SUCCESS&&kind!=GSC_MISSION_FAILED)||!s->mission.query_gate)
+       (kind!=GSC_MISSION_SUCCESS&&kind!=GSC_MISSION_FAILED&&kind!=GSC_MISSION_CHANGELEVEL)||!s->mission.query_gate)
         return session_reject(error,size,"mission gate outside running session");
     accepted=s->mission.query_gate(s->mission.user,s->view.session_id,logical_ms,kind,&copy,error,size);
     if(s->abort_requested||s->view.error[0])return session_reject(error,size,"mission gate cancelled session");
@@ -1257,15 +1267,15 @@ static int session_mission_emit(void *user,int logical_ms,const GscMissionEvent 
     if(copy.length>=sizeof(copy.map)||copy.map[copy.length]||memchr(copy.map,0,copy.length)||
        (copy.has_arg1!=0&&copy.has_arg1!=1)||(!copy.has_arg1&&copy.arg1))
         return session_reject(error,size,"invalid mission event payload");
-    if(copy.kind==GSC_MISSION_SUCCESS) {
+    if(copy.kind==GSC_MISSION_SUCCESS||copy.kind==GSC_MISSION_CHANGELEVEL) {
         valid=copy.phase==GSC_MISSION_REQUEST||
             (copy.phase==GSC_MISSION_ARGUMENT&&copy.has_arg1&&!copy.length)||
-            (copy.phase==GSC_MISSION_SUCCESS_MARK&&!copy.has_arg1&&!copy.length);
+            (copy.kind==GSC_MISSION_SUCCESS&&copy.phase==GSC_MISSION_SUCCESS_MARK&&!copy.has_arg1&&!copy.length);
     } else if(copy.kind==GSC_MISSION_FAILED)
         valid=(copy.phase==GSC_MISSION_DEATH_FADE||copy.phase==GSC_MISSION_FAILURE_MARK)&&
             !copy.has_arg1&&!copy.length;
     if(!valid)return session_reject(error,size,"invalid mission event phase");
-    callback=copy.kind==GSC_MISSION_SUCCESS?s->mission.success:s->mission.failed;
+    callback=copy.kind==GSC_MISSION_FAILED?s->mission.failed:s->mission.success;
     if(!callback)return session_reject(error,size,"mission host capability is unavailable");
     accepted=callback(s->mission.user,s->view.session_id,logical_ms,&copy,error,size);
     if(s->abort_requested||s->view.error[0])return session_reject(error,size,"mission callback cancelled session");
@@ -1488,6 +1498,12 @@ int gsc_session_select_player_max_ammo(GscSession *s,char *err,size_t cap) {
   return session_reject(err,cap,"max_ammo requires idle selected player session");
  s->player_max_ammo_enabled=1;return 1;
 }
+int gsc_session_select_player_stance_permissions(GscSession *s,char *err,size_t cap) {
+ if(!s||s->busy||s->program||s->runtime||s->view.error[0]||s->abort_requested||
+    !s->execution_extensions||s->player_stance_permissions_enabled)
+  return session_reject(err,cap,"stance permissions require idle selected player session");
+ s->player_stance_permissions_enabled=1;return 1;
+}
 int gsc_session_select_map_game_array(GscSession *s,char *err,size_t cap) {
  if(!s||s->busy||s->program||s->runtime||s->view.error[0]||s->abort_requested||
     !s->dynamic_randomfloat_enabled||s->map_game_array_enabled)
@@ -1523,6 +1539,7 @@ static int session_player_current(void *context) {
 }
 #include "gsc_session_entity_links.inc"
 #include "gsc_session_node_queries.inc"
+#include "gsc_session_vehicle_nodes.inc"
 #include "gsc_session_ai_arrays.inc"
 #include "gsc_session_grenade_items.inc"
 #include "gsc_session_yaw_motion.inc"
@@ -1537,18 +1554,32 @@ static int session_player_current(void *context) {
 #include "actor-float-session.inc"
 #include "move-delta-session.inc"
 #include "animtime-session.inc"
+#include "gsc_session_r402_source_look_types.inc"
 #include "gsc_session_r232_actor_look.inc"
 #include "gsc_session_r233_actor_presence.inc"
 #include "gsc_session_r233_actor_drop.inc"
 #include "gsc_session_r243_scripted_prefix.inc"
 #include "gsc_session_r243_script_state.inc"
+#include "gsc_session_map_script_state.inc"
+#include "gsc_session_map_actor_animations.inc"
+#include "gsc_session_map_actor_look.inc"
+#include "gsc_session_map_actor_goal.inc"
 #include "gsc_session_r243_scripted_start.inc"
 static int session_after_vm(GscSession*,int,char*,size_t);
 #include "gsc_session_r243_controller.inc"
 #include "gsc_session_r243_source_dispatch.inc"
+#include "gsc_session_r402_source_look.inc"
 #include "gsc_session_r233_namespace_length.inc"
 #include "gsc_session_r232_weapon_model.inc"
 #include "gsc_session_weapon_classname.inc"
+#include "gsc_session_map_weapon_model.inc"
+#include "gsc_session_vehicle_methods.inc"
+#include "gsc_session_root_map.inc"
+#include "gsc_session_vehicle_spawn.inc"
+#include "gsc_session_turret_precache.inc"
+#include "gsc_session_turret_spawn.inc"
+#include "gsc_session_bullet_trace.inc"
+#include "gsc_session_model_part.inc"
 #include "gsc_session_r232_random_range.inc"
 #include "gsc_session_r232_source_float.inc"
 #include "gsc_session_r232_quoted_strings.inc"
@@ -1557,6 +1588,7 @@ static int session_after_vm(GscSession*,int,char*,size_t);
 #include "gsc_session_hud_elements.inc"
 static int session_actor_overlap(const void *,size_t,const void *,size_t);
 #include "gsc_session_actor_bootstrap.inc"
+#include "gsc_session_map_item_actor_fields.inc"
 #include "gsc_session_delete_transactions.inc"
 #include "gsc_session_loop_fx.inc"
 static int session_player_native(void *user,const GscPlayerNativeRequest *request,
@@ -1805,13 +1837,18 @@ int gsc_session_prepare_program(GscSession *s, const char *path, int ready,
     s->view.state=GSC_SESSION_COMPILED;*out_id=s->view.session_id;s->busy=0;return 1;
 }
 #include "gsc_session_bsp_construction.inc"
-void gsc_session_bind_readonly_context(GscSession *s, uint64_t id,
-    const GscEntityHost *host, const GscReadOnlyContext *context) {
+#include "gsc_training_readonly.h"
+void gsc_session_bind_scan(GscSession *s, uint64_t id,
+    const GscEntityHost *host, const GscReadOnlyContext *context,int native) {
     if (!s || !host || !context || s->busy || s->abort_requested ||
         !session_id_matches(s,id) || s->view.state != GSC_SESSION_PREPARED ||
         !s->runtime || !s->turret_program_admitted || !s->entities_enabled ||
         s->entities.validate != host->validate || s->entities.user != host->user) return;
-    gsc_runtime_bind_readonly_context(s->runtime,context,s,session_entity_validate);
+    gsc_runtime_bind_scan(s->runtime,context,s,session_entity_validate,native);
+}
+void gsc_session_bind_readonly_context(GscSession *s, uint64_t id,
+    const GscEntityHost *host, const GscReadOnlyContext *context) {
+    gsc_session_bind_scan(s,id,host,context,0);
 }
 int gsc_session_prepare_runtime(GscSession *s,uint64_t id,char *err,size_t cap){
     char why[GSC_SESSION_ERROR_CAP];int promote;
@@ -2145,35 +2182,42 @@ int gsc_session_prepare_runtime(GscSession *s,uint64_t id,char *err,size_t cap){
            !session_animation_resources_current(s))return session_failed(s,"R209 start-origin runtime selection failed",err,cap);
     }
     if(s->animation_namespace_enabled) {
-        GscAnimationNamespaceSelection selection;int n;
+        GscAnimationNamespaceSelection selection;GscMapAnimationNamespaceSelection mapSelection;int n;
+        memset(&mapSelection,0,sizeof(mapSelection));for(n=0;n<(int)s->map_animation_names.count;n++)mapSelection.catalogs[n]=s->animation_namespace_catalogs[n];mapSelection.map_certificate=s->animation_namespace_map;
         memset(&selection,0,sizeof(selection));
         for(n=0;n<3;n++)selection.catalogs[n]=s->animation_namespace_catalogs[n];
         selection.map_certificate=s->animation_namespace_map;
         if(!session_animation_resources_current(s)||
            !gsc_runtime_select_anim_data(s->runtime,&s->animation_namespace_map)||
            !session_animation_resources_current(s)||
-           !(s->turret_animations_enabled?session_turret_animation_runtime(s):
+           !(s->map_animation_names.count?gsc_runtime_select_map_animation_namespace(s->runtime,&mapSelection):s->turret_animations_enabled?session_turret_animation_runtime(s):
              gsc_runtime_select_animation_namespace(s->runtime,&selection))||
            !session_animation_resources_current(s))
             return session_failed(s,"R211 animation namespace runtime selection failed",err,cap);
     }
     if(s->random_range_enabled&&(!session_animation_resources_current(s)||!gsc_runtime_select_r232_randomfloat_range(s->runtime)||!session_animation_resources_current(s)))return session_failed(s,"randomFloatRange runtime selection failed",err,cap);
+    if(s->map_source_float_enabled&&!gsc_runtime_select_map_source_float(s->runtime))return session_failed(s,"map arithmetic runtime selection failed",err,cap);
     if(s->r232_source_float_enabled&&(!session_animation_resources_current(s)||!gsc_runtime_select_r232_source_float_arithmetic(s->runtime)||!session_animation_resources_current(s)))return session_failed(s,"init/look arithmetic runtime selection failed",err,cap);
+    if(s->bullet_trace_enabled){GscBulletTraceHost host={s,session_bullet_trace};if(!gsc_runtime_select_bullet_trace(s->runtime,&host))return session_failed(s,"bulletTrace runtime selection failed",err,cap);}
+    if(s->vehicle_spawn_enabled){GscVehicleSpawnHost host={s,session_vehicle_spawn_prepare,session_vehicle_spawn_finish};if(!gsc_runtime_select_vehicle_spawn(s->runtime,&host))return session_failed(s,"vehicle spawn runtime selection failed",err,cap);}
+    if(s->turret_precache_enabled){GscTurretPrecacheHost host={s,session_turret_precache};if(!gsc_runtime_select_turret_precache(s->runtime,&host))return session_failed(s,"turret precache runtime selection failed",err,cap);}
+    if(s->turret_spawn_enabled){GscTurretSpawnHost host={s,session_turret_spawn_prepare,session_turret_spawn_finish};if(!gsc_runtime_select_turret_spawn(s->runtime,&host))return session_failed(s,"turret spawn runtime selection failed",err,cap);}
+    if(s->model_part_enabled){GscModelPartHost host={s,session_model_part};if(!gsc_runtime_select_model_part(s->runtime,&host))return session_failed(s,"model part runtime selection failed",err,cap);}
     if(s->weapon_classname_enabled){GscWeaponClassnameHost host={s,session_weapon_classname};if(!gsc_runtime_select_weapon_classname(s->runtime,&host))return session_failed(s,"weapon classname runtime selection failed",err,cap);}
-    if(s->weapon_model_enabled){GscWeaponModelHost host={s,session_weapon_model_query};
+    if(s->weapon_model_enabled){GscWeaponModelHost host={s,s->map_weapon_model_enabled?session_map_weapon_model_query:session_weapon_model_query};
         if(!session_animation_resources_current(s)||!gsc_runtime_select_weapon_model(s->runtime,&host)||!session_animation_resources_current(s))return session_failed(s,"weapon model runtime selection failed",err,cap);
     }
-    if(s->namespace_length_enabled){GscAnimationLengthHost host={s,session_namespace_length_query};if(!session_animation_resources_current(s)||!gsc_runtime_select_r233_namespace_animation_length(s->runtime,&host)||!session_animation_resources_current(s))return session_failed(s,"namespace length runtime selection failed",err,cap);}
+    if(s->namespace_length_enabled){GscAnimationLengthHost host={s,s->map_animation_length_enabled?session_map_animation_length_query:session_namespace_length_query};if(!session_animation_resources_current(s)||!(s->map_animation_length_enabled?gsc_runtime_select_map_animation_length(s->runtime,&host):gsc_runtime_select_r233_namespace_animation_length(s->runtime,&host))||!session_animation_resources_current(s))return session_failed(s,"namespace length runtime selection failed",err,cap);}
     if(s->actor_drop_enabled){GscActorDropHost host={s,session_actor_drop_invoke};if(!session_animation_resources_current(s)||!gsc_runtime_select_r233_actor_drop(s->runtime,&host)||!session_animation_resources_current(s))return session_failed(s,"DropWeapon runtime selection failed",err,cap);}
     if(s->actor_presence_enabled){GscActorPresenceHost host={s,session_actor_presence_read,session_actor_presence_current};
         if(!session_animation_resources_current(s)||!gsc_runtime_select_actor_presence(s->runtime,&host)||!session_animation_resources_current(s))return session_failed(s,"actor presence runtime selection failed",err,cap);
     }
-    if(s->actor_look_enabled){GscActorLookHost host={s,session_actor_look_validate,session_actor_look_invoke};
-        if(!session_animation_resources_current(s)||!gsc_runtime_select_r232_actor_look(s->runtime,&host)||!session_animation_resources_current(s))return session_failed(s,"actor look runtime selection failed",err,cap);
+    if(s->actor_look_enabled){GscActorLookHost host={s,s->map_actor_look_enabled?session_map_actor_look_validate:session_actor_look_validate,s->map_actor_look_enabled?session_map_actor_look_invoke:session_actor_look_invoke};
+        if(!session_animation_resources_current(s)||!(s->map_actor_look_enabled?gsc_runtime_select_map_actor_look(s->runtime,&host):gsc_runtime_select_r232_actor_look(s->runtime,&host))||!session_animation_resources_current(s))return session_failed(s,"actor look runtime selection failed",err,cap);
     }
     if(s->actor_animations_enabled) {
-        GscActorAnimationHost host={s,session_actor_animation_validate,session_actor_animation_invoke};
-        if(!session_animation_resources_current(s)||!gsc_runtime_select_r232_actor_animations(s->runtime,&host)||!session_animation_resources_current(s))
+        GscActorAnimationHost host={s,s->map_actor_animations_enabled?session_map_actor_animation_validate:session_actor_animation_validate,s->map_actor_animations_enabled?session_map_actor_animation_invoke:session_actor_animation_invoke};
+        if(!session_animation_resources_current(s)||!(s->map_actor_animations_enabled?gsc_runtime_select_map_actor_animations(s->runtime,&host):gsc_runtime_select_r232_actor_animations(s->runtime,&host))||!session_animation_resources_current(s))
             return session_failed(s,"R232 actor animation runtime selection failed",err,cap);
     }
     if(s->flagged_all_restart_enabled&&(!session_animation_resources_current(s)||!gsc_runtime_select_r233_flagged_all_restart(s->runtime)||!session_animation_resources_current(s)))return session_failed(s,"flagged all restart runtime selection failed",err,cap);
@@ -2190,7 +2234,7 @@ int gsc_session_prepare_runtime(GscSession *s,uint64_t id,char *err,size_t cap){
            !session_animation_resources_current(s))
             return session_failed(s,"R212 namespace query runtime selection failed",err,cap);
     }
-    if(s->grenade_items_enabled) {
+    if(s->grenade_items_enabled&&!s->composed_map_items_enabled) {
         GscEntityFieldHost fields={s,session_grenade_item_classify,
             session_grenade_item_read,session_grenade_item_write};
         if(!gsc_runtime_select_entity_fields(s->runtime,&fields))
@@ -2203,6 +2247,7 @@ int gsc_session_prepare_runtime(GscSession *s,uint64_t id,char *err,size_t cap){
     }
     if(s->actor_bootstrap_enabled){
         GscEntityFieldHost fields={s,session_actor_classify,session_actor_read,session_actor_write};
+        if(s->composed_map_items_enabled){fields.classify=session_map_item_actor_classify;fields.read=session_map_item_actor_read;fields.write=session_map_item_actor_write;}
         GscEntityMethodHost methods={s,session_actor_method};
         GscSpawnerTeamMethodHost teams={s,session_actor_team_validate,session_actor_team_set};
         GscAttachmentQueryHost attachments={s,session_actor_attachment};
@@ -2267,6 +2312,13 @@ int gsc_session_prepare_runtime(GscSession *s,uint64_t id,char *err,size_t cap){
         GscAiArrayHost ai;memset(&ai,0,sizeof(ai));ai.user=s;ai.query=session_ai_array_query;ai.validate=session_ai_array_validate;
         if(!gsc_runtime_select_ai_arrays(s->runtime,&ai))return session_failed(s,"R202 AI array runtime selection failed",err,cap);
     }
+    if(s->vehicle_nodes_enabled){
+        GscVehicleNodeHost nodes;memset(&nodes,0,sizeof(nodes));nodes.user=s;
+        nodes.query=session_vehicle_node_query;nodes.validate=session_vehicle_node_validate;nodes.read=session_vehicle_node_read;
+        if(!gsc_runtime_select_vehicle_nodes(s->runtime,&nodes))return session_failed(s,"vehicle-node runtime selection failed",err,cap);
+    }
+    if(s->vehicle_methods_enabled){GscVehicleMethodHost h={s,session_vehicle_method};if(!gsc_runtime_select_vehicle_methods(s->runtime,&h))return session_failed(s,"vehicle methods runtime selection failed",err,cap);}
+
     if(s->node_queries_enabled) {
         GscNodeQueryHost nodes;memset(&nodes,0,sizeof(nodes));nodes.user=s;
         nodes.query=session_node_query;nodes.validate=session_node_validate;nodes.read=session_node_read;
@@ -2278,19 +2330,19 @@ int gsc_session_prepare_runtime(GscSession *s,uint64_t id,char *err,size_t cap){
         if(!gsc_runtime_select_r232_turrets(s->runtime,&host))return session_failed(s,"R232 turret runtime selection failed",err,cap);
     }
     if(s->actor_goal_enabled){
-        GscActorGoalHost goal={s,session_actor_goal_invoke};
+        GscActorGoalHost goal={s,s->map_actor_goal_enabled?session_map_actor_goal_invoke:session_actor_goal_invoke};
         if(!gsc_runtime_select_r222_actor_goal(s->runtime,&goal))return session_failed(s,"Actor goal runtime selection failed",err,cap);
     }
     if(s->hud_elements_enabled){
         GscHudElemHost h;memset(&h,0,sizeof(h));h.user=s;h.invoke=session_hud_element_invoke;h.validate=session_hud_element_validate;h.retire=session_hud_element_retire;
         if(!gsc_runtime_select_hud_elements(s->runtime,&h))return session_failed(s,"R200 HUD runtime selection failed",err,cap);
     }
-    if(s->entity_collision_enabled){GscEntityCollisionHost h;h.user=s;h.notsolid=session_entity_notsolid;
-        if(!gsc_runtime_select_entity_collision(s->runtime,&h))return session_failed(s,"R200 collision runtime selection failed",err,cap);
+    if(s->entity_collision_enabled){GscEntityCollisionHost h;h.user=s;h.notsolid=session_entity_notsolid;h.grenade_bounce=s->entity_collision.grenade_bounce?session_entity_grenade_bounce:NULL;h.grenade_touch=s->entity_collision.grenade_touch?session_entity_grenade_touch:NULL;h.solid=s->entity_collision.solid?session_entity_solid:NULL;
+        if(!gsc_runtime_select_entity_collision(s->runtime,&h)||(s->connectpaths&&!gsc_runtime_select_connectpaths(s->runtime,session_entity_connectpaths))||(s->disconnectpaths&&!gsc_runtime_select_disconnectpaths(s->runtime,session_entity_disconnectpaths)))return session_failed(s,"R200 collision runtime selection failed",err,cap);
     }
     if(!session_animation_resources_current(s))return session_failed(s,"start-origin resources retired before prepare",err,cap);
     if(s->r243_script_state_enabled){
-        GscActorScriptStateHost tracking={s,session_script_state_invoke};
+        GscActorScriptStateHost tracking={s,s->map_script_state_enabled?session_map_script_state_invoke:session_script_state_invoke};
         if(!gsc_runtime_select_r243_script_state(s->runtime,&tracking))
             return session_failed(s,"selected Actor tracking runtime binding refused",err,cap);
     }
@@ -2338,7 +2390,7 @@ static int session_after_vm(GscSession *s, int ok, char *err, size_t cap) {
     if(!session_animation_resources_current(s))
         return session_failed(s,"start-origin resources retired during execution",err,cap);
     session_capture(s);
-    s->view.state = gsc_active_threads(s->runtime) ? GSC_SESSION_RUNNING : GSC_SESSION_COMPLETED;
+    s->view.state = gsc_has_active_threads(s->runtime) ? GSC_SESSION_RUNNING : GSC_SESSION_COMPLETED;
     s->busy = 0; return 1;
 }
 #include "gsc_session_r232_turret_entry.inc"
@@ -2349,6 +2401,8 @@ int gsc_session_start(GscSession *s, uint64_t id, int64_t now, char *err, size_t
     if (s->view.state != GSC_SESSION_PREPARED)
         return session_leave_rejected(s, "session not prepared", err, cap);
     if (now < 0) return session_failed(s, "negative host time", err, cap);
+    if(s->root_map_enabled&&s->actor_bootstrap_enabled&&!s->map_actor_program_enabled)return session_failed(s,"ordinary map root cannot replace actor bootstrap",err,cap);
+    if(s->map_actor_program_enabled&&(!s->actor_program_enabled||!s->actor_bootstrap_enabled||!s->actor_bootstrap.construct||!s->script_roots_enabled||!s->script_roots_ready||s->root_map.receipt!=s->actor_program.epoch))return session_failed(s,"composed map requires genuine Actor construction and global/map roots",err,cap);
     if(s->actor_bootstrap_enabled&&s->actor_bootstrap.construct&&
        (!s->actor_construct_complete||s->actor_construct_count!=s->actor_bootstrap.placed_count||
         s->actor_construct_program!=gsc_runtime_program_identity(s->runtime)))
@@ -2360,7 +2414,14 @@ int gsc_session_start(GscSession *s, uint64_t id, int64_t now, char *err, size_t
     s->shellshock_initial_window=s->shellshock_enabled;
     if(s->actor_bootstrap_enabled){char why[GSC_SESSION_ERROR_CAP];why[0]=0;
         if(!session_actor_prelude(s,why,sizeof(why))){s->shellshock_initial_window=0;return session_failed(s,why[0]?why:"actor bootstrap prelude refused",err,cap);}
-        ok=gsc_start_configured_main_after_bootstrap(s->runtime,&s->actor_bootstrap.map_certificate);
+        if(s->actor_bootstrap.placed_cohort){
+            if(!session_script_roots_current(s)||!session_script_roots_cache_current(s)){
+                s->shellshock_initial_window=0;return session_failed(s,"cached map root retired after placed INIT",err,cap);
+            }
+            ok=gsc_start_configured_main_after_cohort(s->runtime,&s->actor_bootstrap.map_certificate,id,s->actor_bootstrap.placed_count);
+        }else ok=gsc_start_configured_main_after_bootstrap(s->runtime,&s->actor_bootstrap.map_certificate);
+    }else if(s->root_map_enabled){SessionRootMapLease l={s,s->runtime,s->view.session_id,s->root_map};
+        ok=gsc_start_with_map(s->runtime,&s->root_map,session_root_map_start_current,&l);
     }else ok=gsc_start(s->runtime);
     s->shellshock_initial_window=0;
     return session_after_vm(s,ok,err,cap);
@@ -2537,6 +2598,15 @@ int gsc_session_running_at(const GscSession *s,uint64_t id,int logical,int host)
     return gsc_session_is_running(s,id) && logical>=0 && host>=logical &&
         s->view.logical_ms==logical && s->view.origin_host_ms==(int64_t)host-logical;
 }
+int gsc_session_timing(const GscSession *s,GscSessionTiming *out) {
+    GscSessionTiming value={0};
+    if(!s||!out)return 0;
+    value.session_id=s->view.session_id;
+    value.origin_host_ms=s->view.origin_host_ms;value.last_host_ms=s->view.last_host_ms;
+    value.state=s->view.state;value.busy=s->busy;
+    value.logical_ms=s->view.logical_ms;value.has_error=s->view.error[0]!=0;
+    *out=value;return 1;
+}
 int gsc_session_snapshot(const GscSession *s, GscSessionSnapshot *out) {
     if (!s || !out) return 0;
     *out = s->view; out->busy = s->busy;
@@ -2669,11 +2739,15 @@ int gsc_session_select_r243_flagged_all(GscSession*s,const GscActorAnimationHost
  if(!session_animation_resources_current(s)||memcmp(input,&h,sizeof(h)))return session_leave_rejected(s,"method12 provider retired",error,cap);
  s->command_provider=h;s->flagged_all_method_enabled=1;s->busy=0;return 1;
 }
-static int r243_command_program_select(GscSession*s){return !s->flagged_all_method_enabled||R243ProgramSelectFlaggedAll(s->program);}
-static int r243_command_runtime_bind(GscSession*s){return !s->flagged_all_method_enabled||(session_animation_resources_current(s)&&R243RuntimeSelectFlaggedAll(s->runtime)&&session_animation_resources_current(s));}
+static int r243_command_program_select(GscSession*s){return !(s->flagged_all_method_enabled||s->map_flagged_all_enabled)||R243ProgramSelectFlaggedAll(s->program);}
+static int r243_command_runtime_bind(GscSession*s){return !(s->flagged_all_method_enabled||s->map_flagged_all_enabled)||(session_animation_resources_current(s)&&R243RuntimeSelectFlaggedAll(s->runtime)&&session_animation_resources_current(s));}
 
 #include "gsc_session_node_scripts.inc"
 #include "gsc_session_node_graph.inc"
 #include "gsc_session_actor_graph.inc"
 #include "gsc_session_actor_placed_init.inc"
 #include "gsc_session_postcohort.inc"
+
+int gsc_session_model_starting(const GscSession *s,uint64_t id,int host_time){
+    return gsc_session_running_at(s,id,0,host_time) && gsc_runtime_model_starting(s->runtime);
+}

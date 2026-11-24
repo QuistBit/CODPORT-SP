@@ -608,6 +608,30 @@ G_RunMissile
 
 ================
 */
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+static GscEntityRef noGrenadeBounce[MAX_GENTITIES];
+int G_Cod1DisableGrenadeBounce(const GscEntityRef *ref){
+    if(!G_Cod1EntitySameAllocation(ref))return 0;
+    noGrenadeBounce[ref->slot]=*ref;
+    return 1;
+}
+/* GAME 24B98 temporarily removes the first hit's contents, traces the
+ * original segment again and restores that same entity. The second hit,
+ * including solid geometry behind the flagged entity, remains binding. */
+static void GrenadeRetrace(gentity_t *ent,const vec3_t start,const vec3_t end,trace_t *tr){
+    GscEntityRef ref;gentity_t *hit;int contents;
+    if(tr->fraction==1||tr->entityNum<0||tr->entityNum>=ENTITYNUM_WORLD||
+       !noGrenadeBounce[tr->entityNum].epoch||!G_Cod1Grenade(ent))return;
+    hit=&g_entities[tr->entityNum];
+    if(!G_Cod1EntityCapture(hit,&ref)||memcmp(&ref,noGrenadeBounce+ref.slot,sizeof(ref)))return;
+    contents=hit->r.contents;hit->r.contents=0;
+    trap_Trace(tr,start,ent->r.mins,ent->r.maxs,end,ent->r.ownerNum,ent->clipmask);
+    if(G_Cod1EntitySameAllocation(&ref))hit->r.contents=contents;
+    if(g_debugMove.integer>1)
+        G_Printf("[grenade retrace] skip=%u/%u next=%d fraction=%g contents=%d\n",
+                 ref.slot,ref.generation,tr->entityNum,tr->fraction,contents);
+}
+#endif
 void G_RunMissile( gentity_t *ent ) {
 	vec3_t origin, dir;         // 'dir' is 'deltaMove'
 	trace_t tr;
@@ -636,6 +660,9 @@ void G_RunMissile( gentity_t *ent ) {
 	trap_Trace( &tr, ent->r.currentOrigin, ent->r.mins, ent->r.maxs, origin,
 				ent->r.ownerNum, ent->clipmask );
 
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+        GrenadeRetrace(ent,ent->r.currentOrigin,origin,&tr);
+#endif
 	VectorCopy( tr.endpos, ent->r.currentOrigin );
 
 	if ( tr.startsolid ) {
@@ -746,6 +773,9 @@ int G_PredictMissile( gentity_t *ent, int duration, vec3_t endPos, qboolean allo
 		trap_Trace( &tr, org, ent->r.mins, ent->r.maxs, origin,
 					ent->r.ownerNum, ent->clipmask );
 
+#if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+        GrenadeRetrace(ent,org,origin,&tr);
+#endif
 		VectorCopy( tr.endpos, org );
 
 		if ( tr.startsolid ) {

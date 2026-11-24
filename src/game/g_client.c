@@ -661,8 +661,28 @@ void reinforce( gentity_t *ent ) {
 respawn
 ================
 */
+qboolean G_Cod1DeadPlayer( const gentity_t *ent ) {
+	return g_gametype.integer == GT_SINGLE_PLAYER && G_Cod1MapEntities() &&
+	       ent == &g_entities[0] && ent->inuse && ent->client == level.clients &&
+	       ent->client && ent->client->pers.connected == CON_CONNECTED &&
+	       ent->client->ps.pm_type == PM_DEAD && !( ent->r.svFlags & SVF_CASTAI );
+}
+
 void respawn( gentity_t *ent ) {
 	gentity_t   *tent;
+
+	/* CoD GAME 0x20014790. The original death notification has already
+	 * supplied the quote. Keep the player allocated while the menu owns input. */
+	if ( G_Cod1DeadPlayer( ent ) ) {
+		if ( !g_reloading.integer && !saveGamePending && !level.reloadDelayTime ) {
+			trap_SendServerCommand( -1, va( "scr_fade 1 %d 2000", level.time + 1000 ) );
+			trap_Cvar_Set( "g_reloading", "1" );
+			level.reloadDelayTime = level.time + 2000;
+			trap_SendServerCommand( -1, "snd_fade 0 2000" );
+		}
+		return;
+	}
+
 	G_Cod1PlayerLifetimeRetire( ent );
 
 	// Ridah, if single player, reload the last saved game for this player
@@ -1676,7 +1696,7 @@ and on transition between teams, but doesn't happen on respawns
 void ClientBegin( int clientNum ) {
 	gentity_t   *ent;
 	gclient_t   *client;
-	gentity_t   *tent;
+	gentity_t   *tent = NULL;
 	int flags;
 	int spawn_count;                // DHM - Nerve
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
@@ -1759,6 +1779,7 @@ void ClientBegin( int clientNum ) {
 	CalculateRanks();
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
 	Cod1PlayerLifeComplete( ent, cod1LifeBegin );
+	Cod1BeginEventComplete(ent,tent);
 #endif
 	G_Cod1GscTestClientSpawned( ent );
 

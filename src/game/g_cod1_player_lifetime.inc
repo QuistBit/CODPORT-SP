@@ -13,6 +13,8 @@ typedef struct {
  int expected_spawn;
  uint32_t previous_generation;
 } C1PlayerLife;
+static GscEntityRef cod1BeginEvent;
+static cod1PlayerLifetime_t cod1BeginEventPlayer;
 static C1PlayerLife cod1PlayerLife[MAX_CLIENTS];
 static uint64_t cod1PlayerLifeTransaction,cod1PlayerLifeCompletion,cod1PlayerLifeActivity;
 static int cod1PlayerLifeExhausted;
@@ -20,7 +22,9 @@ static int Cod1PlayerLifeOverlap(const void*a,size_t n,const void*b,size_t m){
  uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&n&&m&&(x<=y?y-x<n:x-y<m);
 }
 int G_Cod1PlayerLifetimePrivate(const void*p,size_t n){
- return Cod1PlayerLifeOverlap(p,n,cod1PlayerLife,sizeof(cod1PlayerLife))||
+ return Cod1PlayerLifeOverlap(p,n,&cod1BeginEvent,sizeof(cod1BeginEvent))||
+  Cod1PlayerLifeOverlap(p,n,&cod1BeginEventPlayer,sizeof(cod1BeginEventPlayer))||
+  Cod1PlayerLifeOverlap(p,n,cod1PlayerLife,sizeof(cod1PlayerLife))||
   Cod1PlayerLifeOverlap(p,n,&cod1PlayerLifeTransaction,sizeof(cod1PlayerLifeTransaction))||
   Cod1PlayerLifeOverlap(p,n,&cod1PlayerLifeCompletion,sizeof(cod1PlayerLifeCompletion))||
   Cod1PlayerLifeOverlap(p,n,&cod1PlayerLifeActivity,sizeof(cod1PlayerLifeActivity))||
@@ -174,6 +178,28 @@ int G_Cod1PlayerLifetimeSameCompleted(const cod1PlayerLifetime_t*input){
  if(!input)return 0;q=*input;r=Cod1PlayerLifeCompleted(&q.entity);
  return r&&q.completion==r->receipt.completion&&q.activity==r->receipt.activity&&
   q.spawn_count==r->receipt.spawn_count&&q.completed_time==r->receipt.completed_time;
+}
+static void Cod1BeginEventComplete(gentity_t *player,gentity_t *event){
+ GscEntityRef ref;cod1PlayerLifetime_t current;
+ if(player!=g_entities)return;
+ memset(&cod1BeginEvent,0,sizeof(cod1BeginEvent));
+ if(!event||!G_Cod1EntityCapture(player,&ref)||!G_Cod1PlayerLifetimeRead(&ref,&current)||
+    !G_Cod1EntityCapture(event,&ref)||event->s.eType!=ET_EVENTS+EV_PLAYER_TELEPORT_IN||
+    event->eventTime!=level.time||event->s.clientNum!=0)return;
+ cod1BeginEvent=ref;cod1BeginEventPlayer=current;
+}
+/* RTCW allocates a transient entity solely to deliver the entry event.
+ * Only this exact allocation and its completed client may be omitted
+ * from the original startup node scan. Other temp events are unrelated. */
+int G_Cod1StartupPlayerEvent(const GscEntityRef *ref){
+ cod1PlayerLifetime_t current;gentity_t *e;
+ if(!ref||ref->epoch!=cod1BeginEvent.epoch||ref->slot!=cod1BeginEvent.slot||
+    ref->generation!=cod1BeginEvent.generation||!G_Cod1EntitySameAllocation(ref)||
+    !G_Cod1StartupPlayerPath(&cod1BeginEventPlayer.entity,&current)||
+    current.completion!=cod1BeginEventPlayer.completion)return 0;
+ e=g_entities+ref->slot;
+ return e->s.eType==ET_EVENTS+EV_PLAYER_TELEPORT_IN&&e->s.clientNum==0&&e->freeAfterEvent&&
+  e->eventTime==current.completed_time&&e->r.eventTime==e->eventTime&&!e->r.contents&&!e->client;
 }
 int G_Cod1PlayerLifetimeUnadvanced(const cod1PlayerLifetime_t*input){
  cod1PlayerLifetime_t q;

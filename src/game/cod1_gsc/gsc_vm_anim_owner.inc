@@ -24,25 +24,37 @@ static int anim_data_tree_literal_needed(const GscProgram*g,int index,const unsi
   }
  return 0;
 }
-static int anim_data_program_ready_mask(const GscProgram *g,const unsigned char*mask){
+static int anim_data_program_ready_checked(const GscProgram *g,const unsigned char*mask,char*error,size_t cap){
  int n,k;
  if(!g||!g->anim_data_selected||(g->requires_anim_ref_semantics&&!g->animation_refs_selected&&!g->animation_namespace_selected)||(g->requires_animtree_value_semantics&&!g->animation_namespace_selected))return 0;
- for(n=0;n<g->string_count;++n)if(g->strings[n].owner_kind==GSC_STRING_OWNER_ANIMTREE&&anim_data_tree_literal_needed(g,n,mask)&&
-  (!string_literal_decoded(g,&g->strings[n])||(g->animation_namespace_selected?animation_namespace_tree_index_for_program(g,g->strings[n].decoded)<0:strcmp(g->strings[n].decoded,"generic_human"))))return 0;
- for(n=0;n<g->func_count;++n)if(anim_data_function_selected(g,n,mask))for(k=0;k<g->funcs[n].argc;++k)if(!strcmp(g->funcs[n].params[k],"anim"))return 0;
+ for(n=0;n<g->string_count;++n){
+  const StringLiteral *literal=&g->strings[n];
+  int decoded;
+  if(literal->owner_kind!=GSC_STRING_OWNER_ANIMTREE)continue;
+  decoded=string_literal_decoded(g,literal);
+  if(decoded && (g->animation_namespace_selected
+      ? animation_namespace_tree_index_for_program(g,literal->decoded)>=0
+      : !strcmp(literal->decoded,"generic_human")))continue;
+  /* Only an unsupported declaration needs the per-function admission search. */
+  if(anim_data_tree_literal_needed(g,n,mask)){
+   if(error&&cap)snprintf(error,cap,"animtree declaration unsupported: %s in %s (decoded=%d)",literal->decoded,g->modules[literal->module],decoded);
+   return 0;
+  }
+ }
+ for(n=0;n<g->func_count;++n)if(anim_data_function_selected(g,n,mask))for(k=0;k<g->funcs[n].argc;++k)if(!strcmp(g->funcs[n].params[k],"anim")){if(error&&cap)snprintf(error,cap,"reserved anim formal in %s::%s",g->modules[g->funcs[n].module],g->funcs[n].name);return 0;}
  {int f,first,last;
   for(f=0;f<(g->function_admission_selected?g->func_count:1);f++){
    if(g->function_admission_selected&&!anim_data_function_selected(g,f,mask))continue;
    first=g->function_admission_selected?g->funcs[f].start:0;last=g->function_admission_selected?g->funcs[f].end:g->code_count;
    for(n=first;n<last;n++){const Instr*i=g->code+n;
     if(i->kind!=I_WAITER&&!(i->kind==I_METHOD&&i->receiver_binding_kind==GSC_RECEIVER_TARGET_ENTITY_EVENT&&i->receiver_event_target==ENTITY_EVENT_WAITTILL))continue;
-    for(k=1;k<i->argc;++k)if(i->args[k]>=0&&i->args[k]<g->expr_count&&g->expr[i->args[k]].kind==E_VAR&&!strcmp(g->expr[i->args[k]].name,"anim"))return 0;
+    for(k=1;k<i->argc;++k)if(i->args[k]>=0&&i->args[k]<g->expr_count&&g->expr[i->args[k]].kind==E_VAR&&!strcmp(g->expr[i->args[k]].name,"anim")){if(error&&cap)snprintf(error,cap,"reserved anim wait result at line%d",i->line);return 0;}
    }
   }
  }
  return 1;
 }
-static int anim_data_program_ready(const GscProgram*g){return anim_data_program_ready_mask(g,NULL);}
+static int anim_data_program_ready_mask(const GscProgram*g,const unsigned char*mask){return anim_data_program_ready_checked(g,mask,NULL,0);}
 int gsc_runtime_select_anim_data(GscRuntime *r,const GscMapExecutionCertificate *input){
     GscMapExecutionCertificate copy;int current;
     if(!r||!input||r->started||r->advancing||r->executing_task||r->task_count||r->error[0]||r->anim_data_enabled||

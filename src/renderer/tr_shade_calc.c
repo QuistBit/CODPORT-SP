@@ -30,6 +30,8 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "tr_local.h"
 #include "cod1_autosprite2.h"
+#include "../qcommon/cod1_jobs.h"
+#include "cod1_parallel_light.inc"
 
 
 #define WAVEVALUE( table, base, amplitude, phase, freq )  ( ( base ) + table[ myftol( ( ( ( phase ) + tess.shaderTime * ( freq ) ) * FUNCTABLE_SIZE ) ) & FUNCTABLE_MASK ] * ( amplitude ) )
@@ -1268,11 +1270,7 @@ void RB_CalcDiffuseColor( unsigned char *colors ) {
 	if ( ent->cod1ModelLighting.valid && tess.shader->cod1ShaderType &&
 	     !tess.shader->cod1StaticModelSource &&
 	     tess.shader->cod1ShaderTypeLightmapKey == LIGHTMAP_NONE ) {
-		for ( i = 0; i < tess.numVertexes; i++ ) {
-			if ( !R_Cod1ShadeEntityVertex( ent, tess.xyz[i], tess.normal[i],
-			                              colors + i * 4 ) ) break;
-		}
-		if ( i == tess.numVertexes ) {
+		if ( R_Cod1ShadeParallel(ent,tess.numVertexes,tess.xyz,tess.normal,colors) ) {
 			tess.cod1PreparedModelDiffuse = qtrue;
 			return;
 		}

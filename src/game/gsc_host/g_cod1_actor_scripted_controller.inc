@@ -198,10 +198,10 @@ static int ActorControllerPrivate(const void*p,size_t n){C1ControllerOperation*o
   ActorOverlap(p,n,o->stage,o->stage?sizeof(*o->stage):0)||
   ActorOverlap(p,n,o->entity,o->entity?sizeof(*o->entity):0)||
   ActorOverlap(p,n,o->genericDeepBefore.nodes,o->genericDeepBefore.nodes?C1GA_COUNT*sizeof(*o->genericDeepBefore.nodes):0)||
-  ActorOverlap(p,n,o->genericDeepBefore.notify,o->genericDeepBefore.notify?sizeof(*o->genericDeepBefore.notify):0)||
+  ActorGenericNamesPrivate(p,n,&o->genericDeepBefore)||ActorOverlap(p,n,o->genericDeepBefore.notify,o->genericDeepBefore.notify?sizeof(*o->genericDeepBefore.notify):0)||
   ActorOverlap(p,n,e,e?sizeof(*e):0)||
   (e&&(ActorOverlap(p,n,e->generic.nodes,e->generic.nodes?C1GA_COUNT*sizeof(*e->generic.nodes):0)||
-       ActorOverlap(p,n,e->generic.notify,e->generic.notify?sizeof(*e->generic.notify):0)));
+       ActorGenericNamesPrivate(p,n,&e->generic)||ActorOverlap(p,n,e->generic.notify,e->generic.notify?sizeof(*e->generic.notify):0)));
 }
 static void ActorControllerExpectedFree(C1ControllerOperation*o){
  if(o->expected){ActorGenericFreeOwned(&o->expected->generic);free(o->expected);o->expected=NULL;}
@@ -250,17 +250,17 @@ static int ActorControllerSnapshotStable(const C1ControllerOperation*o){
  const cod1EntityNativeStaticRecord_t*s=NativeStaticFind(&o->lease.entity);
  if(memcmp(g,&o->genericHeaderBefore,sizeof(*g))||!g->nodes||!g->notify||
     !o->genericDeepBefore.nodes||!o->genericDeepBefore.notify||
-    memcmp(g->nodes,o->genericDeepBefore.nodes,C1GA_COUNT*sizeof(*g->nodes))||
-    memcmp(g->notify,o->genericDeepBefore.notify,sizeof(*g->notify))||
-    memcmp(cod1FaceFrames+o->lease.actorIndex,&o->frameBefore,sizeof(o->frameBefore))||
-    r!=o->recordPointerBefore||(r&&memcmp(r,&o->recordBefore,sizeof(*r)))||
-    ((s!=NULL)!=o->nativeStaticPresent)||(s&&memcmp(s,&o->nativeStaticBefore,sizeof(*s))))return 0;
+    !R242ExactATRBytesEqual(g->nodes,o->genericDeepBefore.nodes,C1GA_COUNT*sizeof(*g->nodes))||
+    !R242ExactATRBytesEqual(g->notify,o->genericDeepBefore.notify,sizeof(*g->notify))||!ActorGenericNamesEqual(g,&o->genericDeepBefore)||
+    !R242ExactATRBytesEqual(cod1FaceFrames+o->lease.actorIndex,&o->frameBefore,sizeof(o->frameBefore))||
+    r!=o->recordPointerBefore||(r&&!R242ExactATRBytesEqual(r,&o->recordBefore,sizeof(*r)))||
+    ((s!=NULL)!=o->nativeStaticPresent)||(s&&!R242ExactATRBytesEqual(s,&o->nativeStaticBefore,sizeof(*s))))return 0;
  return 1;
 }
 static int ActorControllerScope(const C1ControllerOperation*o){
  return ActorControllerIdentity(o)&&
-  !memcmp(cod1Actors+o->lease.actorIndex,o->before,sizeof(*o->before))&&
-  !memcmp(g_entities+o->lease.entity.slot,o->entity,sizeof(*o->entity))&&
+  R242ExactATRBytesEqual(cod1Actors+o->lease.actorIndex,o->before,sizeof(*o->before))&&
+  R242ExactATRBytesEqual(g_entities+o->lease.entity.slot,o->entity,sizeof(*o->entity))&&
   ActorControllerSnapshotStable(o);
 }
 static int ActorControllerCurrent(void*context){
@@ -268,7 +268,7 @@ static int ActorControllerCurrent(void*context){
  if(!ActorControllerScope(o))return 0;
  if(o->checking){o->cancelled=1;return 0;}o->checking=1;saved=*o;
  ok=o->current(o->context)==1;
- if(memcmp(o,&saved,sizeof(saved)))ok=0;
+ if(!R242ExactATRBytesEqual(o,&saved,sizeof(saved)))ok=0;
  if(!ActorControllerScope(o))ok=0;
  o->checking=0;return ok;
 }
@@ -431,23 +431,23 @@ static int ActorControllerExpectedMatches(C1ControllerOperation*o){
  if(!e||!ActorControllerIdentity(o)||o->checking||cod1GenericOperation.busy||
     cod1FaceFrameOperation||cod1NormalUpdate.busy||cod1NormalOperation.busy)return 0;
  g=cod1GenericActors+o->lease.actorIndex;r=cod1NormalRecords[o->lease.actorIndex];
- s=NativeStaticFind(&o->lease.entity);h=e->generic;h.nodes=g->nodes;h.notify=g->notify;
+ s=NativeStaticFind(&o->lease.entity);h=e->generic;h.nodes=g->nodes;h.notify=g->notify;h.names=g->names;
  return g->nodes&&g->notify&&e->generic.nodes&&e->generic.notify&&
   !memcmp(g,&h,sizeof(h))&&
-  !memcmp(g->nodes,e->generic.nodes,C1GA_COUNT*sizeof(*g->nodes))&&
-  !memcmp(g->notify,e->generic.notify,sizeof(*g->notify))&&
-  !memcmp(cod1FaceFrames+o->lease.actorIndex,&e->frame,sizeof(e->frame))&&
-  r==e->recordPointer&&(!r||!memcmp(r,&e->record,sizeof(*r)))&&
-  ((s!=NULL)==e->nativeStaticPresent)&&(!s||!memcmp(s,&e->nativeStatic,sizeof(*s)))&&
-  !memcmp(cod1Actors+o->lease.actorIndex,&e->actor,sizeof(e->actor))&&
-  !memcmp(g_entities+o->lease.entity.slot,&e->entity,sizeof(e->entity));
+  R242ExactATRBytesEqual(g->nodes,e->generic.nodes,C1GA_COUNT*sizeof(*g->nodes))&&
+  R242ExactATRBytesEqual(g->notify,e->generic.notify,sizeof(*g->notify))&&ActorGenericNamesEqual(g,&e->generic)&&
+  R242ExactATRBytesEqual(cod1FaceFrames+o->lease.actorIndex,&e->frame,sizeof(e->frame))&&
+  r==e->recordPointer&&(!r||R242ExactATRBytesEqual(r,&e->record,sizeof(*r)))&&
+  ((s!=NULL)==e->nativeStaticPresent)&&(!s||R242ExactATRBytesEqual(s,&e->nativeStatic,sizeof(*s)))&&
+  R242ExactATRBytesEqual(cod1Actors+o->lease.actorIndex,&e->actor,sizeof(e->actor))&&
+  R242ExactATRBytesEqual(g_entities+o->lease.entity.slot,&e->entity,sizeof(e->entity));
 }
 /* No callbacks/allocation after comparison before this transfer. The original
  * per-operation BEFORE clone is freed, never the already-replaced LIVE arrays. */
 static void ActorControllerExpectedRebase(C1ControllerOperation*o,int actorStage){
  C1ControllerExpected*e=o->expected;
  ActorGenericFreeOwned(&o->genericDeepBefore);o->genericDeepBefore=e->generic;
- e->generic.nodes=NULL;e->generic.notify=NULL;
+ e->generic.nodes=NULL;e->generic.notify=NULL;e->generic.names=NULL;
  o->genericHeaderBefore=cod1GenericActors[o->lease.actorIndex];o->frameBefore=e->frame;
  o->recordPointerBefore=e->recordPointer;o->recordBefore=e->record;
  o->nativeStaticPresent=e->nativeStaticPresent;o->nativeStaticBefore=e->nativeStatic;
@@ -601,11 +601,13 @@ static void ActorControllerActualCommit(cod1ActorRecord_t*a,const cod1ActorActua
  a->turretMount.currentTop=in->top;memcpy(a->turretMount.currentStack,in->stack,sizeof(in->stack));
  a->scriptedController.base_entered_ms=in->base_entered_ms;
 }
+#include "g_cod1_actor_locomotion_select.inc"
 int G_Cod1ActorSelectWithCleanup(void*u,const GscActorControllerRequest*input,
  GscActorControllerSelection*out,char*error,size_t cap,int(*current)(void*),void*ctx,const GscMainReplacementService*service){
  C1ControllerOperation*o=&cod1ControllerOperation;cod1ActorRecord_t*a;cod1ActorScriptedController_t*m;
  cod1ActorActualState_t actual;cod1ActorCriticalState_t queue;cod1ActorStateCallbacks_t cb;
  GscActorControllerSelection result;GscEntityRef ref;int changed,replaced=0,ok=0;(void)u;
+ if(input&&input->locomotion_source)return ActorLocomotionSelect(input,out,error,cap,current,ctx,service);
  if(!input||!out||!ActorGoalBuffers(input,sizeof(*input),out,sizeof(*out),error,cap)||
     ActorOverlap(input,sizeof(*input),out,sizeof(*out)))return 0;ref=input->entity;
  if(!ActorControllerBegin(input,sizeof(*input),C1CTRL_SELECT,&ref,input->now_ms,current,ctx))return 0;
@@ -642,16 +644,22 @@ int G_Cod1ActorSelectWithCleanup(void*u,const GscActorControllerRequest*input,
  /* On restart, native 57080 retires the retained MAIN before clearing tracking. */
  if(changed){
   int repeat=m->resumed4 || replaced;
+  /* The service exists only for an actual retained reference. The initial
+   * stop reference has selection zero; native57080 depends on that reference,
+   * independently of the old source/category request producers. */
+  int cleanup=repeat || (!m->currentSource&&!m->selectionSerial&&service&&service->run);
   uint64_t selection=m->selectionSerial;
   if(repeat){
    if(!service||!service->run||!m->force250||actual.top!=1||actual.stack[1]!=9||queue.command_count||
       m->revision>=UINT64_MAX-1||!service->run(service->context,0,selection,ActorControllerCurrent,o)||
       !ActorControllerCurrent(o))goto done;
   }else if(m->currentSource||selection)goto done;
+  else if(cleanup && (m->revision>=UINT64_MAX-1||
+          !service->run(service->context,0,selection,ActorControllerCurrent,o)||!ActorControllerCurrent(o)))goto done;
   m->currentCategory=4;m->force250=0;
   a->defaults.allocation.cell0134=0;a->nativeInteraction1170=0;a->nativeMode264=0;
   a->nativeData.entity.nativeEntityFlags&=~UINT32_C(0x10000);
-  if(repeat){
+  if(cleanup){
    /* Native 57127..57149 precede 57080. Seal the actual intermediate actor before calling the VM. */
    ++m->revision;
    cod1Actors[o->lease.actorIndex]=*a;*o->before=*a;

@@ -113,6 +113,20 @@ int gsc_session_select_actor_program(GscSession*s,const GscSessionActorProgramPl
  if(!session_actor_program_current(s))return session_failed(s,"actor program declaration unavailable",error,cap);
  memset(&s->actor_bootstrap,0,sizeof(s->actor_bootstrap));s->actor_bootstrap_enabled=0;s->actor_admission_attempted=0;s->busy=0;return 1;
 }
+/* Explicit composition of copied map resources and the real early Actor
+ * declaration plan. It never substitutes a map-only root for constructors. */
+int gsc_session_select_map_actor_program(GscSession*s,const GscSessionActorProgramPlan*input,char*error,size_t cap){
+ GscSessionActorProgramPlan copy;
+ if(!s||!input||session_animation_namespace_private(s,input,sizeof(*input))||session_animation_namespace_private(s,error,cap)||session_animation_namespace_overlap(input,sizeof(*input),error,cap))return 0;
+ copy=*input;
+ if(s->busy||s->view.state!=GSC_SESSION_EMPTY||s->program||s->runtime||s->map_actor_program_enabled||
+    !s->root_map_enabled||s->root_map.receipt!=copy.epoch||!s->root_map.current||!s->map_animation_names.count||!s->animation_namespace_enabled||!s->map_source_float_enabled)
+  return session_reject(error,cap,"map Actor program requires same-epoch map resources and fresh declarations");
+ if(!gsc_session_select_actor_program(s,&copy,error,cap))return 0;
+ if(!session_enter(s,error,cap))return 0;
+ if(memcmp(input,&copy,sizeof(copy))||!session_animation_resources_current(s)||!session_actor_program_current(s))return session_failed(s,"map Actor declaration or resources changed during selection",error,cap);
+ s->map_actor_program_enabled=1;s->busy=0;return 1;
+}
 int gsc_session_admit_actor_bootstrap(GscSession*s,uint64_t id,const GscSessionActorBootstrapHost*input,char*error,size_t cap){
  GscSessionActorBootstrapHost copy;char why[GSC_SESSION_ERROR_CAP];int ok;
  if(s&&s->bsp_runtime&&(!gsc_runtime_storage_separate(s->bsp_runtime,input,input?sizeof(*input):0)||!gsc_runtime_storage_separate(s->bsp_runtime,error,cap)||session_actor_overlap(error,cap,s,sizeof(*s))))return 0;
@@ -330,7 +344,8 @@ static int session_actor_prelude(GscSession *s,char *error,size_t cap) {
     if(!session_actor_scope(&lease,1)){ok=0;session_message(error,cap,"actor bootstrap map retired before prelude");}
     else ok=s->actor_bootstrap.run(s->actor_bootstrap.user,&api,error,cap);
     if(ok==1&&(!session_actor_scope(&lease,1)||memcmp(&api,&expected,sizeof(api))||lease.failed||!lease.hooks_returned||
-       lease.prepared!=s->actor_bootstrap.placed_count||gsc_active_threads(s->runtime)||gsc_runtime_error(s->runtime)[0])) {
+       lease.prepared!=s->actor_bootstrap.placed_count||
+       (s->actor_bootstrap.placed_cohort?(!lease.late_done||!gsc_placed_cohort_current(s->runtime,lease.id)):gsc_active_threads(s->runtime))||gsc_runtime_error(s->runtime)[0])) {
         ok=0;session_message(error,cap,"actor bootstrap did not complete its selected roots and placed plan");
     }
     lease.active=0;s->actor_bootstrap_running=0;return ok==1;

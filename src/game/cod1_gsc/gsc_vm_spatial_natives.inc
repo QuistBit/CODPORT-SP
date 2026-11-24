@@ -1,3 +1,4 @@
+static int node_ref_live(GscRuntime *,const GscNodeRef *,int,int *);
 /* Read-only typed engine queries. No native pointer escapes the callback and
  * no result is published after cancellation or retirement of either entity. */
 int gsc_program_select_spatial_natives(GscProgram *g) {
@@ -42,6 +43,15 @@ static int spatial_native_invoke(GscRuntime *r,const Value *receiver,int descrip
         if(result.kind!=GSC_SPATIAL_RESULT_INT||(result.value!=0&&result.value!=1))
             return rfail(r,line,"spatial native returned an invalid boolean");
         scalar_integer(&staged,result.value);
+    }else if(kind==GSC_SPATIAL_STANDING_NODE){
+        if(result.kind!=GSC_SPATIAL_RESULT_NODE)return rfail(r,line,"expected standing node result");
+        if(result.value){
+            int alive;
+            staged.kind=V_NODE;
+            staged.node.epoch=((uint64_t)result.node.epochHi<<32)|result.node.epochLo;
+            staged.node.index=result.node.index;staged.node.generation=(uint32_t)result.value;
+            if(!node_ref_live(r,&staged.node,line,&alive)||!alive)return rfail(r,line,"standing node retired");
+        }
     }else{
         if(result.kind!=GSC_SPATIAL_RESULT_VECTOR)return rfail(r,line,"spatial native returned the wrong vector kind");
         staged.kind=V_VECTOR;

@@ -164,11 +164,11 @@ static int hud_method_invoke(GscRuntime *r,const Value *receiver,int method,cons
         memcpy(request.text,args[2].str,sizeof(request.text));
     }
     if(method==GSC_HUDELEM_SET_SHADER) {
-        if(args[0].kind!=V_STRING||strcmp(args[0].str,"black")||
+        if(args[0].kind!=V_STRING||!args[0].str[0]||!memchr(args[0].str,0,sizeof(request.text))||
            !scalar_get_integer(r,&args[1],line,&width)||!scalar_get_integer(r,&args[2],line,&height))
-            return rfail(r,line,"selected HUD shader requires black and integer dimensions");
+            return rfail(r,line,"HUD shader requires a bounded name and integer dimensions");
         if(width<0||width>1024||height<0||height>1024)return rfail(r,line,"HUD shader dimensions outside selected domain");
-        strcpy(request.text,"black");request.width=width;request.height=height;
+        strcpy(request.text,args[0].str);request.width=width;request.height=height;
     }
     if(method==GSC_HUDELEM_SET_TEXT) {
         if(args[0].kind!=V_LOCALIZED_STRING||!memchr(args[0].str,0,sizeof(args[0].str)))

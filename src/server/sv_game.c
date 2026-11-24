@@ -329,6 +329,7 @@ The module is making a system call
 
 /* R113 paired private query; no shared/network layout change. */
 int SV_Cod1SpatialPointTrace(const cod1SpatialTraceQuery_t *query, trace_t *output);
+int SV_Cod1SpatialBoxTrace(const cod1SpatialTraceQuery_t *query, trace_t *output);
 
 /* Original syscall149 resets entity token cursor to the current CM entity string.
  * This port exposes the selected prepass handoff only once, after EOF, during
@@ -446,6 +447,8 @@ int SV_GameSystemCalls( int *args ) {
 		return 0;
 	case G_COD1_SPATIAL_CAPSULE_TRACE:
 		return SV_Cod1SpatialCapsuleTrace(VMA(1), VMA(2));
+	case G_COD1_SPATIAL_BOX_TRACE:
+		return SV_Cod1SpatialBoxTrace(VMA(1), VMA(2));
 	case G_COD1_SPATIAL_POINT_TRACE:
 		return SV_Cod1SpatialPointTrace(VMA(1), VMA(2));
 	case G_COD1_SPATIAL_AREA:
@@ -458,6 +461,8 @@ int SV_GameSystemCalls( int *args ) {
 		return SV_Cod1SpatialActorUnlink(VMA(1));
 	case G_COD1_PATH_SIGHT:
 		return SV_Cod1PathSight(VMA(1),VMA(2));
+	case G_COD1_PATH_WORLD_SIGHT:
+		return SV_Cod1PathWorldSight(VMA(1),VMA(2));
 	case G_COD1_SPATIAL_ACTOR_CONTENTS:
 		return SV_Cod1SpatialActorContents(VMA(1));
 	case G_COD1_SPATIAL_SCENE_RESET:
@@ -472,6 +477,10 @@ int SV_GameSystemCalls( int *args ) {
 		return SV_Cod1DObjQuery(VMA(1), VMA(2));
 	case G_COD1_RESOURCE_MODEL_PRECACHE:
 		return SV_Cod1ModelPrecache(VMA(1));
+	case G_COD1_MODEL_BOUNDS:
+		return SV_Cod1ModelBounds(VMA(1),VMA(2));
+	case G_COD1_MODEL_PART_NAME:
+		return SV_Cod1ModelPartName(VMA(1),args[2],VMA(3));
 	case G_COD1_MODEL_RESOURCE_REFERENCE:
 		return SV_Cod1ModelResourceReference(VMA(1), VMA(2));
 	case G_COD1_ACTOR_MODEL_APPLY:
@@ -1008,6 +1017,10 @@ static void SV_ClearGameEntityReferences( void ) {
 }
 
 void SV_ShutdownGameProgs( void ) {
+	if ( !com_errorEntered ) {
+		SV_FinishFrameSlice();
+	}
+	SV_ResetFrameSlices();
 	if ( !gvm ) {
 		SV_Cod1PrecacheClearScene();
 		return;
@@ -1065,6 +1078,8 @@ static void SV_InitGameVM( qboolean restart ) {
 	sv_cod1EntityParseInit=1;sv_cod1EntityParseRewound=0;
 	VM_Call( gvm, GAME_INIT, svs.time, Com_Milliseconds(), restart );
 	sv_cod1EntityParseInit=0;
+	SV_SetFrameSliceSupport( gvm->dllHandle && gvm->entryPoint &&
+		VM_Call( gvm, GAME_FRAME_SLICE_API ) == COD1_FRAME_SLICE_API );
 
 	// Keep the existing post-init reset. Reconnecting clients receive their
 	// current game entities later, after this initialization has completed.
@@ -1081,10 +1096,12 @@ Called on a map_restart, but not on a normal map change
 ===================
 */
 void SV_RestartGameProgs( void ) {
+	SV_FinishFrameSlice();
 	if ( !gvm ) {
 		return;
 	}
 	SV_Cod1LocalizedEndGameModule();
+	SV_ResetFrameSlices();
 	VM_Call( gvm, GAME_SHUTDOWN, qtrue );
 	SV_ClearGameEntityReferences();
 

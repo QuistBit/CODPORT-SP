@@ -44,6 +44,7 @@ static int entity_method_finish(GscRuntime *r,const GscEntityRef *owner,int line
 #include "gsc_vm_yaw_motion.inc"
 #include "gsc_vm_attachment_queries.inc"
 #include "gsc_vm_origin_method.inc"
+#include "gsc_vm_vehicle_methods.inc"
 #include "gsc_vm_entity_operations.inc"
 #include "gsc_vm_entity_links.inc"
 #include "gsc_vm_spatial_natives.inc"

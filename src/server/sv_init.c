@@ -967,6 +967,7 @@ void SV_Init( void ) {
 	sv_rconPassword = Cvar_Get( "rconPassword", "", CVAR_TEMP );
 	sv_privatePassword = Cvar_Get( "sv_privatePassword", "", CVAR_TEMP );
 	sv_fps = Cvar_Get( "sv_fps", "20", CVAR_TEMP );
+	sv_frameSmoothing = Cvar_Get( "sv_framerate_smoothing", "0", CVAR_TEMP );
 	sv_timeout = Cvar_Get( "sv_timeout", "120", CVAR_TEMP );
 	sv_zombietime = Cvar_Get( "sv_zombietime", "2", CVAR_TEMP );
 	Cvar_Get( "nextmap", "", CVAR_TEMP );
@@ -1040,6 +1041,9 @@ void SV_Shutdown( char *finalmsg ) {
 		return;
 	}
 
+	if ( !com_errorEntered ) {
+		SV_FinishFrameSlice();
+	}
 	Com_Printf( "----- Server Shutdown -----\n" );
 
 	if ( svs.clients && !com_errorEntered ) {

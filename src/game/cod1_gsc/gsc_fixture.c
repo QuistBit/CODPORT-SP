@@ -150,7 +150,7 @@ struct GscProgram { int r243s_requested;R243SProgramDescriptor r243s_descriptor;
                     CaseNode *cases; int case_count, case_capacity;
                     Func *funcs; int func_count, func_capacity;
                     char (*modules)[MAX_MODULE_PATH]; int module_count, module_capacity;
-                    DevBlock *dev_blocks; int dev_count, dev_capacity;
+                    DevBlock *dev_blocks; int dev_count, dev_capacity,dev_code_ordered;
                     StringLiteral *strings; int string_count, string_capacity;
                     int module_loader_mode, event_payload_syntax, event_payload_mode, predicate_syntax, predicate_mode, actor_spawn_syntax, actor_spawn_mode, function_ref_syntax, function_ref_mode;
                     uint64_t function_program_token;
@@ -180,11 +180,11 @@ struct GscProgram { int r243s_requested;R243SProgramDescriptor r243s_descriptor;
                     int keybinding_syntax, keybinding_mode;
                     int computed_randomint_syntax, computed_randomint_mode;
                     int actor_critical_selected,actor_presence_selected,attachment_queries_selected;int actor_drop_selected,native_animation_roots_selected,owned_numeric_delete_selected,flagged_all_restart_selected,flagged_all_selected;int r238_array_value_cow_selected,r239_mixed_scalar_equality_selected;int configured_precache_interval_selected;int r243_thread_start_selected,r243_same_bucket_wait_selected,r243_scripted_prefix_selected,r243_script_state_selected,r243_scripted_start_selected;
-                    int delete_transactions_selected,grenade_items_selected,yaw_motion_selected,actor_goal_selected,carbine_items_selected;
-                    int turrets_selected;int turret_animations_selected,training_rigs_selected;int actor_animations_selected;int actor_look_selected;int random_range_selected;int r232_source_float_selected;int native_quoted_strings_selected;int function_admission_selected;uint64_t function_admission_token;int developer_selected,developer_value_only;GscDeveloperScriptSelection developer;
+                    int delete_transactions_selected,grenade_items_selected,yaw_motion_selected,map_moveto_selected,actor_goal_selected,map_actor_goal_selected,carbine_items_selected;
+                    int turrets_selected;int turret_animations_selected,training_rigs_selected;int actor_animations_selected,map_actor_animations_selected;int actor_look_selected,map_actor_look_selected;int random_range_selected;int r232_source_float_selected,map_source_float_selected;int native_quoted_strings_selected;int function_admission_selected;uint64_t function_admission_token;int developer_selected,developer_value_only,map_developer_selected,map_developer_linking;GscDeveloperScriptSelection developer;
                     int endon_selected,waittillmatch_selected,owned_wait_delivery_selected;
-                    int local_identifier_case_selected;int loop_sound_selected;int sound_notify_selected; int training_opening_selected;int script_sound_selected,player_natives_selected,player_normal_health_selected,player_viewmodel_selected,player_max_ammo_selected,entity_links_selected,entity_operations_selected,spatial_natives_selected,entity_coordinates_selected; int entity_model_methods_selected,spawner_team_method_selected,weapon_classname_selected,weapon_model_selected,namespace_length_selected,animation_length_selected,animation_methods_selected,anim_data_selected,animation_refs_selected; int start_origin_selected; int animation_namespace_selected; int namespace_start_origin_selected; int stance_selected,animtime_selected,move_delta_selected;unsigned actor_float_selected;
-                    int console_int32_selected; int vector_arithmetic_selected; int large_sources_selected;int vector_math_selected,integer_bitwise_selected,string_int_concat_selected,node_queries_selected,hud_elements_selected,entity_collision_selected,ai_arrays_selected;
+                    int bullet_trace_selected;int local_identifier_case_selected;int loop_sound_selected;int sound_notify_selected; int training_opening_selected;int script_sound_selected,player_natives_selected,player_normal_health_selected,player_viewmodel_selected,player_max_ammo_selected,player_stance_permissions_selected,entity_links_selected,entity_operations_selected,spatial_natives_selected,entity_coordinates_selected; int entity_model_methods_selected,spawner_team_method_selected,vehicle_spawn_selected,turret_spawn_selected,turret_precache_selected,vehicle_methods_selected,model_part_selected,weapon_classname_selected,weapon_model_selected,namespace_length_selected,map_animation_length_selected,animation_length_selected,animation_methods_selected,anim_data_selected,animation_refs_selected; int start_origin_selected; int animation_namespace_selected; GscMapAnimationNames map_animation_names; int namespace_start_origin_selected,map_start_pose_selected; int stance_selected,animtime_selected,move_delta_selected;unsigned actor_float_selected;
+                    int console_int32_selected; int vector_arithmetic_selected; int large_sources_selected;int vector_math_selected,integer_bitwise_selected,string_int_concat_selected,node_queries_selected,vehicle_nodes_selected,hud_elements_selected,entity_collision_selected,disconnectpaths_selected,ai_arrays_selected;
                     int linked, invalid, entry_fn, requires_animtree, entity_mode, access_mode, event_mode, state_mode, controls_mode, flow_mode, arrays_mode, results_mode;
                     int requires_game_values, requires_receiver_method;
                     int requires_literal_semantics, requires_loop_semantics;
@@ -208,10 +208,10 @@ struct GscProgram { int r243s_requested;R243SProgramDescriptor r243s_descriptor;
 
 /* The disk game DLL's isdefined(type 0) path returns false. Keep this
  * distinct from the candidate VM's internal type 6 stack marker. */
-enum { V_UNDEFINED, V_NUMBER, V_STRING, V_VECTOR, V_ENTITY, V_LEVEL, V_ARRAY, V_FUNCTION, V_LOCALIZED_STRING, V_STRUCT, V_ANIM, V_ANIMATION, V_NODE, V_HUDELEM, V_ANIMATION_TREE, V_NAMESPACED_ANIMATION };
+enum { V_UNDEFINED, V_NUMBER, V_STRING, V_VECTOR, V_ENTITY, V_LEVEL, V_ARRAY, V_FUNCTION, V_LOCALIZED_STRING, V_STRUCT, V_ANIM, V_ANIMATION, V_NODE, V_HUDELEM, V_ANIMATION_TREE, V_NAMESPACED_ANIMATION, V_VEHICLE_NODE };
 typedef struct { uint64_t program, runtime; int module, function; } FunctionIdentity;
 typedef struct { int kind, integer; float number; int integer_exact; int32_t integer_value; char str[128];
-                 float vector[3]; GscEntityRef entity; GscNodeRef node; GscHudElemRef hud; uint32_t array; FunctionIdentity function;
+                 float vector[3]; GscEntityRef entity; GscNodeRef node; GscVehicleNodeRef vehicle_node; GscHudElemRef hud; uint32_t array; FunctionIdentity function;
                  uint32_t object; uint64_t object_token; } Value;
 typedef struct { char name[64]; Value value; } Local;
 typedef struct { int owner, kind, index, start, end, cond; } FlowLoop;
@@ -231,7 +231,7 @@ typedef struct { int status, depth, wake_ms,cadence_event_resume; uint64_t seria
                  int event_match_active,event_filter_count;
                  Value event_filters[GSC_EVENT_PAYLOAD_CAPACITY];
                  uint64_t blast_wait_serial;
-                 Frame frames[MAX_FRAMES]; ResultsTask *results; } Task;
+                 Frame frames[MAX_FRAMES]; ResultsTask *results; Value *initial_thread_result; } Task;
 typedef struct {Task *task;uint64_t serial;GscMapExecutionCertificate map;GscEntityExecutionCertificate entity;} ConfiguredPrecacheNode;
 #include "gsc_placed_cohort_private.h"
 typedef struct PlacedCohortWitness PlacedCohortWitness;
@@ -244,7 +244,7 @@ typedef struct PlacedInitReturnScope {
  uint64_t serial,instance,catalog;GscEntityExecutionCertificate certificate;GscMapExecutionCertificate map,animMap;
  GscPlacedInitReturnHost host;GscActorInitReturnRequest request,seal;
 } PlacedInitReturnScope;
-typedef struct { int used, owner_kind; GscEntityRef owner; char name[128]; Value value; uint32_t struct_owner; } StateField;
+typedef struct { int used, owner_kind; GscEntityRef owner; char name[128]; Value value; uint32_t struct_owner;GscVehicleNodeRef vehicle_owner; } StateField;
 typedef struct { int kind, number; char string[GSC_ARRAY_KEY_CAPACITY]; } ArrayKey;
 typedef struct { int owner; ArrayKey key; Value value; } ArrayEntry;
 typedef struct { int count, numeric_count, keybinding; } ArrayContainer;
@@ -253,11 +253,11 @@ typedef struct {char tree[64];uint32_t declared_count;uint64_t source_token;} An
 typedef struct {GscAnimationCatalogEntry declaration;uint32_t catalog;} AnimationNamespaceEntry;
 typedef struct {int expr,kind;uint32_t object;} AnimationNamespaceAtom;
 typedef struct {uint64_t identity,runtime_identity;const GscProgram *program;GscMapExecutionCertificate map_certificate;
- AnimationNamespaceCatalog catalogs[4];
+ AnimationNamespaceCatalog catalogs[GSC_MAP_ANIMATION_CATALOGS];
  AnimationNamespaceEntry entries[GSC_R233_ANIMATION_NAMESPACE_CAPACITY];
  AnimationNamespaceAtom atoms[GSC_R233_ANIMATION_NAMESPACE_CAPACITY];int entry_count,atom_count;} AnimationNamespace;
 typedef struct {
- int used;GscEntityRef entity;uint64_t actor_serial,runtime,selection,receipt,task_serial,last_frame;
+ int used,initial_stop,ordinary_source;GscEntityRef entity;uint64_t actor_serial,runtime,selection,receipt,task_serial,last_frame;
  Task*task;GscEntityExecutionCertificate certificate;GscMapExecutionCertificate map;
 } R243ControllerMainOwner;
 typedef struct R243TimeRoot R243TimeRoot;
@@ -276,13 +276,13 @@ struct GscRuntime { GscDeveloperScriptSelection developer_admission;int develope
                     R243TimeRoot*r243_time_root;int r243_time_root_teardown;
                     int r243_previous_host_ms,r243_actor_script_scope;
                     int r243_source_step_active,r243_source_failed;uint64_t r243_next_source_dispatch;
-                    void*r243_source_dispatch,*r243_source_step_owner;size_t r243_source_step_owner_bytes;
+                    void*r243_source_dispatch,*r402_source_dispatch,*r243_source_step_owner;size_t r243_source_step_owner_bytes;
                     void*r243_controller_capture;size_t r243_controller_capture_bytes;
                     void*r243_source_step_lease,*r243_source_step_api;size_t r243_source_step_lease_bytes,r243_source_step_api_bytes;
                     GscDeleteTransactionHost delete_transactions;int delete_transactions_enabled;
                     void *delete_transaction_scope;
                     GscAttachmentQueryHost attachment_queries;int attachment_queries_enabled;
-                    int float_arithmetic_enabled,timed_arithmetic_enabled,frame_cadence_enabled,console_int32_enabled;int vector_arithmetic_enabled,vector_math_enabled,integer_bitwise_enabled,string_int_concat_enabled;int cadence_drain_ms;
+                    int float_arithmetic_enabled,map_source_float_enabled,timed_arithmetic_enabled,frame_cadence_enabled,console_int32_enabled;int vector_arithmetic_enabled,vector_math_enabled,integer_bitwise_enabled,string_int_concat_enabled;int cadence_drain_ms;
                     int *execution_budget; unsigned entity_entry_depth; int entity_inheritance_busy;
                     int entity_sequence_busy,entity_prepare_busy,entity_certificate_busy;int placed_init_initial_scope;PlacedInitReturnScope *placed_return;PlacedCohortWitness *placed_cohort;PlacedCohortPost *placed_cohort_post;
                     GscEntityFieldHost entity_fields; int entity_fields_enabled,entity_field_busy;
@@ -290,7 +290,7 @@ struct GscRuntime { GscDeveloperScriptSelection developer_admission;int develope
                     GscPlayerNativeHost player_natives;int player_natives_enabled;
                     GscYawMotionHost yaw_motion;int yaw_motion_enabled;
                     GscActorGoalHost actor_goal;int actor_goal_enabled;
-                    GscTurretHost turrets;int turrets_enabled;GscTurretAnimationHost turret_animations;int turret_animations_enabled;GscActorAnimationHost actor_animations;int actor_animations_enabled;int flagged_all_restart_enabled,flagged_all_enabled;GscActorLookHost actor_look;int actor_look_enabled;int random_range_enabled;
+                    GscTurretHost turrets;int turrets_enabled;GscTurretAnimationHost turret_animations;int turret_animations_enabled;GscActorAnimationHost actor_animations;int actor_animations_enabled,map_actor_animations_enabled;int flagged_all_restart_enabled,flagged_all_enabled;GscActorLookHost actor_look;int actor_look_enabled,map_actor_look_enabled;int random_range_enabled;
                     GscEntityDeleteHost entity_delete;int entity_operations_enabled;
                     GscEntityOriginMethodHost origin_method;int origin_method_enabled,origin_method_busy;
     GscEntityLinkHost entity_links;int entity_links_enabled;
@@ -299,7 +299,13 @@ struct GscRuntime { GscDeveloperScriptSelection developer_admission;int develope
                     GscSpawnerTeamMethodHost spawner_team;int spawner_team_enabled;
                     GscActorCriticalHost actor_critical;int actor_critical_enabled;GscActorScriptStateHost r243_script_state;int r243_script_state_enabled;
                     GscActorPresenceHost actor_presence;int actor_presence_enabled,actor_presence_busy;GscActorDropHost actor_drop;int actor_drop_enabled;
-                    GscWeaponClassnameHost weapon_classname;int weapon_classname_enabled,weapon_classname_busy;
+                    GscModelPartHost model_part;int model_part_enabled,model_part_busy;
+ GscVehicleSpawnHost vehicle_spawn;int vehicle_spawn_enabled,vehicle_spawn_busy;
+ GscTurretPrecacheHost turret_precache;int turret_precache_enabled,turret_precache_busy;
+ GscTurretSpawnHost turret_spawn;int turret_spawn_enabled,turret_spawn_busy;
+ GscBulletTraceHost bullet_trace;int bullet_trace_enabled,bullet_trace_busy;
+ GscVehicleMethodHost vehicle_methods;int vehicle_methods_enabled;
+    GscWeaponClassnameHost weapon_classname;int weapon_classname_enabled,weapon_classname_busy;
     GscWeaponModelHost weapon_model;int weapon_model_enabled,weapon_model_busy;
                     GscAnimationLengthHost animation_length;int animation_length_enabled,animation_length_busy;
                     GscStartOriginHost start_origin;int start_origin_enabled,start_origin_busy;
@@ -312,6 +318,7 @@ struct GscRuntime { GscDeveloperScriptSelection developer_admission;int develope
                     AnimationNamespace animation_namespace;int animation_namespace_enabled,animation_namespace_busy;
                     Task tasks[MAX_THREADS];
                     Task *lifetime_tasks[GSC_LIFETIME_TASK_CAPACITY]; int lifetime_enabled;
+                    Task **extra_tasks; int extra_capacity,expand_map_tasks;
                     char error[256];
                     GscNativeRegistry *native_registry;
                     int native_isdefined_import;
@@ -321,6 +328,7 @@ struct GscRuntime { GscDeveloperScriptSelection developer_admission;int develope
                     GscRuntimeFogNativeStats fog_native_stats;
                     GscEntityHost entities; int entities_enabled;
                     GscReadOnlyContext readonly_context;
+                    int native_readonly_scan;
                     void *readonly_entity_user;
                     int (*readonly_entity_validate)(void *, const GscEntityRef *);
                     int native_getent_import, native_setorigin_import, native_spawn_import;
@@ -330,10 +338,11 @@ struct GscRuntime { GscDeveloperScriptSelection developer_admission;int develope
                     int native_hide_import, native_show_import;
                     Task *executing_task;
                     StateField *state_fields;int state_field_capacity;uint32_t state_field_limit;int state_arena_busy;void *state_scratch;size_t state_scratch_bytes;
+                    void *r329_cow_scratch;size_t r329_cow_scratch_bytes;
                     GscEntityCollectionHost collections; int arrays_enabled, results_enabled, event_payloads_enabled;
                     int sparse_numeric_arrays_enabled,owned_numeric_delete_enabled,r238_array_value_cow_enabled,r239_mixed_scalar_equality_enabled;int r243_thread_start_enabled,r243_same_bucket_wait_enabled;unsigned r243_thread_start_depth;int r243_scripted_prefix_enabled,r243_scripted_init_fn;GscActorScriptedPrefixHost r243_scripted_prefix;GscActorScriptedStartHost r243_scripted_start;int r243_scripted_start_enabled;GscActorScriptedControllerHost r243_controller;GscControllerSelectWithCleanup r243_select_with_cleanup;int r243_controller_enabled,r243_controller_busy,r243_controller_callback_busy;uint64_t r243_next_main_receipt;R243ControllerMainOwner r243_controller_main[32];GscThreadEntityAuthorityHost r243_thread_entities;int r243_thread_entities_enabled;
                     GscEntityPredicateHost predicates; int predicates_enabled;
-                    GscActorSpawnHost actor_spawners; int actor_spawners_enabled, function_refs_enabled;unsigned char function_admission[MAX_FUNCS];uint64_t function_admission_token;
+                    GscActorSpawnHost actor_spawners; int actor_spawners_enabled, function_refs_enabled;unsigned char function_admission[MAX_FUNCS],verified_function_closure[MAX_FUNCS];uint64_t function_admission_token;
                     Task *actor_spawn_preparing;uint64_t actor_spawn_preparing_serial;
                     GscEntityRef actor_spawn_preparing_source;int actor_spawn_preparing_used;
                     GscEntityExecutionCertificate actor_spawn_issued;int actor_spawn_init_used;const GscEntityScriptEntry *factory_init_entry;uint64_t factory_init_serial;
@@ -373,10 +382,12 @@ struct GscRuntime { GscDeveloperScriptSelection developer_admission;int develope
                     int structs_enabled,training_tower_bootstrap_waited; uint32_t struct_count;
                     GscEntityQueryHost entity_queries; int entity_queries_enabled;
                     GscNodeQueryHost node_queries; int node_queries_enabled,node_query_busy;
+                    GscVehicleNodeHost vehicle_nodes;int vehicle_nodes_enabled,vehicle_node_busy;
                     GscAiArrayHost ai_arrays;int ai_arrays_enabled,ai_array_busy;
-                    GscEntityCollisionHost entity_collision;int entity_collision_enabled;
+                    GscEntityCollisionHost entity_collision;int entity_collision_enabled;GscEntityWorldAction connectpaths,disconnectpaths;
                     GscHudElemHost hud_elements;int hud_elements_enabled,hud_elements_busy,hud_elements_retired;
                     uint64_t hud_elements_operation,hud_elements_epoch;GscHudElemRef hud_refs[GSC_HUDELEM_CAPACITY];int hud_live[GSC_HUDELEM_CAPACITY];
+                    uint64_t map_model_start_stamp; Task *array_dispatch_root; int array_next_scan, array_next_entry_scan;
                     int array_count, array_entry_count;
                     ArrayContainer arrays[GSC_ARRAY_CONTAINER_CAPACITY];
                     ArrayEntry array_entries[GSC_ARRAY_ENTRY_CAPACITY]; int bsp_construction_only,bsp_promoted; };
@@ -407,8 +418,10 @@ static GSC_STATE_INLINE int runtime_private_overlap(const GscRuntime*r,const voi
  if(!r||!bytes)return 0;
  if(r->state_arena_busy){rfail((GscRuntime*)r,0,"state arena allocator reentered");return 1;}
  return Cod1ModelStringOverlap(p,bytes,r,sizeof(*r))||
+  (r->extra_tasks && Cod1ModelStringOverlap(p,bytes,r->extra_tasks,(size_t)r->extra_capacity*sizeof(*r->extra_tasks)))||
   (r->state_fields&&Cod1ModelStringOverlap(p,bytes,r->state_fields,(size_t)r->state_field_capacity*sizeof(*r->state_fields)))||
-  (r->state_scratch&&Cod1ModelStringOverlap(p,bytes,r->state_scratch,r->state_scratch_bytes));
+  (r->state_scratch&&Cod1ModelStringOverlap(p,bytes,r->state_scratch,r->state_scratch_bytes))||
+  (r->r329_cow_scratch&&Cod1ModelStringOverlap(p,bytes,r->r329_cow_scratch,r->r329_cow_scratch_bytes));
 }
 struct Builtin {
     const char *name;
@@ -545,6 +558,7 @@ static int mission_descriptor(const GscProgram *g,const char *name) {
     if(!g->mission_mode)return -1;
     if(callable_name_equal(g,name,"missionsuccess"))return GSC_MISSION_SUCCESS;
     if(callable_name_equal(g,name,"missionfailed"))return GSC_MISSION_FAILED;
+    if(callable_name_equal(g,name,"changelevel"))return GSC_MISSION_CHANGELEVEL;
     return -1;
 }
 static unsigned mission_static_issues(const GscProgram *g,int kind,const int *args,int argc) {
@@ -552,10 +566,10 @@ static unsigned mission_static_issues(const GscProgram *g,int kind,const int *ar
     /* Getter validation follows the native gate, including zero-argument
      * success and ignored failed arguments. MAX_PARAMS is bounded port policy. */
     return argc>=0&&argc<=MAX_PARAMS&&
-        ((kind==GSC_MISSION_SUCCESS&&argc<=2)||kind==GSC_MISSION_FAILED)?
+        (((kind==GSC_MISSION_SUCCESS||kind==GSC_MISSION_CHANGELEVEL)&&argc<=2)||kind==GSC_MISSION_FAILED)?
         0u:GSC_LINK_ISSUE_BUILTIN_ARITY;
 }
-#define BLAST_TARGET_BASE (MISSION_TARGET_BASE+GSC_MISSION_FAILED)
+#define BLAST_TARGET_BASE (MISSION_TARGET_BASE+GSC_MISSION_CHANGELEVEL)
 #define QUAKE_TARGET_BASE (BLAST_TARGET_BASE+GSC_BLAST_RADIUS)
 #define FX_TARGET_BASE (QUAKE_TARGET_BASE+GSC_QUAKE_EARTHQUAKE)
 #define CVAR_TARGET_BASE (FX_TARGET_BASE+GSC_FX_LOOP)
@@ -567,6 +581,11 @@ static unsigned mission_static_issues(const GscProgram *g,int kind,const int *ar
 #define SAVE_GAME_TARGET_BASE (PRECACHE_ITEM_TARGET_BASE+GSC_PRECACHE_ITEM_REGISTER)
 #define TAG_FX_TARGET_BASE (SAVE_GAME_TARGET_BASE+GSC_SAVE_GAME_REQUEST)
 #define WEAPON_MODEL_STATEMENT_TARGET 8192
+#define VEHICLE_SPAWN_STATEMENT_TARGET 8196
+#define TURRET_PRECACHE_STATEMENT_TARGET 8199
+#define TURRET_SPAWN_STATEMENT_TARGET 8198
+#define BULLET_TRACE_STATEMENT_TARGET 8197
+#define MODEL_PART_STATEMENT_TARGET 8195
 #define WEAPON_CLASSNAME_STATEMENT_TARGET 8194
 #define ANIMATION_LENGTH_STATEMENT_TARGET 8193
 #define NATIVE_QUERY_TARGET_BASE (TAG_FX_TARGET_BASE+GSC_TAG_FX_PLAY)
@@ -583,15 +602,17 @@ static int string_literal_decoded(const GscProgram *g,const StringLiteral *s) {
     return s&&(s->decode_status==GSC_STRING_FIXTURE_DECODED||
         (g&&g->native_quoted_strings_selected&&s->decode_status==GSC_STRING_NATIVE_DECODED));
 }
-/* Plain ASCII literals only. Variables, localized/raw/escaped strings and
- * nonstring GetString coercions remain unresolved in this selected lane. */
+/* Literal spellings retain their existing byte-domain checks. Computed
+ * values are evaluated once by the normal VM and must pass the same bounded
+ * ordinary ASCII string getter before QUERY. No extra coercions are added. */
 static int keybinding_descriptor(const GscProgram *g,const char *name,const int *args,int argc) {
     const Expr *e;const StringLiteral *s;
     if(!g||!g->keybinding_mode||!callable_name_equal(g,name,"getkeybinding"))return -1;
     if(argc==0)return GSC_KEYBINDING_QUERY;
     if(argc!=1||!args||args[0]<0||args[0]>=g->expr_count)return -1;
     e=&g->expr[args[0]];
-    if(e->kind!=E_STRING||e->a<0||e->a>=g->string_count||!keybinding_command_valid(e->name))return -1;
+    if(e->kind!=E_STRING)return GSC_KEYBINDING_QUERY;
+    if(e->a<0||e->a>=g->string_count||!keybinding_command_valid(e->name))return -1;
     s=&g->strings[e->a];
     if(s->localized||!string_literal_decoded(g,s)||s->unknown_escape_count||
        s->raw_length!=(int)strlen(e->name)||memcmp(s->raw,e->name,(size_t)s->raw_length))return -1;
@@ -675,6 +696,11 @@ static int randomfloat_literal_bits(const GscProgram *g,int index,uint32_t *out)
     }
     *out=bits;return 1;
 }
+static int bullet_trace_descriptor(const GscProgram*g,const char*n){return g->bullet_trace_selected&&callable_name_equal(g,n,"bulletTrace");}
+static int vehicle_spawn_descriptor(const GscProgram*g,const char*n){return g->vehicle_spawn_selected&&callable_name_equal(g,n,"spawnVehicle");}
+static int turret_precache_descriptor(const GscProgram*g,const char*n){return g->turret_precache_selected&&callable_name_equal(g,n,"precacheTurret");}
+static int turret_spawn_descriptor(const GscProgram*g,const char*n){return g->turret_spawn_selected&&callable_name_equal(g,n,"spawnTurret");}
+static int model_part_descriptor(const GscProgram*g,const char*n){return g->model_part_selected&&callable_name_equal(g,n,"getPartName");}
 static int weapon_classname_descriptor(const GscProgram*g,const char*n){return g->weapon_classname_selected&&callable_name_equal(g,n,"getWeaponClassname");}
 static int weapon_model_descriptor(const GscProgram *g,const char *name) { return g->weapon_model_selected&&callable_name_equal(g,name,"getWeaponModel"); }
 static int animation_length_descriptor(const GscProgram *g,const char *name) { return g->animation_length_selected&&callable_name_equal(g,name,"getanimlength"); }
@@ -704,7 +730,12 @@ static int float_arithmetic_literal_bits(const GscProgram *g,int index,uint32_t 
     if(!g||index<0||index>=g->expr_count)return 0;
     e=&g->expr[index];
     if(e->kind!=E_NUMBER||!e->float_arithmetic)return 0;
-    if(e->integer)return randomfloat_literal_bits(g,index,bits);
+    if(e->integer){
+        if(e->float_arithmetic==2&&e->integer==1&&e->integer_value>=-16777216&&e->integer_value<=16777216){
+            float exact=(float)e->integer_value;memcpy(bits,&exact,4);return r232_source_float_bits(*bits);
+        }
+        return randomfloat_literal_bits(g,index,bits);
+    }
     if(e->float_arithmetic==2){memcpy(bits,&e->number,4);return r232_source_float_bits(*bits);}
     if(strcmp(e->name,"0.4")&&strcmp(e->name,"0.8"))return randomfloat_literal_bits(g,index,bits);
     return float_arithmetic_decimal_nearest(e->name,bits);
@@ -748,7 +779,7 @@ static int entity_spawn_flags_class(const GscProgram *g,int index) {
     return e->kind==E_STRING&&(!strcmp(e->name,"script_origin")||
                               !strcmp(e->name,"script_model")||
         (g->carbine_items_selected&&!strcmp(e->name,"weapon_m1carbine"))||
-        (g->grenade_items_selected&&(!strcmp(e->name,"weapon_fraggrenade")||
+        ((g->grenade_items_selected || g->carbine_items_selected==2)&&(!strcmp(e->name,"weapon_fraggrenade")||
          !strcmp(e->name,"weapon_stielhandgranate")||
          !strcmp(e->name,"item_ammo_stielhandgranate_open")||
          !strcmp(e->name,"item_ammo_stielhandgranate_closed"))));
@@ -915,6 +946,7 @@ static int entity_global_expression_binding(const GscRuntime *r,const Expr *e) {
           entity_predicate_descriptor(r->program,e->name)==e->target));
 }
 #include "gsc_player_descriptor.inc"
+#include "gsc_vehicle_methods_descriptor.inc"
 #include "gsc_entity_operations_descriptor.inc"
 #include "gsc_entity_links_descriptor.inc"
 #include "gsc_spatial_descriptor.inc"
@@ -923,15 +955,26 @@ static int entity_global_expression_binding(const GscRuntime *r,const Expr *e) {
 int gsc_program_select_r228_training_opening(GscProgram *g){if(!g||g->invalid||g->linked||g->training_opening_selected||g->carbine_items_selected!=2)return 0;g->training_opening_selected=1;return 1;}
 int gsc_program_select_r225_training_followup(GscProgram *g){if(!gsc_program_select_r222_carbine_items(g))return 0;g->carbine_items_selected=2;return 1;}
 enum {ENTITY_METHOD_ACTOR_DROP=1301,ENTITY_METHOD_SCRIPTED_PREFIX=1401,ENTITY_METHOD_SCRIPT_STATE=1402,ENTITY_METHOD_SCRIPTED_START=1403};
-enum {ENTITY_METHOD_ACTOR_LOOK_BASE=1200,ENTITY_METHOD_ACTOR_LOOK_LAST=1207};
+enum {ENTITY_METHOD_ACTOR_LOOK_BASE=1200,ENTITY_METHOD_ACTOR_LOOK_LAST=1214};
 static int actor_look_kind(int d){return d>ENTITY_METHOD_ACTOR_LOOK_BASE&&d<=ENTITY_METHOD_ACTOR_LOOK_LAST?d-ENTITY_METHOD_ACTOR_LOOK_BASE:0;}
 static int actor_look_tag(int k){return k==GSC_ACTOR_LOOK_TAG_ANGLES||k==GSC_ACTOR_LOOK_TAG_ORIGIN;}
-static int actor_look_descriptor(const GscProgram *g,const char *name){static const char *const names[]={"setlookatanimnodes","setlookat","setlookatyawlimits","stoplookat","gettagangles","cansee","gettagorigin"};int n;if(!g->actor_look_selected)return -1;for(n=0;n<7;n++)if(callable_name_equal(g,name,names[n]))return ENTITY_METHOD_ACTOR_LOOK_BASE+n+1;return -1;}
+static int actor_look_descriptor(const GscProgram *g,const char *name){static const char *const names[]={"setlookatanimnodes","setlookat","setlookatyawlimits","stoplookat","gettagangles","cansee","gettagorigin","canshoot","shoot","aimatpos","maymovetopoint","checkprone","traversemode","getnegotiationendpos"};int n;if(!g->actor_look_selected)return -1;for(n=0;n<14;n++)if(callable_name_equal(g,name,names[n]))return ENTITY_METHOD_ACTOR_LOOK_BASE+n+1;return -1;}
 enum {ENTITY_METHOD_ACTOR_ANIMATION_BASE=1100,ENTITY_METHOD_ACTOR_ANIMATION_LAST=ENTITY_METHOD_ACTOR_ANIMATION_BASE+GSC_ACTOR_ANIMATION_FLAGGED_ALL};
-static int actor_animation_kind(int d){return d>ENTITY_METHOD_ACTOR_ANIMATION_BASE&&d<=ENTITY_METHOD_ACTOR_ANIMATION_LAST?d-ENTITY_METHOD_ACTOR_ANIMATION_BASE:0;}
+static int actor_animation_kind(int d){if(d==ENTITY_METHOD_ACTOR_ANIMATION_BASE+GSC_ACTOR_ANIMATION_AIM_NODES)return GSC_ACTOR_ANIMATION_AIM_NODES;if(d==ENTITY_METHOD_ACTOR_ANIMATION_BASE+GSC_ACTOR_INTERRUPT_POINT || d==ENTITY_METHOD_ACTOR_ANIMATION_BASE+GSC_ACTOR_ANIMATION_FLAGGED_KNOB)return d-ENTITY_METHOD_ACTOR_ANIMATION_BASE;
+ if(d==ENTITY_METHOD_ACTOR_ANIMATION_BASE+GSC_ACTOR_ANIMATION_KNOB_ALL_RESTART)return GSC_ACTOR_ANIMATION_KNOB_ALL_RESTART;
+ return d==ENTITY_METHOD_ACTOR_ANIMATION_BASE+GSC_ACTOR_ANIMATION_KNOB?GSC_ACTOR_ANIMATION_KNOB:d>ENTITY_METHOD_ACTOR_ANIMATION_BASE&&d<=ENTITY_METHOD_ACTOR_ANIMATION_LAST?d-ENTITY_METHOD_ACTOR_ANIMATION_BASE:0;}
 static int actor_animation_descriptor(const GscProgram *g,const char *name){
+ if(g->actor_animations_selected&&g->node_queries_selected&&callable_name_equal(g,name,"setaimanims"))return ENTITY_METHOD_ACTOR_ANIMATION_BASE+GSC_ACTOR_ANIMATION_AIM_NODES;
  static const char *const names[]={"clearanim","setanim","setproneanimnodes","enterprone","exitprone","setflaggedanimknobrestart","setanimknoball","orientmode","updateprone","animmode","setflaggedanimknoballrestart","setflaggedanimknoball"};int n;
  _Static_assert(sizeof(names)/sizeof(names[0])==GSC_ACTOR_ANIMATION_FLAGGED_ALL,"actor animation descriptor range");
+ if(g->actor_animations_selected && g->node_queries_selected){
+    if(callable_name_equal(g,name,"interruptpoint"))return ENTITY_METHOD_ACTOR_ANIMATION_BASE+GSC_ACTOR_INTERRUPT_POINT;
+    if(callable_name_equal(g,name,"setflaggedanimknob"))return ENTITY_METHOD_ACTOR_ANIMATION_BASE+GSC_ACTOR_ANIMATION_FLAGGED_KNOB;
+ }
+ if(g->actor_animations_selected && g->node_queries_selected && callable_name_equal(g,name,"setanimknoballrestart"))
+    return ENTITY_METHOD_ACTOR_ANIMATION_BASE+GSC_ACTOR_ANIMATION_KNOB_ALL_RESTART;
+ if(g->actor_animations_selected && g->node_queries_selected && callable_name_equal(g,name,"setanimknob"))
+    return ENTITY_METHOD_ACTOR_ANIMATION_BASE+GSC_ACTOR_ANIMATION_KNOB;
  if(!g->actor_animations_selected)return -1;for(n=0;n<GSC_ACTOR_ANIMATION_FLAGGED_ALL;n++)if((n+1!=GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART||g->flagged_all_restart_selected)&&(n+1!=GSC_ACTOR_ANIMATION_FLAGGED_ALL||g->flagged_all_selected)&&callable_name_equal(g,name,names[n]))return ENTITY_METHOD_ACTOR_ANIMATION_BASE+n+1;return -1;
 }
 enum {ENTITY_METHOD_TURRET_ANIMATION_BASE=1000,ENTITY_METHOD_TURRET_ANIMATION_LAST=1004};
@@ -940,18 +983,20 @@ static int turret_animation_descriptor(const GscProgram *g,const char *name){
  static const char *const names[]={"setturretanim","setanimknobrestart","useanimtree","stopuseanimtree"};int i;
  if(!g->turret_animations_selected)return -1;for(i=0;i<4;i++)if(callable_name_equal(g,name,names[i]))return ENTITY_METHOD_TURRET_ANIMATION_BASE+i+1;return -1;
 }
-enum { ENTITY_METHOD_TURRET_BASE=900, ENTITY_METHOD_TURRET_LAST=ENTITY_METHOD_TURRET_BASE+GSC_TURRET_SHOOT };
+enum { ENTITY_METHOD_TURRET_BASE=900, ENTITY_METHOD_TURRET_LAST=ENTITY_METHOD_TURRET_BASE+GSC_TURRET_STOP_USE };
 static int turret_method_kind(int descriptor){return descriptor>ENTITY_METHOD_TURRET_BASE&&descriptor<=ENTITY_METHOD_TURRET_LAST?descriptor-ENTITY_METHOD_TURRET_BASE:0;}
 static int turret_method_descriptor(const GscProgram *g,const char *name){
-    static const char *names[]={"setmode","startfiring","stopfiring","settargetentity","useturret","getturret","isfiringturret","shootturret"};int n;
+    static const char *names[]={"setmode","startfiring","stopfiring","settargetentity","useturret","getturret","isfiringturret","shootturret","cleartargetentity","stopuseturret"};unsigned n;
     if(!g->turrets_selected)return -1;
-    for(n=0;n<8;++n)if(callable_name_equal(g,name,names[n]))return ENTITY_METHOD_TURRET_BASE+n+1;
+    for(n=0;n<sizeof(names)/sizeof(names[0]);++n)if(callable_name_equal(g,name,names[n]))return ENTITY_METHOD_TURRET_BASE+n+1;
     return -1;
 }
 static int entity_method_descriptor(const GscProgram *g,const char *name) {
+    {int vehicle=vehicle_method_descriptor(g,name);if(vehicle>=0)return vehicle;}
     {int link=entity_link_descriptor(g,name);if(link>=0)return link;}
     if((g->actor_float_selected&1u)&&callable_name_equal(g,name,"approxpathdist"))return R243_ACTOR_FLOAT_PATH;
     if((g->actor_float_selected&2u)&&callable_name_equal(g,name,"getclosestenemysqdist"))return R243_ACTOR_FLOAT_ENEMY;
+    if((g->actor_float_selected&4u)&&callable_name_equal(g,name,"getmotionangle"))return COD1_ACTOR_MOTION_ANGLE;
     if(g->stance_selected==2&&callable_name_equal(g,name,"allowedstances"))return COD1_ALLOWED_STANCES_METHOD;
     if(g->stance_selected&&callable_name_equal(g,name,"isstanceallowed"))return R243_STANCE_METHOD;
     if(g->animtime_selected&&callable_name_equal(g,name,"getanimtime"))return R243_ANIMTIME_METHOD;
@@ -964,11 +1009,26 @@ static int entity_method_descriptor(const GscProgram *g,const char *name) {
     int animation=turret_animation_descriptor(g,name);if(animation>=0)return animation;
     int turret=turret_method_descriptor(g,name);if(turret>=0)return turret;
     if(g->carbine_items_selected==2&&callable_name_equal(g,name,"sethintstring"))return 504;
+    if(g->map_moveto_selected&&g->yaw_motion_selected&&callable_name_equal(g,name,"moveto"))return COD1_MOVE_TO;
+    if(g->yaw_motion_selected && g->actor_goal_selected==2){
+        if(callable_name_equal(g,name,"rotatevelocity"))return COD1_ROTATE_VELOCITY;
+        if(callable_name_equal(g,name,"moveto"))return COD1_MOVE_TO;
+        if(callable_name_equal(g,name,"movegravity"))return COD1_MOVE_GRAVITY;
+    }
+    if(g->yaw_motion_selected&&callable_name_equal(g,name,"rotateto"))return COD1_ROTATE_TO;
+    if(g->yaw_motion_selected&&callable_name_equal(g,name,"rotateroll"))return COD1_ROTATE_ROLL;
+    if(g->yaw_motion_selected&&callable_name_equal(g,name,"launch"))return COD1_LAUNCH;
     if(g->yaw_motion_selected&&callable_name_equal(g,name,"rotateyaw"))return 502;
+    if(g->actor_goal_selected==2 && callable_name_equal(g,name,"setgoalentity"))return COD1_SET_GOAL_ENTITY_METHOD;
     if(g->actor_goal_selected&&callable_name_equal(g,name,"setgoalnode"))return 503;
-    if(g->actor_goal_selected && g->actor_animations_selected && g->carbine_items_selected==2 && callable_name_equal(g,name,"setgoalpos"))return COD1_SET_GOAL_POS_METHOD;
+    if(g->actor_goal_selected && g->actor_animations_selected && (g->carbine_items_selected==2||g->map_actor_goal_selected) && callable_name_equal(g,name,"setgoalpos"))return COD1_SET_GOAL_POS_METHOD;
     int attachment=attachment_query_descriptor(g,name);if(attachment>=0)return attachment;
     if(g->entity_collision_selected&&callable_name_equal(g,name,"notsolid"))return 501;
+    if(g->entity_collision_selected==2&&callable_name_equal(g,name,"enablegrenadetouchdamage"))return GSC_GRENADE_TOUCH_METHOD;
+    if(g->entity_collision_selected==2&&callable_name_equal(g,name,"disablegrenadebounce"))return GSC_GRENADE_BOUNCE_METHOD;
+    if(g->entity_collision_selected==2&&callable_name_equal(g,name,"solid"))return GSC_SOLID_METHOD;
+    if(g->entity_collision_selected==2&&callable_name_equal(g,name,"connectpaths"))return GSC_CONNECTPATHS_METHOD;
+    if(g->disconnectpaths_selected&&callable_name_equal(g,name,"disconnectpaths"))return GSC_DISCONNECTPATHS_METHOD;
     int spatial=spatial_method_descriptor(g,name);if(spatial>=0)return spatial;
     int coordinates=entity_coordinate_descriptor(g,name);if(coordinates>=0)return coordinates;
     int operation=entity_operation_descriptor(g,name);if(operation>=0)return operation;
@@ -1005,17 +1065,21 @@ static int entity_method_descriptor(const GscProgram *g,const char *name) {
     return -1;
 }
 static int entity_method_arity(int descriptor) {
+    if(vehicle_method_kind(descriptor))return -1;
+    if(actor_animation_kind(descriptor)==GSC_ACTOR_INTERRUPT_POINT)return 0;
     if(R243ActorFloatMask(descriptor))return 0;
     if(entity_link_method(descriptor))return -1;
     if(descriptor==R243_STANCE_METHOD||descriptor==R243_ANIMTIME_METHOD)return 1;
     if(descriptor==ENTITY_METHOD_SCRIPTED_START||descriptor==ENTITY_METHOD_SCRIPT_STATE||descriptor==ENTITY_METHOD_SCRIPTED_PREFIX||descriptor==ENTITY_METHOD_ACTOR_DROP)return -1;
-    if(actor_look_kind(descriptor)){int k=actor_look_kind(descriptor);return k==GSC_ACTOR_LOOK_NODES||k==GSC_ACTOR_LOOK_YAW_LIMITS?3:k==GSC_ACTOR_LOOK_TARGET||k==GSC_ACTOR_LOOK_STOP?-1:1;}
-    if(actor_animation_kind(descriptor)){int k=actor_animation_kind(descriptor);return k==GSC_ACTOR_ANIMATION_ORIENT_MODE?-1:k==GSC_ACTOR_ANIMATION_CLEAR?2:(k==GSC_ACTOR_ANIMATION_PRONE_NODES||k==GSC_ACTOR_ANIMATION_UPDATE_PRONE)?5:(k==GSC_ACTOR_ANIMATION_SET||k==GSC_ACTOR_ANIMATION_FLAGGED_RESTART||k==GSC_ACTOR_ANIMATION_KNOB_ALL||(k==GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART||k==GSC_ACTOR_ANIMATION_FLAGGED_ALL))?-1:1;}
+    if(actor_look_kind(descriptor)){int k=actor_look_kind(descriptor);return k==GSC_ACTOR_NEGOTIATION_END?0:k==GSC_ACTOR_LOOK_NODES||k==GSC_ACTOR_LOOK_YAW_LIMITS||k==GSC_ACTOR_LOOK_CHECK_PRONE?3:k==GSC_ACTOR_LOOK_TARGET||k==GSC_ACTOR_LOOK_STOP?-1:1;}
+    if(actor_animation_kind(descriptor)){int k=actor_animation_kind(descriptor);return k==GSC_ACTOR_ANIMATION_AIM_NODES?6:k==GSC_ACTOR_ANIMATION_ORIENT_MODE?-1:k==GSC_ACTOR_ANIMATION_CLEAR?2:(k==GSC_ACTOR_ANIMATION_PRONE_NODES||k==GSC_ACTOR_ANIMATION_UPDATE_PRONE)?5:(k==GSC_ACTOR_ANIMATION_SET||(k==GSC_ACTOR_ANIMATION_FLAGGED_RESTART||k==GSC_ACTOR_ANIMATION_FLAGGED_KNOB)||(k==GSC_ACTOR_ANIMATION_KNOB_ALL||k==GSC_ACTOR_ANIMATION_KNOB_ALL_RESTART)||(k==GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART||k==GSC_ACTOR_ANIMATION_FLAGGED_ALL))?-1:1;}
     int animation=turret_animation_kind(descriptor);if(animation)return animation==GSC_ANIMATION_STOP_USE_TREE?0:animation==GSC_ANIMATION_SET_KNOB_RESTART?-1:1;
     int turret=turret_method_kind(descriptor);if(turret)return turret==GSC_TURRET_SET_MODE||turret==GSC_TURRET_SET_TARGET_ENTITY||turret==GSC_TURRET_USE?1:0;
-    if(descriptor==502)return 4;
+    if(descriptor==COD1_LAUNCH || descriptor==COD1_ROTATE_ROLL || descriptor==COD1_ROTATE_TO || descriptor==COD1_MOVE_TO)return 2;
+    if(descriptor==COD1_ROTATE_VELOCITY || descriptor==COD1_MOVE_GRAVITY)return 2;
+    if(descriptor==502)return 2;
     if(attachment_query_kind(descriptor))return descriptor==ATTACH_QUERY_SIZE?0:1;
-    if(descriptor==501)return 0;
+    if(descriptor==501||descriptor==GSC_CONNECTPATHS_METHOD||descriptor==GSC_DISCONNECTPATHS_METHOD||descriptor==GSC_SOLID_METHOD||descriptor==GSC_GRENADE_TOUCH_METHOD||descriptor==GSC_GRENADE_BOUNCE_METHOD)return 0;
     if(spatial_method_kind(descriptor))return descriptor==SPATIAL_METHOD_ISTOUCHING?1:0;
     if(entity_coordinate(descriptor))return 1;
     if(entity_operation(descriptor))return descriptor==ENTITY_OP_SETANGLES?1:0;
@@ -1025,14 +1089,17 @@ static int entity_method_arity(int descriptor) {
         descriptor==ENTITY_METHOD_HIDE||descriptor==ENTITY_METHOD_SHOW?0:1;
 }
 static int entity_method_argc_valid(int descriptor,int argc) {
+    if(vehicle_method_kind(descriptor)){int k=vehicle_method_kind(descriptor);return argc>=(k==2?0:k==5?2:1)&&argc<=MAX_PARAMS;}
+    if(descriptor==COD1_LAUNCH)return argc==1;
+    if(descriptor==502 || descriptor==COD1_LAUNCH || descriptor==COD1_ROTATE_ROLL || descriptor==COD1_ROTATE_TO || descriptor==COD1_MOVE_TO)return argc>=2&&argc<=MAX_PARAMS;
     if(descriptor==COD1_ALLOWED_STANCES_METHOD)return argc>=1&&argc<=MAX_PARAMS;
     if(entity_link_method(descriptor))return argc>=0&&argc<=MAX_PARAMS;
     if(descriptor==ENTITY_METHOD_SCRIPTED_START)return argc>=0&&argc<=6;
     if(descriptor==ENTITY_METHOD_SCRIPT_STATE)return argc>=0&&argc<=MAX_PARAMS;
     if(descriptor==ENTITY_METHOD_SCRIPTED_PREFIX)return argc>=0&&argc<=6;
     if(descriptor==ENTITY_METHOD_ACTOR_DROP)return argc>=1&&argc<=MAX_PARAMS;
-    if(actor_look_kind(descriptor)){int k=actor_look_kind(descriptor);return k==GSC_ACTOR_LOOK_TARGET?argc>=1&&argc<=2:k==GSC_ACTOR_LOOK_STOP?argc>=0&&argc<=1:argc==entity_method_arity(descriptor);}
-    if(actor_animation_kind(descriptor)){int k=actor_animation_kind(descriptor);return k==GSC_ACTOR_ANIMATION_ORIENT_MODE?(argc>=0&&argc<=MAX_PARAMS):(k==GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART||k==GSC_ACTOR_ANIMATION_FLAGGED_ALL)?argc>=3&&argc<=6:k==GSC_ACTOR_ANIMATION_SET?argc>=1&&argc<=4:(k==GSC_ACTOR_ANIMATION_FLAGGED_RESTART||k==GSC_ACTOR_ANIMATION_KNOB_ALL)?argc>=2&&argc<=5:argc==entity_method_arity(descriptor);}
+    if(actor_look_kind(descriptor)){int k=actor_look_kind(descriptor);return k==GSC_ACTOR_LOOK_SHOOT?argc>=0&&argc<=MAX_PARAMS:(k==GSC_ACTOR_LOOK_TARGET||k==GSC_ACTOR_LOOK_CAN_SHOOT)?argc>=1&&argc<=2:k==GSC_ACTOR_LOOK_STOP?argc>=0&&argc<=1:argc==entity_method_arity(descriptor);}
+    if(actor_animation_kind(descriptor)){int k=actor_animation_kind(descriptor);return k==GSC_ACTOR_ANIMATION_ORIENT_MODE?(argc>=0&&argc<=MAX_PARAMS):(k==GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART||k==GSC_ACTOR_ANIMATION_FLAGGED_ALL)?argc>=3&&argc<=6:(k==GSC_ACTOR_ANIMATION_SET||k==GSC_ACTOR_ANIMATION_KNOB)?argc>=1&&argc<=4:((k==GSC_ACTOR_ANIMATION_FLAGGED_RESTART||k==GSC_ACTOR_ANIMATION_FLAGGED_KNOB)||(k==GSC_ACTOR_ANIMATION_KNOB_ALL||k==GSC_ACTOR_ANIMATION_KNOB_ALL_RESTART))?argc>=2&&argc<=5:argc==entity_method_arity(descriptor);}
     if(turret_animation_kind(descriptor))return turret_animation_kind(descriptor)==GSC_ANIMATION_SET_KNOB_RESTART?(argc>=1&&argc<=4):argc==entity_method_arity(descriptor);
     if(spatial_method_kind(descriptor)||entity_coordinate(descriptor))return argc==entity_method_arity(descriptor);
     if(entity_operation(descriptor))return argc==(descriptor==ENTITY_OP_SETANGLES?1:0);
@@ -1042,11 +1109,12 @@ static int entity_method_argc_valid(int descriptor,int argc) {
         argc==entity_method_arity(descriptor);
 }
 static int entity_method_has_result(int descriptor) {
+    if(vehicle_method_kind(descriptor))return 0;
     if(R243ActorFloatMask(descriptor))return 1;
     if(entity_link_method(descriptor))return 0;
     if(descriptor==R243_STANCE_METHOD||descriptor==R243_ANIMTIME_METHOD)return 1;
     if(descriptor==ENTITY_METHOD_SCRIPTED_START||descriptor==ENTITY_METHOD_SCRIPT_STATE||descriptor==ENTITY_METHOD_SCRIPTED_PREFIX||descriptor==ENTITY_METHOD_ACTOR_DROP)return 0;
-    if(actor_look_kind(descriptor))return actor_look_kind(descriptor)>=GSC_ACTOR_LOOK_TAG_ANGLES;
+    if(actor_look_kind(descriptor))return actor_look_kind(descriptor)>=GSC_ACTOR_LOOK_TAG_ANGLES&&actor_look_kind(descriptor)!=GSC_ACTOR_LOOK_SHOOT&&actor_look_kind(descriptor)!=GSC_ACTOR_TRAVERSE_MODE;
     if(actor_animation_kind(descriptor))return 0;
     if(turret_animation_kind(descriptor))return 0;
     int turret=turret_method_kind(descriptor);if(turret)return turret==GSC_TURRET_USE||turret==GSC_TURRET_GET||turret==GSC_TURRET_IS_FIRING;
@@ -1058,12 +1126,15 @@ static int entity_method_has_result(int descriptor) {
 }
 static int entity_method_argument_kind(int descriptor) {
     if(descriptor==R243_STANCE_METHOD||descriptor==COD1_ALLOWED_STANCES_METHOD)return V_STRING;
-    if(actor_look_kind(descriptor))return actor_look_tag(actor_look_kind(descriptor))?V_STRING:actor_look_kind(descriptor)==GSC_ACTOR_LOOK_CAN_SEE?V_ENTITY:V_NUMBER;
+    if(actor_look_kind(descriptor))return (actor_look_tag(actor_look_kind(descriptor))||actor_look_kind(descriptor)==GSC_ACTOR_TRAVERSE_MODE)?V_STRING:actor_look_kind(descriptor)==GSC_ACTOR_LOOK_CAN_SEE?V_ENTITY:V_NUMBER;
     if(turret_method_kind(descriptor))return turret_method_kind(descriptor)==GSC_TURRET_SET_MODE?V_STRING:V_ENTITY;
     if(descriptor==504)return V_LOCALIZED_STRING;
+    if(descriptor==COD1_SET_GOAL_ENTITY_METHOD)return V_ENTITY;
     if(descriptor==503)return V_NODE;
     if(attachment_query_kind(descriptor))return V_NUMBER;
     if(spatial_method_kind(descriptor))return V_ENTITY;
+    if(player_method_kind(descriptor)>=GSC_PLAYER_ALLOW_STAND&&player_method_kind(descriptor)<=GSC_PLAYER_ALLOW_PRONE)return V_NUMBER;
+    if(player_method_kind(descriptor)==GSC_PLAYER_SET_ANGLES)return V_VECTOR;
     if(player_method_kind(descriptor))return (player_method_kind(descriptor)==GSC_PLAYER_FREEZE_CONTROLS||player_method_kind(descriptor)==GSC_PLAYER_SET_NORMAL_HEALTH)?V_NUMBER:V_STRING;
     return descriptor==ENTITY_METHOD_SETMODEL?V_STRING:V_VECTOR;
 }
@@ -1309,7 +1380,7 @@ static int new_expr(Parser *p,GscProgram *g,Expr e) {
         g->expr=fresh;
     }
     e.float_arithmetic=p->module>=0&&p->module<g->module_count?
-        (g->r232_source_float_selected&&r232_source_float_module(g->modules[p->module])?2:
+        (g->r232_source_float_selected&&(r232_source_float_module(g->modules[p->module])||g->map_source_float_selected)?2:
          g->float_arithmetic_selected&&!strcmp(g->modules[p->module],g->float_arithmetic_module)):0;
     if(e.float_arithmetic&&e.kind==E_NUMBER&&!e.integer) {
         uint32_t bits;
@@ -2274,9 +2345,18 @@ static int find_module(const GscProgram *g,const char *path) {
            !strcmp(g->modules[n],path))return n;
     return -1;
 }
+static int developer_func_hidden(const GscProgram *,int);
 static int find_func(const GscProgram *g,int module,const char *s) {
-    int n;for(n=0;n<g->func_count;n++)
-        if(g->funcs[n].module==module&&callable_name_equal(g,g->funcs[n].name,s))return n;
+    int n,first=0,end=g->func_count;
+    /* Modules append all their declarations together. Admission views preserve their order. */
+    while(first<end){
+        int middle=first+(end-first)/2;
+        if(g->funcs[middle].module<module)first=middle+1;
+        else end=middle;
+    }
+    for(n=first;n<g->func_count&&g->funcs[n].module==module;n++)
+        if(callable_name_equal(g,g->funcs[n].name,s)&&
+           !(g->map_developer_selected&&(g->map_developer_linking||g->linked)&&developer_func_hidden(g,n)))return n;
     return -1;
 }
 static int parse_top_item(Parser *p,GscProgram *g) {
@@ -2348,6 +2428,7 @@ static int parse_top_item(Parser *p,GscProgram *g) {
         fn->end=g->code_count;fn->expr_end=g->expr_count;
     return !p->failed;
 }
+static void developer_index_code(GscProgram *g);
 static int parse_dev_region(Parser *p,GscProgram *g,int file_scope,int depth) {
     DevBlock *block;
     int line=p->tok.line,col=p->tok.col;
@@ -2615,6 +2696,7 @@ int gsc_program_select_vector_math(GscProgram *g) {
     if(!g||g->invalid||g->linked||g->vector_math_selected)return 0;
     g->vector_math_selected=1;return 1;
 }
+int gsc_program_select_vehicle_nodes(GscProgram*g){if(!g||g->invalid||g->linked||g->vehicle_nodes_selected)return 0;g->vehicle_nodes_selected=1;return 1;}
 int gsc_program_select_node_queries(GscProgram *g) {
     if(!g||g->invalid||g->linked||g->node_queries_selected)return 0;
     g->node_queries_selected=1;return 1;
@@ -2707,6 +2789,10 @@ static int known_value_kind(const GscProgram *g,int root) {
     return -1;
 }
 #include "gsc_vector_math_descriptor.inc"
+#include "gsc_vehicle_spawn_descriptor.inc"
+#include "gsc_turret_precache_descriptor.inc"
+#include "gsc_turret_spawn_descriptor.inc"
+#include "gsc_bullet_trace_descriptor.inc"
 #include "gsc_node_query_descriptor.inc"
 #include "gsc_ai_array_descriptor.inc"
 #include "gsc_start_origin_descriptor.inc"
@@ -3182,25 +3268,10 @@ static int program_link_strict(GscProgram *g,const char *entry_module,int entiti
                                            error,error_size))return 0;
             if(i->kind==I_METHOD&&!i->module[0]&&entity_method_descriptor(g,i->name)==R243_STANCE_METHOD&&find_func(g,receiver_owner_module(g,n,0),i->name)<0&&stance_static_issues(g,i->args,i->argc)){if(error&&error_size)snprintf(error,error_size,"line %d: isStanceAllowed requires one stance string",i->line);return 0;}
             if(i->kind==I_METHOD&&!i->module[0]&&entity_method_descriptor(g,i->name)==R243_ANIMTIME_METHOD&&find_func(g,receiver_owner_module(g,n,0),i->name)<0&&animtime_static_issues(g,i->args,i->argc)){if(error&&error_size)snprintf(error,error_size,"line %d: getAnimTime requires one typed animation",i->line);return 0;}
-            if(i->kind==I_METHOD&&!i->module[0]&&entity_method_descriptor(g,i->name)==502&&
-               find_func(g,i->owner_module,i->name)<0) {
-                int arg;
-                if(i->argc!=4) {
-                    if(error&&error_size)snprintf(error,error_size,"line %d: rotateyaw requires four numeric operands",i->line);
-                    return 0;
-                }
-                for(arg=0;arg<4;++arg) {
-                    int type=known_value_kind(g,i->args[arg]);
-                    if(type>=0&&type!=V_NUMBER) {
-                        if(error&&error_size)snprintf(error,error_size,"line %d: rotateyaw argument %d must be numeric",i->line,arg+1);
-                        return 0;
-                    }
-                }
-            }
             if(i->kind==I_METHOD&&!i->module[0]&&actor_look_kind(entity_method_descriptor(g,i->name))&&find_func(g,i->owner_module,i->name)<0){
                 int k=actor_look_kind(entity_method_descriptor(g,i->name)),a;
-                for(a=0;a<i->argc;a++){const Expr *e=&g->expr[i->args[a]];int type=known_value_kind(g,i->args[a]);int want=k==GSC_ACTOR_LOOK_NODES?V_NAMESPACED_ANIMATION:k==GSC_ACTOR_LOOK_TARGET&&a==0?V_VECTOR:actor_look_tag(k)?V_STRING:k==GSC_ACTOR_LOOK_CAN_SEE?V_ENTITY:V_NUMBER;
-                    if((type>=0&&type!=want)||(want==V_NAMESPACED_ANIMATION&&e->kind==E_ANIMTREE_VALUE)||(want!=V_NAMESPACED_ANIMATION&&(e->kind==E_ANIM_REF||e->kind==E_ANIMTREE_VALUE))){if(error&&error_size)snprintf(error,error_size,"line %d: actor look literal operand type mismatch",i->line);return 0;}
+                for(a=0;a<i->argc;a++){const Expr *e=&g->expr[i->args[a]];int type=known_value_kind(g,i->args[a]);int want=k==GSC_ACTOR_LOOK_CHECK_PRONE?(a==0?V_VECTOR:V_NUMBER):k==GSC_ACTOR_LOOK_SHOOT?(i->argc==1?V_NUMBER:a==1?V_VECTOR:-1):(k==GSC_ACTOR_LOOK_CAN_SHOOT||k==GSC_ACTOR_LOOK_AIM_AT_POS||k==GSC_ACTOR_LOOK_MAY_MOVE)?V_VECTOR:k==GSC_ACTOR_LOOK_NODES?V_NAMESPACED_ANIMATION:k==GSC_ACTOR_LOOK_TARGET&&a==0?V_VECTOR:(actor_look_tag(k)||k==GSC_ACTOR_TRAVERSE_MODE)?V_STRING:k==GSC_ACTOR_LOOK_CAN_SEE?V_ENTITY:V_NUMBER;
+                    if(want>=0&&((type>=0&&type!=want)||(want==V_NAMESPACED_ANIMATION&&e->kind==E_ANIMTREE_VALUE)||(want!=V_NAMESPACED_ANIMATION&&(e->kind==E_ANIM_REF||e->kind==E_ANIMTREE_VALUE)))){if(error&&error_size)snprintf(error,error_size,"line %d: actor look literal operand type mismatch",i->line);return 0;}
                 }
             }
             if(i->kind==I_METHOD&&!i->module[0]&&actor_animation_kind(entity_method_descriptor(g,i->name))&&find_func(g,i->owner_module,i->name)<0) {
@@ -3208,8 +3279,8 @@ static int program_link_strict(GscProgram *g,const char *entry_module,int entiti
                 /* Orient getters run after actual Actor validation. Literal
                  * operands must not bypass their committed-error prefix. */
                 for(a=0;k!=GSC_ACTOR_ANIMATION_ORIENT_MODE&&a<i->argc;a++) {const Expr *e=&g->expr[i->args[a]];int type=known_value_kind(g,i->args[a]);
-                    int string=((k==GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART||k==GSC_ACTOR_ANIMATION_FLAGGED_ALL)||k==GSC_ACTOR_ANIMATION_FLAGGED_RESTART||k==GSC_ACTOR_ANIMATION_ORIENT_MODE||k==GSC_ACTOR_ANIMATION_ANIM_MODE)&&a==0;
-                    int anim=(k==GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART||k==GSC_ACTOR_ANIMATION_FLAGGED_ALL)?(a==1||a==2):(k==GSC_ACTOR_ANIMATION_KNOB_ALL||k==GSC_ACTOR_ANIMATION_UPDATE_PRONE)?a<2:k==GSC_ACTOR_ANIMATION_PRONE_NODES?a>=2:(k==GSC_ACTOR_ANIMATION_CLEAR||k==GSC_ACTOR_ANIMATION_SET)?a==0:k==GSC_ACTOR_ANIMATION_FLAGGED_RESTART&&a==1;
+                    int string=((k==GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART||k==GSC_ACTOR_ANIMATION_FLAGGED_ALL)||(k==GSC_ACTOR_ANIMATION_FLAGGED_RESTART||k==GSC_ACTOR_ANIMATION_FLAGGED_KNOB)||k==GSC_ACTOR_ANIMATION_ORIENT_MODE||k==GSC_ACTOR_ANIMATION_ANIM_MODE)&&a==0;
+                    int anim=k==GSC_ACTOR_ANIMATION_AIM_NODES?1:(k==GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART||k==GSC_ACTOR_ANIMATION_FLAGGED_ALL)?(a==1||a==2):((k==GSC_ACTOR_ANIMATION_KNOB_ALL||k==GSC_ACTOR_ANIMATION_KNOB_ALL_RESTART)||k==GSC_ACTOR_ANIMATION_UPDATE_PRONE)?a<2:k==GSC_ACTOR_ANIMATION_PRONE_NODES?a>=2:(k==GSC_ACTOR_ANIMATION_CLEAR||k==GSC_ACTOR_ANIMATION_SET||k==GSC_ACTOR_ANIMATION_KNOB)?a==0:(k==GSC_ACTOR_ANIMATION_FLAGGED_RESTART||k==GSC_ACTOR_ANIMATION_FLAGGED_KNOB)&&a==1;
                     if((string&&((type>=0&&type!=V_STRING)||e->kind==E_ANIM_REF||e->kind==E_ANIMTREE_VALUE))||
                        (anim&&(type>=0||e->kind==E_ANIMTREE_VALUE))||
                        (!string&&!anim&&((type>=0&&type!=V_NUMBER)||e->kind==E_ANIM_REF||e->kind==E_ANIMTREE_VALUE))) {
@@ -3281,7 +3352,7 @@ static int program_link_strict(GscProgram *g,const char *entry_module,int entiti
         if(i->kind==I_CALL&&!i->module[0]&&find_func(g,i->owner_module,i->name)<0&&move_delta_descriptor(g,i->name)){if(move_delta_static_issues(g,i->args,i->argc)){if(error&&error_size)snprintf(error,error_size,"line %d: GetMoveDelta requires current animation and up to2 finite phases",i->line);return 0;}i->target=-1-R243_MOVE_DELTA_STATEMENT_TARGET;continue;}
         if(i->kind==I_CALL&&!i->module[0]&&find_func(g,i->owner_module,i->name)<0&&start_origin_descriptor(g,i->name)) {
             if(start_origin_static_issues(g,i->args,i->argc)){if(error&&error_size)snprintf(error,error_size,"line %d: getstartorigin requires vector,vector,fixed Guy animation",i->line);return 0;}
-            i->target=-1-START_ORIGIN_STATEMENT_TARGET;continue;
+            i->target=-1-(start_origin_descriptor(g,i->name)==2?START_ANGLES_STATEMENT_TARGET:START_ORIGIN_STATEMENT_TARGET);continue;
         }
         if(i->kind==I_CALL&&!i->module[0]&&find_func(g,i->owner_module,i->name)<0&&ai_array_descriptor(g,i->name)) {
             if(ai_array_static_issues(g,i->args,i->argc)){if(error&&error_size)snprintf(error,error_size,"line %d: getaiarray requires ordinary team strings",i->line);return 0;}
@@ -3335,6 +3406,23 @@ static int program_link_strict(GscProgram *g,const char *entry_module,int entiti
         if(i->kind==I_CALL&&!i->module[0]&&find_func(g,i->owner_module,i->name)<0&&animation_length_descriptor(g,i->name)) {
             i->target=-1-ANIMATION_LENGTH_STATEMENT_TARGET;continue;
         }
+        if(i->kind==I_CALL&&!i->module[0]&&find_func(g,i->owner_module,i->name)<0&&bullet_trace_descriptor(g,i->name)){
+         if(bullet_trace_issues(g,i->args,i->argc)){if(error&&error_size)snprintf(error,error_size,"line %d: bulletTrace requires vector,vector,numeric boolean,undefined",i->line);return 0;}
+         i->target=-1-BULLET_TRACE_STATEMENT_TARGET;continue;
+        }
+        if(i->kind==I_CALL&&!i->module[0]&&find_func(g,i->owner_module,i->name)<0&&vehicle_spawn_descriptor(g,i->name)){
+         if(vehicle_spawn_issues(g,i->args,i->argc)){if(error&&error_size)snprintf(error,error_size,"line %d: spawnVehicle requires three strings and two vectors",i->line);return 0;}
+         i->target=-1-VEHICLE_SPAWN_STATEMENT_TARGET;continue;
+        }
+        if(i->kind==I_CALL&&!i->module[0]&&find_func(g,i->owner_module,i->name)<0&&turret_precache_descriptor(g,i->name)){
+         if(turret_precache_issues(g,i->args,i->argc)){if(error&&error_size)snprintf(error,error_size,"line %d: precacheTurret requires valid argument count",i->line);return 0;}
+         i->target=-1-TURRET_PRECACHE_STATEMENT_TARGET;continue;
+        }
+        if(i->kind==I_CALL&&!i->module[0]&&find_func(g,i->owner_module,i->name)<0&&turret_spawn_descriptor(g,i->name)){
+         if(turret_spawn_issues(g,i->args,i->argc)){if(error&&error_size)snprintf(error,error_size,"line %d: spawnTurret requires string,vector,string",i->line);return 0;}
+         i->target=-1-TURRET_SPAWN_STATEMENT_TARGET;continue;
+        }
+        if(i->kind==I_CALL&&!i->module[0]&&find_func(g,i->owner_module,i->name)<0&&model_part_descriptor(g,i->name)){i->target=-1-MODEL_PART_STATEMENT_TARGET;continue;}
         if(i->kind==I_CALL&&!i->module[0]&&find_func(g,i->owner_module,i->name)<0&&weapon_classname_descriptor(g,i->name)){i->target=-1-WEAPON_CLASSNAME_STATEMENT_TARGET;continue;}
         if(i->kind==I_CALL&&!i->module[0]&&find_func(g,i->owner_module,i->name)<0&&weapon_model_descriptor(g,i->name)) {
             i->target=-1-WEAPON_MODEL_STATEMENT_TARGET;continue;
@@ -3554,8 +3642,8 @@ static int program_link_strict(GscProgram *g,const char *entry_module,int entiti
                         e->line,e->name,e->argc);
                     return 0;
                 }
-            } else if(binding.kind==R243_EXPR_TARGET_MOVE_DELTA||binding.kind==GSC_EXPR_TARGET_R232_RANDOM_RANGE||binding.kind==GSC_EXPR_TARGET_START_ORIGIN_NATIVE||binding.kind==GSC_EXPR_TARGET_AI_ARRAY_NATIVE||binding.kind==GSC_EXPR_TARGET_HUDELEM_NATIVE||binding.kind==GSC_EXPR_TARGET_NODE_QUERY_NATIVE||binding.kind==GSC_EXPR_TARGET_VECTOR_MATH_NATIVE||binding.kind==GSC_EXPR_TARGET_ENTITY_NATIVE||binding.kind==GSC_EXPR_TARGET_RESOURCE_NATIVE||
-                      binding.kind==GSC_EXPR_TARGET_OBJECTIVE_NATIVE||binding.kind==GSC_EXPR_TARGET_CONSOLE_NATIVE||binding.kind==GSC_EXPR_TARGET_HUD_NATIVE||binding.kind==GSC_EXPR_TARGET_MISSION_NATIVE||binding.kind==GSC_EXPR_TARGET_BLAST_NATIVE||binding.kind==GSC_EXPR_TARGET_QUAKE_NATIVE||binding.kind==GSC_EXPR_TARGET_FX_NATIVE||binding.kind==GSC_EXPR_TARGET_CVAR_NATIVE||binding.kind==GSC_EXPR_TARGET_SHELLSHOCK_NATIVE||binding.kind==GSC_EXPR_TARGET_DEBUG_TEXT_NATIVE||binding.kind==GSC_EXPR_TARGET_DEBUG_LINE_NATIVE||binding.kind==GSC_EXPR_TARGET_AMBIENT_NATIVE||binding.kind==GSC_EXPR_TARGET_PRECACHE_ITEM_NATIVE||binding.kind==GSC_EXPR_TARGET_SAVE_GAME_NATIVE||binding.kind==GSC_EXPR_TARGET_TAG_FX_NATIVE||binding.kind==GSC_EXPR_TARGET_NATIVE_QUERY||binding.kind==GSC_EXPR_TARGET_SPAWNER_ARRAY_NATIVE||binding.kind==GSC_EXPR_TARGET_RANDOMINT_NATIVE||binding.kind==GSC_EXPR_TARGET_RANDOMFLOAT_NATIVE||binding.kind==GSC_EXPR_TARGET_KEYBINDING_NATIVE||binding.kind==GSC_EXPR_TARGET_STRUCT_NATIVE||binding.kind==GSC_EXPR_TARGET_ENTITY_QUERY_NATIVE||binding.kind==GSC_EXPR_TARGET_WEAPON_MODEL_NATIVE||binding.kind==GSC_EXPR_TARGET_WEAPON_CLASSNAME_NATIVE||binding.kind==GSC_EXPR_TARGET_ANIMATION_LENGTH_NATIVE) {
+            } else if(binding.kind==GSC_EXPR_TARGET_BULLET_TRACE_NATIVE||binding.kind==GSC_EXPR_TARGET_VEHICLE_SPAWN_NATIVE||binding.kind==GSC_EXPR_TARGET_TURRET_PRECACHE_NATIVE||binding.kind==GSC_EXPR_TARGET_TURRET_SPAWN_NATIVE||binding.kind==R243_EXPR_TARGET_MOVE_DELTA||binding.kind==GSC_EXPR_TARGET_R232_RANDOM_RANGE||binding.kind==GSC_EXPR_TARGET_START_ORIGIN_NATIVE||binding.kind==GSC_EXPR_TARGET_AI_ARRAY_NATIVE||binding.kind==GSC_EXPR_TARGET_HUDELEM_NATIVE||binding.kind==GSC_EXPR_TARGET_NODE_QUERY_NATIVE||binding.kind==GSC_EXPR_TARGET_VECTOR_MATH_NATIVE||binding.kind==GSC_EXPR_TARGET_ENTITY_NATIVE||binding.kind==GSC_EXPR_TARGET_RESOURCE_NATIVE||
+                      binding.kind==GSC_EXPR_TARGET_OBJECTIVE_NATIVE||binding.kind==GSC_EXPR_TARGET_CONSOLE_NATIVE||binding.kind==GSC_EXPR_TARGET_HUD_NATIVE||binding.kind==GSC_EXPR_TARGET_MISSION_NATIVE||binding.kind==GSC_EXPR_TARGET_BLAST_NATIVE||binding.kind==GSC_EXPR_TARGET_QUAKE_NATIVE||binding.kind==GSC_EXPR_TARGET_FX_NATIVE||binding.kind==GSC_EXPR_TARGET_CVAR_NATIVE||binding.kind==GSC_EXPR_TARGET_SHELLSHOCK_NATIVE||binding.kind==GSC_EXPR_TARGET_DEBUG_TEXT_NATIVE||binding.kind==GSC_EXPR_TARGET_DEBUG_LINE_NATIVE||binding.kind==GSC_EXPR_TARGET_AMBIENT_NATIVE||binding.kind==GSC_EXPR_TARGET_PRECACHE_ITEM_NATIVE||binding.kind==GSC_EXPR_TARGET_SAVE_GAME_NATIVE||binding.kind==GSC_EXPR_TARGET_TAG_FX_NATIVE||binding.kind==GSC_EXPR_TARGET_NATIVE_QUERY||binding.kind==GSC_EXPR_TARGET_SPAWNER_ARRAY_NATIVE||binding.kind==GSC_EXPR_TARGET_RANDOMINT_NATIVE||binding.kind==GSC_EXPR_TARGET_RANDOMFLOAT_NATIVE||binding.kind==GSC_EXPR_TARGET_KEYBINDING_NATIVE||binding.kind==GSC_EXPR_TARGET_STRUCT_NATIVE||binding.kind==GSC_EXPR_TARGET_ENTITY_QUERY_NATIVE||binding.kind==GSC_EXPR_TARGET_WEAPON_MODEL_NATIVE||binding.kind==GSC_EXPR_TARGET_MODEL_PART_NATIVE||binding.kind==GSC_EXPR_TARGET_WEAPON_CLASSNAME_NATIVE||binding.kind==GSC_EXPR_TARGET_ANIMATION_LENGTH_NATIVE) {
                 if(binding.issues) {
                     if(error&&error_size)snprintf(error,error_size,
                         "line %d: %s has invalid argument count or literal types",e->line,e->name);
@@ -3640,11 +3728,17 @@ static int program_link_strict(GscProgram *g,const char *entry_module,int entiti
      * the new receiver tags are covered by this transactional guarantee. */
     for(n=0;n<g->expr_count;n++){const Expr *e=&g->expr[n];int d=actor_look_descriptor(g,e->name),k=actor_look_kind(d),wanted,type;
         if(e->kind!=E_METHOD_CALL||!k||e->module[0]||find_func(g,e->owner_module,e->name)>=0||e->argc!=1)continue;
-        wanted=actor_look_tag(k)?V_STRING:k==GSC_ACTOR_LOOK_CAN_SEE?V_ENTITY:-1;type=known_value_kind(g,e->args[0]);
+        wanted=(k==GSC_ACTOR_LOOK_CAN_SHOOT||k==GSC_ACTOR_LOOK_AIM_AT_POS||k==GSC_ACTOR_LOOK_MAY_MOVE)?V_VECTOR:(actor_look_tag(k)||k==GSC_ACTOR_TRAVERSE_MODE)?V_STRING:k==GSC_ACTOR_LOOK_CAN_SEE?V_ENTITY:-1;type=known_value_kind(g,e->args[0]);
         if(wanted>=0&&((type>=0&&type!=wanted)||g->expr[e->args[0]].kind==E_ANIM_REF||g->expr[e->args[0]].kind==E_ANIMTREE_VALUE)){if(error&&error_size)snprintf(error,error_size,"line %d: actor look expression literal type mismatch",e->audit_line);return 0;}
     }
+    for(n=0;n<g->expr_count;n++){const Expr *e=&g->expr[n];int a;
+        if(e->kind!=E_METHOD_CALL||e->module[0]||find_func(g,e->owner_module,e->name)>=0||actor_look_kind(actor_look_descriptor(g,e->name))!=GSC_ACTOR_LOOK_CHECK_PRONE)continue;
+        if(e->argc!=3){if(error&&error_size)snprintf(error,error_size,"checkProne requires three arguments");return 0;}
+        for(a=0;a<3;a++){int type=known_value_kind(g,e->args[a]),want=a==0?V_VECTOR:V_NUMBER;
+         if((type>=0&&type!=want)||g->expr[e->args[a]].kind==E_ANIM_REF||g->expr[e->args[a]].kind==E_ANIMTREE_VALUE){if(error&&error_size)snprintf(error,error_size,"checkProne expression literal type mismatch");return 0;}}
+    }
     commit_receiver_bindings(g);
-    g->linked=1;return 1;
+    developer_index_code(g);g->linked=1;return 1;
 }
 #include "gsc_r232_developer.inc"
 #include "gsc_r232_function_admission.inc"
@@ -4544,6 +4638,11 @@ static int rfail(GscRuntime *r,int line,const char *fmt,...) {
     return 0;
 }
 static Task*task_at(const GscRuntime*,int);
+static int task_directory_limit(const GscRuntime *r){
+    return r->lifetime_enabled?GSC_LIFETIME_TASK_CAPACITY+r->extra_capacity:MAX_THREADS;
+}
+static int task_reserve_next(GscRuntime *,int);
+
 static int r243s_init_private(const GscRuntime*,const void*,size_t);
 #include "gsc_vm_r243_time_root.inc"
 static int refresh_state_context(GscRuntime *,Task *);
@@ -4574,6 +4673,13 @@ static int r232_source_float_value(GscRuntime *,int,const Value *,const Value *,
 static int r232_source_float_cast(GscRuntime *,int,const Value *,int,Value *);
 static int string_int_concat_pair(const GscRuntime *,const Value *,const Value *);
 static int string_int_concat(GscRuntime *,const Value *,const Value *,int,Value *);
+static int vehicle_node_value_valid(const GscRuntime*,const Value*);
+static int vehicle_node_value_live(GscRuntime*,const Value*,int,int*);
+static int vehicle_node_field_read(GscRuntime*,const Value*,const char*,int,Value*);
+static int vehicle_node_compare(GscRuntime*,int,const Value*,const Value*,int,Value*);
+static int vehicle_node_ref_equal(const GscVehicleNodeRef*,const GscVehicleNodeRef*);
+static int vehicle_node_field_builtin(const char*);
+static int node_query_capability(const GscRuntime*r,int kind){return kind==GSC_VEHICLE_QUERY_ONE||kind==GSC_VEHICLE_QUERY_ARRAY?r->vehicle_nodes_enabled:r->node_queries_enabled;}
 static int node_value_valid(const GscRuntime *,const Value *);
 static int node_value_live(GscRuntime *,const Value *,int,int *);
 static int node_field_read(GscRuntime *,const Value *,const char *,int,Value *);
@@ -4668,6 +4774,11 @@ static int loop_fx_call(GscRuntime *,const Value *,int,int,Value *);
 #include "gsc_vm_native_queries.inc"
 #include "gsc_vm_weapon_model.inc"
 #include "gsc_vm_weapon_classname.inc"
+#include "gsc_vm_vehicle_spawn.inc"
+#include "gsc_vm_turret_precache.inc"
+#include "gsc_vm_turret_spawn.inc"
+#include "gsc_vm_bullet_trace.inc"
+#include "gsc_vm_model_part.inc"
 #include "gsc_vm_animation_length.inc"
 #include "gsc_vm_start_origin.inc"
 #include "gsc_vm_namespace_start_origin.inc"
@@ -4683,6 +4794,7 @@ static int loop_fx_call(GscRuntime *,const Value *,int,int,Value *);
 #include "gsc_vm_entity_number.inc"
 #include "gsc_vm_spawner_team_arrays.inc"
 #include "gsc_vm_entity_queries.inc"
+#include "gsc_vm_vehicle_nodes.inc"
 #include "gsc_vm_node_queries.inc"
 #include "gsc_vm_actor_goal.inc"
 #include "gsc_vm_r232_turrets.inc"
@@ -4701,14 +4813,19 @@ static int loop_fx_call(GscRuntime *,const Value *,int,int,Value *);
 static int invoke_builtin_statement(GscRuntime *r,int id,const Value *args,
                                     int argc,int line) {
     const Builtin *b;
+    if(id==BULLET_TRACE_STATEMENT_TARGET){Value ignored;return bullet_trace_call(r,args,argc,line,&ignored);}
+    if(id==VEHICLE_SPAWN_STATEMENT_TARGET){Value ignored;return vehicle_spawn_call(r,args,argc,line,&ignored);}
+    if(id==TURRET_PRECACHE_STATEMENT_TARGET){Value ignored;return turret_precache_call(r,args,argc,line,&ignored);}
+    if(id==TURRET_SPAWN_STATEMENT_TARGET){Value ignored;return turret_spawn_call(r,args,argc,line,&ignored);}
     if(id==R232_RANDOM_RANGE_STATEMENT_TARGET){Value ignored;return random_range_call(r,args,argc,line,&ignored);}
     if(id==R243_MOVE_DELTA_STATEMENT_TARGET){Value ignored;return move_delta_call(r,args,argc,line,&ignored);}
-    if(id==START_ORIGIN_STATEMENT_TARGET){Value ignored;return start_origin_selected_call(r,args,argc,line,&ignored);}
+    if(id==START_ORIGIN_STATEMENT_TARGET||id==START_ANGLES_STATEMENT_TARGET){Value ignored;return start_origin_selected_call(r,args,argc,line,id==START_ANGLES_STATEMENT_TARGET?2:1,&ignored);}
     if(id==AI_ARRAY_STATEMENT_TARGET){Value ignored;return ai_array_call(r,args,argc,line,&ignored);}
     if(id==HUDELEM_TARGET_BASE+GSC_HUDELEM_CREATE) {Value ignored;return hud_create(r,argc,line,&ignored);}
     if(id>NODE_QUERY_TARGET_BASE) {Value ignored;return node_query_call(r,id-NODE_QUERY_TARGET_BASE,args,argc,line,&ignored);}
     if(id>VECTOR_MATH_TARGET_BASE) {Value ignored;return vector_math_call(r,id-VECTOR_MATH_TARGET_BASE,args,argc,line,&ignored);}
     if(id==ANIMATION_LENGTH_STATEMENT_TARGET) {Value ignored;return animation_length_call(r,args,argc,float_arithmetic_active(r),line,&ignored);}
+    if(id==MODEL_PART_STATEMENT_TARGET){Value ignored;return model_part_call(r,args,argc,line,&ignored);}
     if(id==WEAPON_CLASSNAME_STATEMENT_TARGET){Value ignored;return weapon_classname_call(r,args,argc,line,&ignored);}
     if(id==WEAPON_MODEL_STATEMENT_TARGET) {Value ignored;return weapon_model_call(r,args,argc,line,&ignored);}
     if(id>ENTITY_QUERY_TARGET_BASE) {Value ignored;return entity_query_call(r,id-ENTITY_QUERY_TARGET_BASE,args,argc,line,&ignored);}
@@ -4755,6 +4872,7 @@ static int invoke_builtin_expression(GscRuntime *r,int id,const Value *args,
     if(argc==1&&args&&args[0].kind==V_HUDELEM&&b->expression==builtin_isdefined) {
         int alive;if(!hud_value_live(r,&args[0],line,&alive))return 0;scalar_integer(out,alive);return 1;
     }
+    if(argc==1&&args&&args[0].kind==V_VEHICLE_NODE&&b->expression==builtin_isdefined){int alive;if(!vehicle_node_value_live(r,args,line,&alive))return 0;scalar_integer(out,alive);return 1;}
     if(argc==1&&args&&args[0].kind==V_NODE&&b->expression==builtin_isdefined) {
         int alive;if(!node_value_live(r,&args[0],line,&alive))return 0;scalar_integer(out,alive);return 1;
     }
@@ -4791,14 +4909,18 @@ static int eval_inner(GscRuntime *r,Frame *f,int index,int depth,Value *out,int 
     if(e->kind==E_NATIVE_CALL||e->kind==E_ISDEFINED) {
         if(e->call_binding==GSC_EXPR_TARGET_LOCAL_SCRIPT)
             return rfail(r,line,"unsupported local script expression call runtime semantics");
-        if(e->call_binding==GSC_EXPR_TARGET_HUDELEM_NATIVE) {
+        if(e->call_binding==GSC_EXPR_TARGET_BULLET_TRACE_NATIVE){if(!r->bullet_trace_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||find_func(r->program,e->owner_module,e->name)>=0||!bullet_trace_descriptor(r->program,e->name)||bullet_trace_issues(r->program,e->args,e->argc))return rfail(r,line,"invalid bulletTrace binding");
+        } else if(e->call_binding==GSC_EXPR_TARGET_VEHICLE_SPAWN_NATIVE){if(!r->vehicle_spawn_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||find_func(r->program,e->owner_module,e->name)>=0||!vehicle_spawn_descriptor(r->program,e->name)||vehicle_spawn_issues(r->program,e->args,e->argc))return rfail(r,line,"invalid spawnVehicle binding");
+        } else if(e->call_binding==GSC_EXPR_TARGET_TURRET_PRECACHE_NATIVE){if(!r->turret_precache_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||find_func(r->program,e->owner_module,e->name)>=0||!turret_precache_descriptor(r->program,e->name)||turret_precache_issues(r->program,e->args,e->argc))return rfail(r,line,"invalid precacheTurret binding");
+        } else if(e->call_binding==GSC_EXPR_TARGET_TURRET_SPAWN_NATIVE){if(!r->turret_spawn_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||find_func(r->program,e->owner_module,e->name)>=0||!turret_spawn_descriptor(r->program,e->name)||turret_spawn_issues(r->program,e->args,e->argc))return rfail(r,line,"invalid spawnTurret binding");
+        } else if(e->call_binding==GSC_EXPR_TARGET_HUDELEM_NATIVE) {
             if(!r->hud_elements_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->argc||
                find_func(r->program,e->owner_module,e->name)>=0||!hud_elem_global(r->program,e->name))
                 return rfail(r,line,"invalid selected HUD element expression binding");
         } else if(e->call_binding==GSC_EXPR_TARGET_R232_RANDOM_RANGE){if(!r->random_range_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||find_func(r->program,e->owner_module,e->name)>=0||!random_range_descriptor(r->program,e->name)||random_range_issues(r->program,e->args,e->argc))return rfail(r,line,"invalid selected randomFloatRange binding");
         } else if(e->call_binding==R243_EXPR_TARGET_MOVE_DELTA){if(!r->move_delta_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||find_func(r->program,e->owner_module,e->name)>=0||!move_delta_descriptor(r->program,e->name)||move_delta_static_issues(r->program,e->args,e->argc))return rfail(r,line,"invalid selected GetMoveDelta binding");
         } else if(e->call_binding==GSC_EXPR_TARGET_START_ORIGIN_NATIVE) {
-            if((!r->start_origin_enabled&&!r->namespace_start_origin_enabled)||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||
+            if((!r->start_origin_enabled&&!r->namespace_start_origin_enabled)||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=start_origin_descriptor(r->program,e->name)||
                find_func(r->program,e->owner_module,e->name)>=0||!start_origin_descriptor(r->program,e->name)||
                start_origin_static_issues(r->program,e->args,e->argc))return rfail(r,line,"invalid start-origin expression binding");
         } else if(e->call_binding==GSC_EXPR_TARGET_AI_ARRAY_NATIVE) {
@@ -4806,7 +4928,7 @@ static int eval_inner(GscRuntime *r,Frame *f,int index,int depth,Value *out,int 
                find_func(r->program,e->owner_module,e->name)>=0||!ai_array_descriptor(r->program,e->name)||
                ai_array_static_issues(r->program,e->args,e->argc))return rfail(r,line,"invalid AI array expression binding");
         } else if(e->call_binding==GSC_EXPR_TARGET_NODE_QUERY_NATIVE) {
-            if(!r->node_queries_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||
+            if(!node_query_capability(r,e->target)||e->module[0]||e->kind!=E_NATIVE_CALL||
                find_func(r->program,e->owner_module,e->name)>=0||
                node_query_descriptor(r->program,e->name)!=e->target||
                node_query_static_issues(r->program,e->target,e->args,e->argc))
@@ -4821,6 +4943,8 @@ static int eval_inner(GscRuntime *r,Frame *f,int index,int depth,Value *out,int 
                 return rfail(r,line,"invalid entity expression binding");
         } else if(e->call_binding==GSC_EXPR_TARGET_ANIMATION_LENGTH_NATIVE) {
             if(!r->animation_length_enabled||e->module[0]||!animation_length_descriptor(r->program,e->name))return rfail(r,line,"invalid animation length binding");
+        } else if(e->call_binding==GSC_EXPR_TARGET_MODEL_PART_NATIVE){
+            if(!r->model_part_enabled||e->module[0]||!model_part_descriptor(r->program,e->name))return rfail(r,line,"invalid weapon classname binding");
         } else if(e->call_binding==GSC_EXPR_TARGET_WEAPON_CLASSNAME_NATIVE){
             if(!r->weapon_classname_enabled||e->module[0]||!weapon_classname_descriptor(r->program,e->name))return rfail(r,line,"invalid weapon classname binding");
         } else if(e->call_binding==GSC_EXPR_TARGET_WEAPON_MODEL_NATIVE) {
@@ -4884,7 +5008,7 @@ static int eval_inner(GscRuntime *r,Frame *f,int index,int depth,Value *out,int 
         if(!r->access_enabled||e->a<0||e->a>=index)
             return rfail(r,line,"unsupported entity property read");
         if(!eval(r,f,e->a,depth+1,&a,line))return 0;
-        if(r->arrays_enabled&&a.kind==V_ARRAY)return array_field_read(r,&a,e->name,line,out);
+        if(r->arrays_enabled&&(a.kind==V_ARRAY||string_size_field(&a,e->name)))return array_field_read(r,&a,e->name,line,out);
         if(r->state_enabled)return state_field_read(r,&a,e->name,line,out);
         return bridge_property_read(r,&a,entity_property_descriptor(e->name),line,out);
     }
@@ -4911,14 +5035,19 @@ static int eval_inner(GscRuntime *r,Frame *f,int index,int depth,Value *out,int 
         for(k=0;k<e->argc;k++) {
             if(!eval(r,f,e->args[k],depth+1,&args[k],line))return 0;
         }
+        if(e->call_binding==GSC_EXPR_TARGET_BULLET_TRACE_NATIVE)return bullet_trace_call(r,args,e->argc,line,out);
+        if(e->call_binding==GSC_EXPR_TARGET_VEHICLE_SPAWN_NATIVE)return vehicle_spawn_call(r,args,e->argc,line,out);
+        if(e->call_binding==GSC_EXPR_TARGET_TURRET_PRECACHE_NATIVE)return turret_precache_call(r,args,e->argc,line,out);
+        if(e->call_binding==GSC_EXPR_TARGET_TURRET_SPAWN_NATIVE)return turret_spawn_call(r,args,e->argc,line,out);
         if(e->call_binding==GSC_EXPR_TARGET_HUDELEM_NATIVE)return hud_create(r,e->argc,line,out);
         if(e->call_binding==GSC_EXPR_TARGET_R232_RANDOM_RANGE)return random_range_call(r,args,e->argc,line,out);
         if(e->call_binding==R243_EXPR_TARGET_MOVE_DELTA)return move_delta_call(r,args,e->argc,line,out);
-        if(e->call_binding==GSC_EXPR_TARGET_START_ORIGIN_NATIVE)return start_origin_selected_call(r,args,e->argc,line,out);
+        if(e->call_binding==GSC_EXPR_TARGET_START_ORIGIN_NATIVE)return start_origin_selected_call(r,args,e->argc,line,e->target,out);
         if(e->call_binding==GSC_EXPR_TARGET_AI_ARRAY_NATIVE)return ai_array_call(r,args,e->argc,line,out);
         if(e->call_binding==GSC_EXPR_TARGET_NODE_QUERY_NATIVE)return node_query_call(r,e->target,args,e->argc,line,out);
         if(e->call_binding==GSC_EXPR_TARGET_VECTOR_MATH_NATIVE)return vector_math_call(r,e->target,args,e->argc,line,out);
         if(e->call_binding==GSC_EXPR_TARGET_ANIMATION_LENGTH_NATIVE)return animation_length_call(r,args,e->argc,e->float_arithmetic,line,out);
+        if(e->call_binding==GSC_EXPR_TARGET_MODEL_PART_NATIVE)return model_part_call(r,args,e->argc,line,out);
         if(e->call_binding==GSC_EXPR_TARGET_WEAPON_CLASSNAME_NATIVE)return weapon_classname_call(r,args,e->argc,line,out);
         if(e->call_binding==GSC_EXPR_TARGET_WEAPON_MODEL_NATIVE)return weapon_model_call(r,args,e->argc,line,out);
         if(e->call_binding==GSC_EXPR_TARGET_ENTITY_QUERY_NATIVE)return entity_query_call(r,e->target,args,e->argc,line,out);
@@ -4986,11 +5115,13 @@ static int eval_inner(GscRuntime *r,Frame *f,int index,int depth,Value *out,int 
     if(!eval(r,f,e->b,depth+1,&b,line))return 0;
     if(animation_namespace_kind(a.kind)||animation_namespace_kind(b.kind))return animation_namespace_compare(r,e->op,&a,&b,line,out);
     if(a.kind==V_ANIMATION||b.kind==V_ANIMATION)return animation_compare(r,e->op,&a,&b,line,out);
+    if(a.kind==V_VEHICLE_NODE||b.kind==V_VEHICLE_NODE)return vehicle_node_compare(r,e->op,&a,&b,line,out);
     if(a.kind==V_NODE||b.kind==V_NODE)return node_compare(r,e->op,&a,&b,line,out);
     if(a.kind==V_HUDELEM||b.kind==V_HUDELEM)return hud_compare(r,e->op,&a,&b,line,out);
     if(b.kind==V_UNDEFINED)return rfail(r,line,"undefined value in expression");
     if(r->integer_bitwise_enabled&&(e->op=='|'||e->op=='^'||e->op=='&'))
         return integer_bitwise_binary(r,e->op,&a,&b,line,out);
+    if(e->op=='+'&&string_vector_concat_pair(r,&a,&b))return string_vector_concat(r,&a,&b,line,out);
     if(r->vector_arithmetic_enabled&&(a.kind==V_VECTOR||b.kind==V_VECTOR)&&
        e->op!=T_EQ&&e->op!=T_NE)
         return vector_arithmetic_binary(r,e->op,&a,&b,line,out);
@@ -5068,6 +5199,7 @@ static int assignment(GscRuntime *r,Frame *f,const char *name,Value v,int line) 
     if(v.kind==V_ANIMATION){if(!animation_value_valid(r,&v))return rfail(r,line,"invalid animation reference local value");if(!anim_data_current(r,r->executing_task))return 0;}
     if(v.kind==V_FUNCTION&&!function_value_valid(r,&v))return rfail(r,line,"invalid function reference local value");
     if(v.kind==V_STRUCT&&!struct_value_valid(r,&v))return rfail(r,line,"invalid structure local value");
+    if(v.kind==V_VEHICLE_NODE&&!vehicle_node_value_valid(r,&v))return rfail(r,line,"invalid vehicle-node local identity");
     if(v.kind==V_NODE&&!node_value_valid(r,&v))return rfail(r,line,"invalid node reference local value");
     if(v.kind==V_HUDELEM&&!hud_value_valid(r,&v))return rfail(r,line,"invalid HUD element local value");
     if(r->flow_enabled&&(literal_name(name)||!strcmp(name,"self")||!strcmp(name,"level")))
@@ -5082,7 +5214,21 @@ static int assignment(GscRuntime *r,Frame *f,const char *name,Value v,int line) 
 }
 static int push_frame(GscRuntime *r,Task *task,int fn,const Value *args,int argc,
                       const Value *self,int line) {
-    {char why[384]={0};if(!developer_runtime_current(r))return 0;if(!function_admission_runtime_current(r,fn,why,sizeof(why)))return rfail(r,0,"callee admission refused before entry: %s",why);}
+    /* After start the linked program and per-runtime admission mask are fixed.
+     * Developer and ownership checks still run on every entry. Only successful
+     * structural closure walks are shared by subsequent calls to that function. */
+    if(!developer_runtime_current(r))return 0;
+    if(r->program->function_admission_selected){
+        char why[384]={0};
+        int reusable=r->started && r->program->linked &&
+            r->function_admission_token && r->function_admission_token==r->program->function_admission_token &&
+            fn>=0 && fn<r->program->func_count && r->function_admission[fn];
+        if(!reusable || !r->verified_function_closure[fn]){
+            if(!function_admission_runtime_current(r,fn,why,sizeof(why)))
+                return rfail(r,0,"callee admission refused before entry: %s",why);
+            if(reusable)r->verified_function_closure[fn]=1;
+        }
+    }
 
     Frame *f;const Func *function;int n,bound;
     if(fn<0||fn>=r->program->func_count||argc<0||argc>MAX_PARAMS||(!args&&argc))
@@ -5113,7 +5259,7 @@ static int push_frame(GscRuntime *r,Task *task,int fn,const Value *args,int argc
 #include "gsc_vm_r243_same_bucket_wait.inc"
 static int spawn(GscRuntime *r,int fn,const Value *args,int argc,const Value *self,int line) {
     Task *task;
-    if(r->r243_thread_start_enabled&&r->executing_task)return r243_spawn_initial(r,fn,args,argc,self,line);
+    if(r->r243_thread_start_enabled&&r->executing_task)return r243_spawn_initial(r,fn,args,argc,self,line,NULL);
     /* Fixed placed INIT still uses deferred statements in this profile. Give
      * its actual level child map-only lifetime, matching the existing native
      * R243 inline ownership rule without selecting that broader scheduler. */
@@ -5365,7 +5511,7 @@ static int run_task(GscRuntime *r,Task *task,int *budget) {
                i->receiver_event_target!=-1||i->module[0]||
                (r->controls_enabled&&
                 !(descriptor>=ENTITY_METHOD_ATTACH&&descriptor<=ENTITY_METHOD_STOPLOOPSOUND)&&
-                ((descriptor==ENTITY_METHOD_SCRIPTED_START||descriptor==ENTITY_METHOD_SCRIPT_STATE||descriptor==ENTITY_METHOD_SCRIPTED_PREFIX||descriptor==ENTITY_METHOD_ACTOR_DROP||entity_link_method(descriptor))?!entity_method_argc_valid(descriptor,i->argc):i->argc!=entity_method_arity(descriptor))))
+                ((descriptor==502 || descriptor==COD1_LAUNCH || descriptor==COD1_ROTATE_ROLL || descriptor==COD1_ROTATE_TO || descriptor==COD1_MOVE_TO||descriptor==ENTITY_METHOD_SCRIPTED_START||descriptor==ENTITY_METHOD_SCRIPT_STATE||descriptor==ENTITY_METHOD_SCRIPTED_PREFIX||descriptor==ENTITY_METHOD_ACTOR_DROP||entity_link_method(descriptor)||vehicle_method_kind(descriptor))?!entity_method_argc_valid(descriptor,i->argc):i->argc!=entity_method_arity(descriptor))))
                 return rfail(r,i->line,"unsupported receiver method/thread");
             if(!eval(r,f,i->receiver,0,&v,i->line))return 0;
             for(n=0;n<i->argc;n++)if(!eval(r,f,i->args[n],0,&args[n],i->line))return 0;
@@ -5374,12 +5520,13 @@ static int run_task(GscRuntime *r,Task *task,int *budget) {
             if(!(descriptor==ENTITY_METHOD_SCRIPTED_START?r243_scripted_start_invoke(r,&v,args,i->argc,i->line):descriptor==ENTITY_METHOD_SCRIPT_STATE?r243_script_state_invoke(r,&v,args,i->argc,i->line):descriptor==ENTITY_METHOD_SCRIPTED_PREFIX?r243_scripted_prefix_invoke(r,&v,args,i->argc,i->line):R243ActorFloatMask(descriptor)?r243_actor_float_call(r,&v,descriptor,i->argc,i->line,NULL):descriptor==COD1_ALLOWED_STANCES_METHOD?cod1_stance_invoke(r,&v,args,i->argc,i->line,NULL,1):descriptor==R243_STANCE_METHOD?r243_stance_call(r,&v,args,i->argc,i->line,NULL):descriptor==R243_ANIMTIME_METHOD?r243_animtime_call(r,&v,args,i->argc,i->line,NULL):descriptor==ENTITY_METHOD_ACTOR_DROP?actor_drop_invoke(r,&v,args,i->argc,i->line):actor_look_kind(descriptor)?actor_look_invoke(r,&v,descriptor,args,i->argc,i->line,NULL):actor_animation_kind(descriptor)?actor_animation_invoke(r,&v,descriptor,args,i->argc,i->line):turret_animation_kind(descriptor)?turret_animation_invoke(r,&v,descriptor,args,i->argc,i->line):turret_method_kind(descriptor)?turret_invoke(r,&v,descriptor,args,i->argc,i->line,NULL):
                  attachment_query_kind(descriptor)?attachment_query_invoke(r,&v,descriptor,args,i->argc,i->line,NULL):
                  descriptor==504?entity_method_invoke(r,&v,descriptor,args,i->argc,i->line):
-                 (descriptor==503||descriptor==COD1_SET_GOAL_POS_METHOD)?actor_goal_invoke(r,descriptor,&v,args,i->argc,i->line):
-                 descriptor==502?yaw_motion_invoke(r,&v,args,i->argc,i->line):
-                 descriptor==501?entity_collision_invoke(r,&v,i->argc,i->line):
+                 (descriptor==503||descriptor==COD1_SET_GOAL_POS_METHOD||descriptor==COD1_SET_GOAL_ENTITY_METHOD)?actor_goal_invoke(r,descriptor,&v,args,i->argc,i->line):
+                 (descriptor==502 || descriptor==COD1_ROTATE_VELOCITY || descriptor==COD1_MOVE_GRAVITY || descriptor==COD1_LAUNCH || descriptor==COD1_ROTATE_ROLL || descriptor==COD1_ROTATE_TO || descriptor==COD1_MOVE_TO)?yaw_motion_invoke(r,descriptor,&v,args,i->argc,i->line):
+                 (descriptor==501||descriptor==GSC_CONNECTPATHS_METHOD||descriptor==GSC_DISCONNECTPATHS_METHOD||descriptor==GSC_SOLID_METHOD||descriptor==GSC_GRENADE_TOUCH_METHOD||descriptor==GSC_GRENADE_BOUNCE_METHOD)?entity_collision_invoke(r,descriptor,&v,i->argc,i->line):
                  spatial_method_kind(descriptor)?spatial_native_invoke(r,&v,descriptor,args,i->argc,i->line,NULL):
                  entity_coordinate(descriptor)?entity_coordinate_invoke(r,&v,descriptor,args,i->argc,i->line,NULL):
                  entity_link_method(descriptor)?entity_link_invoke(r,&v,descriptor,args,i->argc,i->line):
+                 vehicle_method_kind(descriptor)?vehicle_method_invoke(r,&v,descriptor,args,i->argc,i->line):
                  entity_operation(descriptor)?entity_operation_invoke(r,&v,descriptor,args,i->argc,i->line,NULL):
                  player_method_kind(descriptor)?player_native_invoke(r,&v,descriptor,args,i->argc,i->line,NULL):
                  descriptor>=ENTITY_METHOD_ATTACH&&descriptor<=ENTITY_METHOD_STOPLOOPSOUND?
@@ -5661,7 +5808,7 @@ static int entity_runtime_preflight(const GscProgram *g,const GscEntityAccessHos
              (i->receiver_binding_kind==GSC_RECEIVER_TARGET_ENTITY_EVENT&&event>=0&&
               entity_event_argc_valid(g,event,i->argc)&&
               i->receiver_event_target==event&&i->receiver_native_target==-1))))) {
-            if(error&&size)snprintf(error,size,"line %d: unsupported receiver method/thread runtime semantics",i->line);
+            if(error&&size)snprintf(error,size,"%s line %d: unsupported receiver method/thread %s",g->modules[i->owner_module],i->line,i->name);
             return 0;
         }
         if(i->kind==I_METHOD&&descriptor==504&&i->argc==1){
@@ -5699,6 +5846,10 @@ static int entity_runtime_preflight(const GscProgram *g,const GscEntityAccessHos
         const Expr *e=&g->expr[n];
             if(e->kind==E_METHOD_CALL&&!e->module[0]&&entity_method_descriptor(g,e->name)==R243_STANCE_METHOD&&find_func(g,receiver_owner_module(g,n,1),e->name)<0&&stance_static_issues(g,e->args,e->argc)){if(error&&size)snprintf(error,size,"line %d: isStanceAllowed requires one stance string",e->line);return 0;}
             if(e->kind==E_METHOD_CALL&&!e->module[0]&&entity_method_descriptor(g,e->name)==R243_ANIMTIME_METHOD&&find_func(g,receiver_owner_module(g,n,1),e->name)<0&&animtime_static_issues(g,e->args,e->argc)){if(error&&size)snprintf(error,size,"line %d: getAnimTime requires one typed animation",e->line);return 0;}
+        if(e->kind==E_THREAD_CALL && !thread_expression_bound(g,e)){
+            if(error&&size)snprintf(error,size,"line %d: unresolved thread expression %s",e->line,e->name);
+            return 0;
+        }
         if(e->kind==E_METHOD_CALL&&!g->results_mode) {
             if(error&&size)snprintf(error,size,"line %d: unsupported receiver expression runtime semantics",e->line);
             return 0;
@@ -5920,7 +6071,7 @@ static int runtime_admission_preflight(const GscProgram *program,GscFogCallback 
             "local script expression call requires unsupported runtime semantics");
         return 0;
     }
-    if(program->requires_thread_expr_semantics) {
+    if(program->requires_thread_expr_semantics && !(results && program->r243_thread_start_selected)) {
         if(error&&error_size)snprintf(error,error_size,
             "thread expression requires unsupported runtime semantics");
         return 0;
@@ -5970,9 +6121,10 @@ static int runtime_admission_preflight(const GscProgram *program,GscFogCallback 
             "#animtree value requires unsupported runtime semantics");
         return 0;
     }
-    if(program->anim_data_selected&&!anim_data_program_ready(program)) {
+    if(program->anim_data_selected){
         if(error&&error_size)snprintf(error,error_size,"selected anim data profile or reserved binding is unsupported");
-        return 0;
+        if(!anim_data_program_ready_checked(program,NULL,error,error_size))return 0;
+        if(error&&error_size)error[0]=0;
     }
     if(program->requires_animtree&&!program->anim_data_selected) {
         if(error&&error_size)snprintf(error,error_size,
@@ -6853,9 +7005,15 @@ void gsc_runtime_free(GscRuntime *runtime) {
         Task *task=task_at(runtime,n);task_results_clear(task);
         if(runtime->lifetime_enabled)GSC_RUNTIME_FREE(task);
     }
+    GSC_RUNTIME_FREE(runtime->extra_tasks);
     gsc_native_registry_free(runtime->native_registry);
     runtime->native_registry=NULL;
     r243_time_root_free_end(runtime);
+    /* The cached stage has no live values or retained owners. Free only after
+     * transaction/reentry guards above, using the same guarded allocator. */
+    {void *scratch=runtime->r329_cow_scratch;
+     runtime->r329_cow_scratch=NULL;runtime->r329_cow_scratch_bytes=0;
+     if(scratch)(void)state_storage_free(runtime,scratch);}
     state_fields_release(runtime);
     placed_cohort_free(runtime,runtime->placed_cohort);runtime->placed_cohort=NULL;
     GSC_RUNTIME_FREE(runtime);
@@ -6891,6 +7049,7 @@ static int runtime_start_capabilities(GscRuntime *r) {
     if(r->program->turrets_selected&&!r->turrets_enabled)return rfail(r,0,"selected turret methods require a real runtime host");
     if(r->program->actor_goal_selected&&!r->actor_goal_enabled)return rfail(r,0,"selected goal assignment requires a real runtime host");
     if(r->program->yaw_motion_selected&&!r->yaw_motion_enabled)return rfail(r,0,"selected yaw motion requires a real runtime host");
+    if(r->program->vehicle_nodes_selected&&!r->vehicle_nodes_enabled)return rfail(r,0,"selected vehicle nodes require runtime capability");
     if(r->program->node_queries_selected&&!r->node_queries_enabled)return rfail(r,0,"selected node queries require runtime capability");
     if(r->program->hud_elements_selected&&!r->hud_elements_enabled)return rfail(r,0,"selected HUD elements require runtime capability");
     if(r->program->vector_arithmetic_selected&&!r->vector_arithmetic_enabled)return rfail(r,0,"selected vector arithmetic requires runtime capability");
@@ -6927,12 +7086,20 @@ static int runtime_start_capabilities(GscRuntime *r) {
     if(r->program->r243_scripted_prefix_selected&&!r->r243_scripted_prefix_enabled)return rfail(r,0,"selected animscripted prefix requires genuine native host capability");
     if(r->program->owned_numeric_delete_selected&&!r->owned_numeric_delete_enabled)return rfail(r,0,"selected owned numeric deletion requires runtime capability");
     if(r->program->animation_length_selected&&!r->animation_length_enabled)return rfail(r,0,"selected animation length query requires a host capability");
+    if(r->program->vehicle_methods_selected&&!r->vehicle_methods_enabled)return rfail(r,0,"selected vehicle methods require host");
+    if(r->program->bullet_trace_selected&&!r->bullet_trace_enabled)return rfail(r,0,"selected bulletTrace requires host");
+    if(r->program->vehicle_spawn_selected&&!r->vehicle_spawn_enabled)return rfail(r,0,"selected spawnVehicle requires host");
+    if(r->program->turret_precache_selected&&!r->turret_precache_enabled)return rfail(r,0,"selected precacheTurret requires host");
+    if(r->program->turret_spawn_selected&&!r->turret_spawn_enabled)return rfail(r,0,"selected spawnTurret requires host");
+    if(r->program->model_part_selected&&!r->model_part_enabled)return rfail(r,0,"selected model part requires host");
     if(r->program->weapon_classname_selected&&!r->weapon_classname_enabled)return rfail(r,0,"selected weapon classname requires host");
     if(r->program->weapon_model_selected&&!r->weapon_model_enabled)return rfail(r,0,"selected weapon model query requires a host capability");
     if(!r->fog)return rfail(r,0,"fog callback required");
     return 1;
 }
-static int runtime_start_configured_main(GscRuntime *r,const GscMapExecutionCertificate *certificate) {
+static int r237_run_start_root(GscRuntime *,uint64_t);
+static int runtime_start_configured_main(GscRuntime *r,const GscMapExecutionCertificate *certificate,int synchronous) {
+    if(r&&r->map_source_float_enabled&&(!certificate||!certificate->receipt||!certificate->current))return rfail(r,0,"map arithmetic requires map-certified root");
     if(r&&r->owned_wait_delivery_enabled&&(!certificate||!certificate->receipt||!certificate->current))return rfail(r,0,"native wait delivery main requires its own map certificate");
     if(r&&r->bsp_construction_only)return rfail(r,0,"BSP construction profile cannot execute script main");
     int ok;
@@ -6963,7 +7130,7 @@ static int runtime_start_configured_main(GscRuntime *r,const GscMapExecutionCert
      * ordering nor the exact port lifetime boundary. */
     r->precache_string_initial_window=r->precache_string_enabled;
     r->r237_start_draining=r->r237_frame_buckets_enabled;
-    ok=gsc_advance(r,0);
+    ok=synchronous?r237_run_start_root(r,r->resources_entry_serial):gsc_advance(r,0);
     r->r237_start_draining=0;
     r->shellshock_initial_window=0;
     r->precache_item_initial_window=0;
@@ -6977,7 +7144,26 @@ int gsc_start(GscRuntime *r) {
     if(r->advancing||r->hud_elements_busy||r->entity_prepare_busy||r->entity_certificate_busy)return rfail(r,0,"reentrant scheduler call");
     if(r->started)return 0;
     if(!runtime_start_capabilities(r))return 0;
-    return runtime_start_configured_main(r,NULL);
+    return runtime_start_configured_main(r,NULL,0);
+}
+int gsc_start_with_map(GscRuntime *r,const GscMapExecutionCertificate *input,int(*current)(void*),void*context) {
+    GscMapExecutionCertificate certificate;const GscProgram*program;int ok;
+    if(!r||!input||!current||!gsc_runtime_storage_separate(r,input,sizeof(*input)))return 0;
+    if(r->advancing||r->executing_task||r->entity_sequence_busy||r->hud_elements_busy||
+       r->entity_prepare_busy||r->entity_certificate_busy||r->entity_field_busy||r->entity_method_busy)
+        return rfail(r,0,"map root startup reentered");
+    if(r->started||r->bootstrap_started||r->configured_main_attempted||r->task_count||r->now_ms||r->error[0])return 0;
+    certificate=*input;program=r->program;
+    if(!certificate.receipt||!certificate.current)return rfail(r,0,"map root requires a genuine map certificate");
+    if(!runtime_start_capabilities(r))return 0;
+    r->entity_certificate_busy=1;
+    ok=current(context)==1&&!r->error[0];
+    if(ok)ok=certificate.current(certificate.receipt)==1;
+    if(ok)ok=current(context)==1;
+    r->entity_certificate_busy=0;
+    if(!ok||r->error[0]||r->program!=program||memcmp(input,&certificate,sizeof(certificate)))
+        return r->error[0]?0:rfail(r,0,"map root startup authority retired or changed");
+    return runtime_start_configured_main(r,&certificate,0);
 }
 int gsc_start_configured_main_after_bootstrap(GscRuntime *r,const GscMapExecutionCertificate *input) {
     GscMapExecutionCertificate certificate;int current;
@@ -6993,7 +7179,7 @@ int gsc_start_configured_main_after_bootstrap(GscRuntime *r,const GscMapExecutio
     r->configured_main_attempted=1;r->entity_certificate_busy=1;
     current=certificate.current(certificate.receipt);r->entity_certificate_busy=0;
     if(current!=1||r->error[0])return r->error[0]?0:rfail(r,0,"configured main bootstrap map retired");
-    return runtime_start_configured_main(r,&certificate);
+    return runtime_start_configured_main(r,&certificate,0);
 }
 int gsc_advance(GscRuntime *r,int now_ms) {
     int n,budget=MAX_STEPS;Task *chosen;
@@ -7066,6 +7252,7 @@ int gsc_advance(GscRuntime *r,int now_ms) {
 #include "gsc_vm_entity_entry.inc"
 #include "gsc_vm_r243_actor_script_context.inc"
 #include "gsc_vm_r243_controller_driver.inc"
+#include "gsc_vm_locomotion_main.inc"
 int gsc_notify(GscRuntime *r,const char *name) {
     int ok;
     if(r&&(r->advancing||r->hud_elements_busy||r->entity_prepare_busy||r->entity_certificate_busy))return rfail(r,0,"reentrant scheduler call");
@@ -7182,6 +7369,11 @@ int gsc_notify_entity_with_payload(GscRuntime *r,const GscEntityRef *owner,
     return notify_with_payload(r,owner,name,values,count,out_awakened,1);
 }
 const char *gsc_runtime_error(const GscRuntime *r) {return r?r->error:"null runtime";}
+int gsc_has_active_threads(const GscRuntime *r) {
+    int n;if(!r)return 0;
+    for(n=0;n<r->task_count;n++)if(task_at(r,n)->status!=TASK_DEAD)return 1;
+    return 0;
+}
 int gsc_active_threads(const GscRuntime *r) {
     int n,count=0;if(!r)return 0;
     for(n=0;n<r->task_count;n++)if(task_at(r,n)->status!=TASK_DEAD)count++;

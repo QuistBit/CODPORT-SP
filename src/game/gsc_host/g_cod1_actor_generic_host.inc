@@ -12,16 +12,29 @@
 #include "../../qcommon/cod1_actor_root_interval14.h"
 #include "../../qcommon/cod1_actor_unmounted_tree14.h"
 #define C1GA_COUNT 2078u
-typedef struct {c1afl14State_t flags[C1GA_COUNT];char names[C1GA_COUNT][64];uint64_t generation[C1GA_COUNT],pending[C1GA_COUNT],serial,ownerIdentity;int32_t pendingTick[C1GA_COUNT];} C1GANotifyState;
+typedef struct {c1afl14State_t flags[C1GA_COUNT];unsigned nameCount;uint64_t generation[C1GA_COUNT],pending[C1GA_COUNT],serial,ownerIdentity;int32_t pendingTick[C1GA_COUNT];} C1GANotifyState;
+typedef struct {unsigned ordinal;char text[64];} C1GANameEntry;
 typedef struct {
- int used,tick;cod1ActorLease_t lease;uint64_t runtime,catalog,revision;
- c1atl14Node_t *nodes;C1GANotifyState *notify;uint32_t lookCells[16];
+ int used,tick,detachedMG,mgTick;cod1ActorLease_t lease;uint64_t runtime,catalog,revision;
+ c1atl14Node_t *nodes;C1GANotifyState *notify;C1GANameEntry *names;uint32_t lookCells[16];
 } C1GARecord;
+#include "g_cod1_actor_notify_names.inc"
+static int ActorJumperTreeLeaf(const C1GARecord*,unsigned);
+static int ActorLocomotionTarget(unsigned);
+static int ActorLocomotionActive(const C1GARecord*);
+static int ActorAimTarget(unsigned);
+static int ActorAimFaceLeaf(unsigned);
+static int ActorGeneralClockActive(const C1GARecord*);
+static int ActorLocomotionClosure(const C1GARecord*);
+static int ActorLocomotionMutate(C1GARecord*,const GscActorAnimationRequest*);
+static const c1ar14Root_t*ActorLocomotionRoot(unsigned);
+static const c1ab14Clip_t*ActorLocomotionBody(unsigned);
 static int ActorFaceMutate(C1GARecord*,void*);
 static int ActorScriptedMutate(C1GARecord*,void*);
 static int ActorScriptedClockSelected(unsigned);
 static int ActorScriptedIndex(unsigned);
 static const c1ar14Root_t*ActorScriptedRoot(unsigned);
+static const c1ab14Clip_t*ActorScriptedBody(unsigned);
 static int ActorFaceLeafIndex(unsigned);
 static const c1ar14Root_t*ActorFaceRoot(unsigned);
 static const c1ab14Clip_t*ActorFaceBody(unsigned);
@@ -31,37 +44,37 @@ static int ActorRunnerFaceOwner(const C1GARecord*);
  * Keep two released pairs. Every checkout overwrites both arrays in full. */
 typedef struct {
  c1atl14Node_t *nodes;
- C1GANotifyState *notify;
+ C1GANotifyState *notify;C1GANameEntry *names;
 } ActorCloneStorage;
 static ActorCloneStorage actorClonePool[2];
 static void ActorClonePoolClear(void){
  unsigned i;
- for(i=0;i<2;i++){free(actorClonePool[i].nodes);free(actorClonePool[i].notify);}
+ for(i=0;i<2;i++){free(actorClonePool[i].nodes);free(actorClonePool[i].notify);free(actorClonePool[i].names);}
  memset(actorClonePool,0,sizeof(actorClonePool));
 }
 static void ActorGenericFreeOwned(C1GARecord*r){
  unsigned i;
- if(r->nodes && r->notify){
+ if(r->nodes && r->notify && r->names){
   for(i=0;i<2;i++)if(!actorClonePool[i].nodes){
-   actorClonePool[i].nodes=r->nodes;actorClonePool[i].notify=r->notify;
-   r->nodes=NULL;r->notify=NULL;return;
+   actorClonePool[i].nodes=r->nodes;actorClonePool[i].notify=r->notify;actorClonePool[i].names=r->names;
+   r->nodes=NULL;r->notify=NULL;r->names=NULL;return;
   }
  }
- free(r->nodes);free(r->notify);r->nodes=NULL;r->notify=NULL;
+ free(r->nodes);free(r->notify);free(r->names);r->nodes=NULL;r->notify=NULL;r->names=NULL;
 }
 static int ActorGenericClone(C1GARecord*stage,const C1GARecord*old){
  unsigned i;
- *stage=*old;stage->nodes=NULL;stage->notify=NULL;
- if(!old->nodes||!old->notify)return 0;
+ *stage=*old;stage->nodes=NULL;stage->notify=NULL;stage->names=NULL;
+ if(!old->nodes||!old->notify||!old->names||old->notify->nameCount>C1GA_COUNT)return 0;
  for(i=0;i<2;i++)if(actorClonePool[i].nodes){
-  stage->nodes=actorClonePool[i].nodes;stage->notify=actorClonePool[i].notify;
-  actorClonePool[i].nodes=NULL;actorClonePool[i].notify=NULL;break;
+  stage->nodes=actorClonePool[i].nodes;stage->notify=actorClonePool[i].notify;stage->names=actorClonePool[i].names;
+  actorClonePool[i].nodes=NULL;actorClonePool[i].notify=NULL;actorClonePool[i].names=NULL;break;
  }
  if(!stage->nodes){
-  stage->nodes=malloc(C1GA_COUNT*sizeof(*stage->nodes));stage->notify=malloc(sizeof(*stage->notify));
+  stage->nodes=malloc(C1GA_COUNT*sizeof(*stage->nodes));stage->notify=malloc(sizeof(*stage->notify));stage->names=malloc(C1GA_COUNT*sizeof(*stage->names));
  }
- if(!stage->nodes||!stage->notify){ActorGenericFreeOwned(stage);return 0;}
- memcpy(stage->nodes,old->nodes,C1GA_COUNT*sizeof(*stage->nodes));memcpy(stage->notify,old->notify,sizeof(*stage->notify));return 1;
+ if(!stage->nodes||!stage->notify||!stage->names){ActorGenericFreeOwned(stage);return 0;}
+ memcpy(stage->nodes,old->nodes,C1GA_COUNT*sizeof(*stage->nodes));memcpy(stage->notify,old->notify,sizeof(*stage->notify));memcpy(stage->names,old->names,(size_t)old->notify->nameCount*sizeof(*stage->names));return 1;
 }
 static int ActorGenericNamedActive(const C1GARecord*);
 static int ActorGenericNamedPending(const C1GARecord*);
@@ -76,7 +89,7 @@ static uint64_t cod1GenericEpoch,cod1GenericReceipt,cod1GenericNotifyIdentity;
 static c1aut14Bank_t cod1GenericUnmountedBank;
 #define cod1GenericLookBank (cod1GenericUnmountedBank.look)
 static uint64_t cod1GenericLookEpoch,cod1GenericLookBusy,cod1GenericLookRevision;
-static struct {int busy,cancelled;void *stage;size_t bytes;void *notifyStage;size_t notifyBytes;} cod1GenericOperation;
+static struct {int busy,cancelled;void *stage;size_t bytes;void *notifyStage;size_t notifyBytes;void *nameStage;size_t nameBytes;} cod1GenericOperation;
 /* Same selected time conversion as C1ATT14_AdvanceInner, with the complete
  * caller x87/SSE environment retained even for hostile caller rounding. */
 static int ActorGenericDt(int milliseconds,float *out){
@@ -111,10 +124,10 @@ static int ActorGenericClipRanges(const void *p,size_t n,TurretClipExtent *exten
  return 0;
 }
 static int ActorGenericPrivate(const void *p,size_t n) {
- unsigned i;if(ActorFacePrivate(p,n)||ActorOverlap(p,n,actorClonePool,sizeof(actorClonePool)))return 1;
+ unsigned i;if(ActorLocomotionPrivate(p,n)||ActorOverlap(p,n,actorGenericEmptyName,sizeof(actorGenericEmptyName))||ActorFacePrivate(p,n)||ActorOverlap(p,n,actorClonePool,sizeof(actorClonePool)))return 1;
  for(i=0;i<2;i++)if(actorClonePool[i].nodes &&
    (ActorOverlap(p,n,actorClonePool[i].nodes,C1GA_COUNT*sizeof(c1atl14Node_t))||
-    ActorOverlap(p,n,actorClonePool[i].notify,sizeof(C1GANotifyState))))return 1;
+    ActorOverlap(p,n,actorClonePool[i].names,C1GA_COUNT*sizeof(C1GANameEntry))||ActorOverlap(p,n,actorClonePool[i].notify,sizeof(C1GANotifyState))))return 1;
  if(ActorOverlap(p,n,&cod1GenericMGMap,sizeof(cod1GenericMGMap))||
     ActorOverlap(p,n,&cod1GenericClipExtent,sizeof(cod1GenericClipExtent))||
     ActorOverlap(p,n,cod1GenericActors,sizeof(cod1GenericActors))||
@@ -125,8 +138,8 @@ static int ActorGenericPrivate(const void *p,size_t n) {
     ActorOverlap(p,n,&cod1GenericEpoch,sizeof(cod1GenericEpoch))||
     ActorOverlap(p,n,&cod1GenericReceipt,sizeof(cod1GenericReceipt))||ActorOverlap(p,n,&cod1GenericNotifyIdentity,sizeof(cod1GenericNotifyIdentity))||
     ActorOverlap(p,n,&cod1GenericOperation,sizeof(cod1GenericOperation))||
-    ActorOverlap(p,n,cod1GenericOperation.stage,cod1GenericOperation.bytes)||ActorOverlap(p,n,cod1GenericOperation.notifyStage,cod1GenericOperation.notifyBytes))return 1;
- for(i=0;i<COD1_ACTOR_CAPACITY;i++)if(ActorOverlap(p,n,cod1GenericActors[i].nodes,
+    ActorOverlap(p,n,cod1GenericOperation.stage,cod1GenericOperation.bytes)||ActorOverlap(p,n,cod1GenericOperation.nameStage,cod1GenericOperation.nameBytes)||ActorOverlap(p,n,cod1GenericOperation.notifyStage,cod1GenericOperation.notifyBytes))return 1;
+ for(i=0;i<COD1_ACTOR_CAPACITY;i++)if(ActorGenericNamesPrivate(p,n,cod1GenericActors+i)||ActorOverlap(p,n,cod1GenericActors[i].nodes,
      cod1GenericActors[i].nodes?C1GA_COUNT*sizeof(c1atl14Node_t):0)||ActorOverlap(p,n,cod1GenericActors[i].notify,cod1GenericActors[i].notify?sizeof(C1GANotifyState):0))return 1;
  if(cod1GenericLookEpoch && p && n){
   const uintptr_t address=(uintptr_t)p;
@@ -143,7 +156,7 @@ static void ActorGenericRetire(uint32_t index,const GscEntityRef*owner){
  ActorGenericFreeOwned(r);memset(r,0,sizeof(*r));
 }
 static void ActorGenericReset(void) {
- unsigned i;ActorFaceReset();if(cod1GenericOperation.busy)cod1GenericOperation.cancelled=1;
+ unsigned i;ActorLocomotionReset();ActorFaceReset();if(cod1GenericOperation.busy)cod1GenericOperation.cancelled=1;
  for(i=0;i<COD1_ACTOR_CAPACITY;i++){ActorGenericFreeOwned(cod1GenericActors+i);memset(&cod1GenericActors[i],0,sizeof(C1GARecord));}
  ActorClonePoolClear();
  memset(&cod1GenericMGMap,0,sizeof(cod1GenericMGMap));
@@ -211,7 +224,7 @@ static int ActorGenericBuild(void) {
  if(!C1AGT14_Valid(d,nodes,C1GA_COUNT)||epoch!=cod1EntityEpoch||receipt!=cod1TurretAnimationReceipt||cod1GenericOperation.cancelled)goto done;
  memcpy(cod1GenericDefinitions,d,C1GA_COUNT*sizeof(*d));memcpy(cod1GenericNames,names,C1GA_COUNT*sizeof(*names));
  cod1GenericEpoch=epoch;cod1GenericReceipt=receipt;ok=1;
-done:gsc_animation_catalog_free(catalog);free(d);free(names);free(nodes);cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.busy=0;return ok;
+done:gsc_animation_catalog_free(catalog);free(d);free(names);free(nodes);cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.nameStage=NULL;cod1GenericOperation.nameBytes=0;cod1GenericOperation.busy=0;return ok;
 }
 static int ActorGenericFresh(C1GARecord *r,const cod1ActorLease_t *lease,uint64_t runtime,uint64_t catalog,int now) {
  cod1ActorLookAtDefaults_t *s=&cod1Actors[lease->actorIndex].nativeData.lookat;
@@ -220,7 +233,7 @@ static int ActorGenericFresh(C1GARecord *r,const cod1ActorLease_t *lease,uint64_
  known[0]=s->active;memcpy(known+1,s->target,12);known[4]=s->cell01ec;known[5]=s->cell01f0;
  memcpy(known+6,&s->parameter,4);known[7]=s->animnodesReady;memcpy(known+8,s->yawLimits,8);
  if(!C1AL14_Fresh(known,&look)||cod1GenericNotifyIdentity==UINT64_MAX)return 0;
- r->nodes=calloc(C1GA_COUNT,sizeof(*r->nodes));r->notify=calloc(1,sizeof(*r->notify));if(!r->nodes||!r->notify){ActorGenericFreeOwned(r);return 0;}
+ r->nodes=calloc(C1GA_COUNT,sizeof(*r->nodes));r->notify=calloc(1,sizeof(*r->notify));r->names=malloc(C1GA_COUNT*sizeof(*r->names));if(!r->nodes||!r->notify||!r->names){ActorGenericFreeOwned(r);return 0;}
  for(i=0;i<C1GA_COUNT;i++)r->notify->flags[i].cursor=-1;
  r->notify->ownerIdentity=++cod1GenericNotifyIdentity;
  for(i=0;i<C1GA_COUNT;i++)r->nodes[i].rate=1;
@@ -252,6 +265,74 @@ static int ActorGenericMGMap(unsigned map[2][25]) {
  cod1GenericMGMap.ready=1;
  return 1;
 }
+/* Each cell of the actor's generic tree survives a change of ROOT parent.
+ * Reconstruct the synchronized MG view from those cells and the map's
+ * immutable original clip metadata. The actor remains its sole writer. */
+static int ActorDismountTrees(const C1GARecord *actor, unsigned map[2][25],
+                             int now, c1att14Tree_t trees[2]){
+    unsigned group, j, counts[21];
+    const c1ar14Root_t *bank[21];
+    if(!actor->detachedMG)return 0;
+    if(!actor->used || now<actor->mgTick || !TurretAnimationBanks())return -1;
+    for(group=0;group<2;group++){
+        for(j=0;j<21;j++){
+            bank[j]=cod1TurretRoots[group][20-j];
+            counts[j]=bank[j]->noteCount;
+        }
+        if(!C1ATT14_Init(trees+group,bank,counts,actor->mgTick))return -1;
+        for(j=0;j<25;j++)trees[group].node[j]=actor->nodes[map[group][j]];
+        if(now!=actor->mgTick && !C1ATT14_Advance(trees+group,now))return -1;
+    }
+    return 1;
+}
+
+static int ActorDismountTransfer(const cod1ActorLease_t *lease,C1TRecord *gun,int now){
+    C1GARecord *actor=cod1GenericActors+lease->actorIndex;
+    c1att14Tree_t trees[2];
+    unsigned map[2][25],group,j;
+    int selected,available=TurretAnimationActorRead(gun,now,trees,&selected);
+    if(available<=0)return available==0;
+    if(!actor->used || !actor->nodes || actor->tick>now ||
+       actor->revision==UINT64_MAX || cod1GenericOperation.busy ||
+       memcmp(lease,&actor->lease,sizeof(*lease)) || !ActorGenericMGMap(map))return 0;
+    for(group=0;group<2;group++)for(j=0;j<25;j++)
+        actor->nodes[map[group][j]]=trees[group].node[j];
+    actor->detachedMG=1;
+    actor->mgTick=now;
+    actor->revision++;
+    return 1;
+}
+
+static int ActorDismountRestore(C1TARecord *turret,int now){
+    C1GARecord *actor=cod1GenericActors+turret->lease.actorIndex;
+    unsigned map[2][25];
+    if(!actor->detachedMG)return 1;
+    if(memcmp(&actor->lease,&turret->lease,sizeof(actor->lease)) ||
+       actor->runtime!=turret->runtime || actor->catalog!=turret->catalog ||
+       !ActorGenericMGMap(map))return 0;
+    return ActorDismountTrees(actor,map,now,turret->actorTree)==1;
+}
+static int ActorDismountSample(const C1GARecord *actor,float weights[98],float phases[2][21]){
+    unsigned i,j;
+    for(i=1;i<C1GA_COUNT;i++){
+        if(cod1GenericDefinitions[i].children ||
+           !(actor->nodes[i].currentWeight || actor->nodes[i].goalWeight))continue;
+        for(j=0;j<C1ALT14_NODES;j++)
+            if(c1alt14Definitions[j].ordinal==i && c1alt14Definitions[j].leaf>=0)break;
+        if(j==C1ALT14_NODES)return 0;
+    }
+    for(j=0;j<C1ALT14_NODES;j++){
+        const c1alt14Definition_t *d=c1alt14Definitions+j;
+        const c1atl14Node_t *node=actor->nodes+d->ordinal;
+        weights[j]=node->currentWeight;
+        if(d->leaf>=0){
+            const c1alt14Leaf_t *leaf=c1alt14Leaves+d->leaf;
+            if(leaf->mgGroup>=0)phases[leaf->mgGroup][leaf->mgIndex]=node->phase;
+        }
+    }
+    return 1;
+}
+
 /* Mutators are pure node/Look arithmetic: they must never call the engine.
  * Publication and MG tree synchronization are added by the concrete caller.
  * Until then this transaction refuses changes to mapped MG nodes rather than
@@ -262,7 +343,7 @@ static int ActorGenericTransactionCore(const GscEntityRef *ref,uint64_t runtime,
  cod1ActorLease_t lease,after;C1GARecord stage,*old=NULL;GscEntityRef owner;
  cod1ActorRecord_t *actorCopy=NULL;gentity_t *entityCopy=NULL;
  void *copy=NULL;uint64_t revision=0,epoch;int ok=0;
- unsigned i,t,j,map[2][25];float dt;C1TRecord *gun=NULL;c1att14Tree_t mgBefore[2],mgAfter[2];int selected=-1,haveMG=0,faceRequested=mutate==ActorFaceMutate||mutate==ActorScriptedMutate;
+ unsigned i,t,j,map[2][25];float dt;C1TRecord *gun=NULL;c1att14Tree_t mgBefore[2],mgAfter[2];int selected=-1,haveMG=0,gunClock=0,faceRequested=mutate==ActorFaceMutate||mutate==ActorScriptedMutate;
  if(!ref||!runtime||!catalog||!current||!mutate||now!=level.time||now<0||!borrowed||!bytes||
     cod1GenericOperation.busy||!ActorGoalBuffers(borrowed,bytes,NULL,0,error,cap)||
     !ActorGoalBuffers(ref,sizeof(*ref),NULL,0,error,cap)||ActorGenericPrivate(ref,sizeof(*ref))||ActorGenericPrivate(borrowed,bytes)||ActorGenericPrivate(error,cap)||
@@ -270,29 +351,33 @@ static int ActorGenericTransactionCore(const GscEntityRef *ref,uint64_t runtime,
  owner=*ref;memset(&stage,0,sizeof(stage));copy=malloc(bytes);if(!copy)return 0;memcpy(copy,borrowed,bytes);
  epoch=cod1GenericEpoch;
  cod1GenericOperation.busy=1;cod1GenericOperation.cancelled=0;
- if(!ActorGoalLease(&owner,&lease))goto done;
- actorCopy=malloc(sizeof(*actorCopy));entityCopy=malloc(sizeof(*entityCopy));if(!actorCopy||!entityCopy)goto done;
+ if(!ActorGoalLease(&owner,&lease)){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
+ actorCopy=malloc(sizeof(*actorCopy));entityCopy=malloc(sizeof(*entityCopy));if(!actorCopy||!entityCopy){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
  memcpy(actorCopy,&cod1Actors[lease.actorIndex],sizeof(*actorCopy));memcpy(entityCopy,&g_entities[owner.slot],sizeof(*entityCopy));
  if(current(ctx)!=1||memcmp(ref,&owner,sizeof(owner))||memcmp(copy,borrowed,bytes)||
     memcmp(actorCopy,&cod1Actors[lease.actorIndex],sizeof(*actorCopy))||memcmp(entityCopy,&g_entities[owner.slot],sizeof(*entityCopy))||
-    cod1GenericOperation.cancelled||epoch!=cod1GenericEpoch)goto done;
+    cod1GenericOperation.cancelled||epoch!=cod1GenericEpoch){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
  old=&cod1GenericActors[lease.actorIndex];revision=old->revision;
- if(old->used&&(memcmp(&old->lease,&lease,sizeof(lease))||old->runtime!=runtime||old->catalog!=catalog))goto done;
- if(old->used){if(!ActorGenericClone(&stage,old))goto done;}
- else if(!ActorGenericFresh(&stage,&lease,runtime,catalog,now))goto done;
- cod1GenericOperation.stage=stage.nodes;cod1GenericOperation.bytes=C1GA_COUNT*sizeof(*stage.nodes);cod1GenericOperation.notifyStage=stage.notify;cod1GenericOperation.notifyBytes=sizeof(*stage.notify);
- if(stage.tick>now||stage.revision==UINT64_MAX||(now!=stage.tick&&ActorGenericNamedPending(&stage)))goto done;
+ if(old->used&&(memcmp(&old->lease,&lease,sizeof(lease))||old->runtime!=runtime||old->catalog!=catalog)){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
+ if(old->used){if(!ActorGenericClone(&stage,old)){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}}
+ else if(!ActorGenericFresh(&stage,&lease,runtime,catalog,now)){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
+ cod1GenericOperation.stage=stage.nodes;cod1GenericOperation.bytes=C1GA_COUNT*sizeof(*stage.nodes);cod1GenericOperation.notifyStage=stage.notify;cod1GenericOperation.notifyBytes=sizeof(*stage.notify);cod1GenericOperation.nameStage=stage.names;cod1GenericOperation.nameBytes=C1GA_COUNT*sizeof(*stage.names);
+ if(stage.tick>now||stage.revision==UINT64_MAX||(now!=stage.tick&&ActorGenericNamedPending(&stage))){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
  /* The selected phase owner prepares this row exactly once before callbacks.
   * A lazy legacy command must not advance it or replace that original order. */
- if(ActorFaceClockSelected(lease.actorIndex)&&stage.tick!=now)goto done;
- if(!ActorFaceFrameCanMutate(&stage,faceRequested,0))goto done;
- if(!ActorGenericMGMap(map))goto done;
+ if(ActorFaceClockSelected(lease.actorIndex)&&stage.tick!=now){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
+ if(!ActorFaceFrameCanMutate(&stage,faceRequested,0)){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
+ if(!ActorGenericMGMap(map)){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
  for(i=0;i<C1T_CAPACITY;i++)if(cod1Turrets[i].used&&ActorRefEqual(&cod1Turrets[i].actor,&owner)){
-  if(gun)goto done;gun=cod1Turrets+i;
+  if(gun){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}gun=cod1Turrets+i;
  }
- if(gun){haveMG=TurretAnimationActorRead(gun,now,mgBefore,&selected);if(haveMG<0)goto done;}
- if(faceRequested&&haveMG)goto done;
- if(!ActorGenericDt(now-stage.tick,&dt))goto done;
+ haveMG=gun ? TurretAnimationActorRead(gun,now,mgBefore,&selected)
+            : ActorDismountTrees(&stage,map,now,mgBefore);
+ gunClock=gun && haveMG==1;
+ if(gun && !haveMG && stage.detachedMG)haveMG=ActorDismountTrees(&stage,map,now,mgBefore);
+ if(haveMG<0){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
+ if(faceRequested&&haveMG){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
+ if(!ActorGenericDt(now-stage.tick,&dt)){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
  /* Until real resources/clocks are attached, any active animated leaf is held.
   * Zero-frame Look leaves are admitted later through their actual C1AR bank. */
  for(i=1;i<C1GA_COUNT;i++)if(!cod1GenericDefinitions[i].children&&
@@ -300,70 +385,84 @@ static int ActorGenericTransactionCore(const GscEntityRef *ref,uint64_t runtime,
    int mapped=0;for(t=0;t<2;t++)for(j=4;j<25;j++)if(i==map[t][j])mapped=1;
    if(!mapped||haveMG!=1){
     int clip=C1AL14_Index(cod1GenericNames[i].name),shuffle=ActorGenericShuffleIndex(cod1GenericNames[i].name);
-    if(cod1GenericLookEpoch!=epoch)goto done;
+    if(cod1GenericLookEpoch!=epoch){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
     if(shuffle>=0){
-     unsigned p;if(!C1AUT14_ValidShuffle(cod1GenericUnmountedBank.root[shuffle],cod1GenericUnmountedBank.body[shuffle]))goto done;
+     unsigned p;if(!C1AUT14_ValidShuffle(cod1GenericUnmountedBank.root[shuffle],cod1GenericUnmountedBank.body[shuffle])){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
      /* This exact original branch has no sync ancestor. Never replace a
       * future sync-tree frequency contract with independent leaf clocks. */
-     for(p=i;p;p=cod1GenericDefinitions[p].parent)if(cod1GenericDefinitions[p].flags&3)goto done;
+     for(p=i;p;p=cod1GenericDefinitions[p].parent)if(cod1GenericDefinitions[p].flags&3){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
     }else{
-     if(clip<0||!C1AL14_Ready(&cod1GenericLookBank)||!C1AL14_Valid((unsigned)clip,cod1GenericLookBank.root[clip],cod1GenericLookBank.body[clip]))goto done;
+     if(clip<0||!C1AL14_Ready(&cod1GenericLookBank)||!C1AL14_Valid((unsigned)clip,cod1GenericLookBank.root[clip],cod1GenericLookBank.body[clip])){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
      /* Genuine zero-interval, zero-note leaf: its phase cannot advance. */
-     if(stage.nodes[i].phase||stage.nodes[i].oldPhase||stage.nodes[i].cycle||stage.nodes[i].oldCycle)goto done;
+     if(stage.nodes[i].phase||stage.nodes[i].oldPhase||stage.nodes[i].cycle||stage.nodes[i].oldCycle){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
     }
    }
  }
  if(now!=stage.tick)for(i=0;i<C1GA_COUNT;i++){
   /* Native47B190+3D/+4A copies actualphase/cycle before server weight update. */
   stage.nodes[i].oldPhase=stage.nodes[i].phase;stage.nodes[i].oldCycle=stage.nodes[i].cycle;
-  if(!C1ATL14_AdvanceWeight(stage.nodes+i,dt))goto done;
+  if(!C1ATL14_AdvanceWeight(stage.nodes+i,dt)){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
  }
  if(now!=stage.tick)for(i=0;i<2;i++){
   unsigned ordinal=ActorGenericOrdinal(c1aut14Names[i]);float delta;const c1ar14Root_t *root=cod1GenericUnmountedBank.root[i];
-  if(!ordinal)goto done;if(stage.nodes[ordinal].currentWeight||stage.nodes[ordinal].goalWeight){
-   if(!C1AUT14_ValidShuffle(root,cod1GenericUnmountedBank.body[i]))goto done;
-   if(stage.notify->flags[ordinal].token){if(!ActorGenericNamedAdvance(&stage,ordinal,root,dt,now))goto done;}
-   else if(!C1ATL14_AdvanceLeaf(stage.nodes+ordinal,root->intervals,root->fps,root->flags&1,root->noteCount,dt,&delta))goto done;
+  if(!ordinal){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}if(stage.nodes[ordinal].currentWeight||stage.nodes[ordinal].goalWeight){
+   if(!C1AUT14_ValidShuffle(root,cod1GenericUnmountedBank.body[i])){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
+   if(stage.notify->flags[ordinal].token){if(!ActorGenericNamedAdvance(&stage,ordinal,root,dt,now)){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}}
+   else if(!C1ATL14_AdvanceLeaf(stage.nodes+ordinal,root->intervals,root->fps,root->flags&1,root->noteCount,dt,&delta)){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
   }
  }
  if(haveMG==1)for(t=0;t<2;t++)for(j=0;j<25;j++)stage.nodes[map[t][j]]=mgBefore[t].node[j];
  stage.tick=now;
- if(!mutate(&stage,user)||!C1AGT14_Valid(cod1GenericDefinitions,stage.nodes,C1GA_COUNT))goto done;
+ if(stage.detachedMG && haveMG==1)stage.mgTick=now;
+ if(!mutate(&stage,user)||!C1AGT14_Valid(cod1GenericDefinitions,stage.nodes,C1GA_COUNT)){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
+ /* The mutation has finished. All leaf and resource queries in this loop
+  * are reads; the next external current() callback is after the loop. */
+ int generalClock=-1;
  /* Refuse an unsupported active leaf before committing any goals. A successful
   * generic command may not defer missing resource/loop contracts to next frame. */
  for(i=1;i<C1GA_COUNT;i++)if(!cod1GenericDefinitions[i].children&&
     (stage.nodes[i].currentWeight||stage.nodes[i].goalWeight)){
-  const c1ar14Root_t *root=NULL;int clip=C1AL14_Index(cod1GenericNames[i].name),shuffle=ActorGenericShuffleIndex(cod1GenericNames[i].name),face=ActorFaceLeafIndex(i),scripted=ActorScriptedIndex(i);unsigned p,mode=0;
-  if(clip>=0){
-   if(cod1GenericLookEpoch!=epoch||!C1AL14_Valid((unsigned)clip,cod1GenericLookBank.root[clip],cod1GenericLookBank.body[clip]))goto done;
+  const c1ar14Root_t *root=NULL;
+  int clip,shuffle,face=-1,scripted=-1;
+  unsigned p,mode=0;
+  if(generalClock<0)generalClock=ActorGeneralClockActive(&stage);
+  if(generalClock)root=ActorLocomotionRoot(i);
+  if(!generalClock||(root&&root->noteCount)){
+   face=ActorFaceLeafIndex(i);scripted=ActorScriptedIndex(i);
+   if(scripted<0&&ActorJumperTreeLeaf(&stage,i))scripted=0;
+  }
+  if(!generalClock){
+   if((clip=C1AL14_Index(cod1GenericNames[i].name))>=0){
+   if(cod1GenericLookEpoch!=epoch||!C1AL14_Valid((unsigned)clip,cod1GenericLookBank.root[clip],cod1GenericLookBank.body[clip])){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
    root=cod1GenericLookBank.root[clip];
-  }else if(shuffle>=0){
-   if(cod1GenericLookEpoch!=epoch||!C1AUT14_ValidShuffle(cod1GenericUnmountedBank.root[shuffle],cod1GenericUnmountedBank.body[shuffle]))goto done;
+  }else if((shuffle=ActorGenericShuffleIndex(cod1GenericNames[i].name))>=0){
+   if(cod1GenericLookEpoch!=epoch||!C1AUT14_ValidShuffle(cod1GenericUnmountedBank.root[shuffle],cod1GenericUnmountedBank.body[shuffle])){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
    root=cod1GenericUnmountedBank.root[shuffle];
   }else if(scripted>=0&&ActorScriptedClockSelected(lease.actorIndex)){root=ActorScriptedRoot(i);}
   else if(face>=0&&(faceRequested||ActorFaceClockSelected(lease.actorIndex))){root=ActorFaceRoot(i);}
   else for(t=0;t<2;t++)for(j=4;j<25;j++)if(i==map[t][j]){
-   if(haveMG!=1)goto done;root=mgBefore[t].bank[j-4];
+   if(haveMG!=1){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}root=mgBefore[t].bank[j-4];
   }
-  if(!root||(root->noteCount&&face<0&&!(scripted>=0&&ActorScriptedClockSelected(lease.actorIndex))))goto done;
+  }
+  if(!root||(root->noteCount&&face<0&&!(scripted>=0&&ActorScriptedClockSelected(lease.actorIndex))&&!ActorGeneralClockActive(&stage))){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
   for(p=cod1GenericDefinitions[i].parent;p;p=cod1GenericDefinitions[p].parent)if(cod1GenericDefinitions[p].flags&3){mode=cod1GenericDefinitions[p].flags&3;break;}
-  if(mode&&((root->flags&1)!=((mode==1)?1u:0u)))goto done;
+  if(mode&&((root->flags&1)!=((mode==1)?1u:0u))){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
  }
  if(cod1GenericOperation.cancelled||epoch!=cod1GenericEpoch||!cod1EntityReady||level.spawning||level.restarted||
     current(ctx)!=1||memcmp(copy,borrowed,bytes)||memcmp(ref,&owner,sizeof(owner))||
     !ActorGoalLease(&owner,&after)||memcmp(&lease,&after,sizeof(lease))||
     memcmp(actorCopy,&cod1Actors[lease.actorIndex],sizeof(*actorCopy))||memcmp(entityCopy,&g_entities[owner.slot],sizeof(*entityCopy))||
-    cod1GenericOperation.cancelled||old->revision!=revision)goto done;
+    cod1GenericOperation.cancelled||old->revision!=revision){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
  if(haveMG==1){
   memcpy(mgAfter,mgBefore,sizeof(mgAfter));for(t=0;t<2;t++)for(j=0;j<25;j++)mgAfter[t].node[j]=stage.nodes[map[t][j]];
-  if(!TurretAnimationActorCommit(gun,now,mgBefore,mgAfter))goto done;
+  if(gunClock && !TurretAnimationActorCommit(gun,now,mgBefore,mgAfter)){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
  }else{
   const c1atl14Node_t fresh={0,0,0,0,0,1,0,0};
-  for(t=0;t<2;t++)for(j=0;j<25;j++)if(memcmp(stage.nodes+map[t][j],old->used?old->nodes+map[t][j]:&fresh,sizeof(fresh)))goto done;
+  for(t=0;t<2;t++)for(j=0;j<25;j++)if(memcmp(stage.nodes+map[t][j],old->used?old->nodes+map[t][j]:&fresh,sizeof(fresh))){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
  }
- if(!ActorFaceFrameCanMutate(&stage,faceRequested,1))goto done;
- stage.revision++;ActorGenericFreeOwned(old);*old=stage;stage.nodes=NULL;stage.notify=NULL;ok=1;
-done:ActorGenericFreeOwned(&stage);free(copy);free(actorCopy);free(entityCopy);cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.busy=0;return ok;
+ if(!ActorFaceFrameCanMutate(&stage,faceRequested,1)){if(error&&cap)snprintf(error,cap,"generic core line=%d",__LINE__);goto done;}
+ stage.revision++;ActorGenericFreeOwned(old);*old=stage;stage.nodes=NULL;stage.notify=NULL;stage.names=NULL;ok=1;
+done:ActorGenericFreeOwned(&stage);free(copy);free(actorCopy);free(entityCopy);cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.nameStage=NULL;cod1GenericOperation.nameBytes=0;cod1GenericOperation.busy=0;return ok;
 }
 static int ActorGenericMutate(C1GARecord*,void*);
 static int ActorGenericTransaction(const GscEntityRef*ref,uint64_t runtime,uint64_t catalog,int now,
@@ -371,7 +470,7 @@ static int ActorGenericTransaction(const GscEntityRef*ref,uint64_t runtime,uint6
  int(*mutate)(C1GARecord*,void*),void*user){
  int owned,ok,kind=mutate==ActorGenericMutate?1:mutate==ActorFaceMutate?2:mutate==ActorScriptedMutate?3:0;
  owned=ActorControllerGenericSourceEnter(ref,runtime,catalog,now,borrowed,bytes,current,ctx,user,kind);
- if(owned<0)return 0;if(!owned&&!ActorControllerForeignMutationAllowed())return 0;
+ if(owned<0){if(error&&cap)snprintf(error,cap,"source command entry");return 0;}if(!owned&&!ActorControllerForeignMutationAllowed()){if(error&&cap)snprintf(error,cap,"foreign mutation");return 0;}
  ok=ActorGenericTransactionCore(ref,runtime,catalog,now,borrowed,bytes,error,cap,
    owned?ActorControllerGenericSourceCurrent:current,owned?ActorControllerGenericSourceContext():ctx,mutate,user);
  return ActorControllerGenericSourceFinish(owned,ok);
@@ -433,71 +532,98 @@ static int ActorIndependentIdleLook(const C1GARecord *stage,const GscActorAnimat
  }
  return 1;
 }
-/* look::lookAtTarget reasserts its straight-eye parent while a named
- * line plays below it. ENGINE 109 can only rewrite this node when every
- * ancestor is already weighted and the path is unsynchronized. Execute
- * the ordinary setter and require the parent clock to be byte-identical. */
-static int ActorReassertSpeakingEyeParent(C1GARecord *stage,const GscActorAnimationRequest *q){
- const unsigned node=q->animation[0].ordinal;
- c1atl14Node_t before=stage->nodes[node];
- unsigned parent;
- /* The map uses the same original look::lookAtTarget on Foley during
-  * his named gestures. Its straight-eye write has the same unchanged
-  * parent clock and already-weighted ancestor requirements. */
- const gentity_t *e=g_entities+stage->lease.entity.slot;
- int foley=e->targetname && !strcmp(e->targetname,"foley") && e->classname &&
-     !strcmp(e->classname,"actor_ally_airborne_officer_thompson");
- if((!foley&&!ActorRunnerFaceOwner(stage))||ActorGenericNamedPending(stage)||
-    q->method!=GSC_ACTOR_ANIMATION_SET||strcmp(cod1GenericNames[node].name,"eyes_straight")||
-    !cod1GenericDefinitions[node].children||q->scalar_bits[0]!=0x3f800000u||
-    q->scalar_bits[1]!=0x3dcccccdu||q->scalar_bits[2]!=0x3f800000u||
-    before.goalWeight!=1.0f||before.currentWeight!=1.0f||before.remaining!=0.0f||before.rate!=1.0f)return 0;
- for(parent=node;;parent=cod1GenericDefinitions[parent].parent){
-  if(cod1GenericDefinitions[parent].flags&7||!stage->nodes[parent].goalWeight)return 0;
-  if(!parent)break;
- }
- return C1AGT14_SetAnim(cod1GenericDefinitions,stage->nodes,C1GA_COUNT,node,1.0f,0.1f,1.0f,0)&&
-    !memcmp(&before,stage->nodes+node,sizeof(before));
-}
-/* The original stop initializer writes body and shoot while a line is
- * still speaking. Accept the two stock writes on this stopped actor only
- * when every live name belongs to an independent facial leaf. */
 static int MoodyStopped(const C1GARecord*);
-static int MoodyStopSet(const C1GARecord *stage,const GscActorAnimationRequest *q){
- unsigned i,n=q->animation[0].ordinal,p;
- const char *name=cod1GenericNames[n].name;
- if(q->method!=GSC_ACTOR_ANIMATION_SET || !MoodyStopped(stage) || ActorGenericNamedPending(stage) ||
-    q->scalar_bits[1]!=0x3e4ccccdu || q->scalar_bits[2]!=0x3f800000u ||
-    !((!strcmp(name,"body") && q->scalar_bits[0]==0x3e4ccccdu) ||
-      (!strcmp(name,"shoot") && !q->scalar_bits[0])))return 0;
- for(p=cod1GenericDefinitions[n].parent;;p=cod1GenericDefinitions[p].parent){
-  if(!stage->nodes[p].goalWeight || (cod1GenericDefinitions[p].flags&7))return 0;
-  if(!p)break;
+/* ENGINE100 with preallocated nodes: a direct knob clears sibling
+ * goals and may copy a sync clock. Named animation state outside those
+ * subtrees is independent. Validate every named ancestor after the real
+ * operation; the surrounding transaction discards the clone on any change.
+ * No actor name, Training step, or animation-name exception is involved. */
+static int ActorIndependentNamedKnob(C1GARecord *stage,const GscActorAnimationRequest *q){
+ unsigned n=q->animation[0].ordinal,root,sync,i,p;float f[3];
+ c1atl14Node_t *before;int ok=0;
+ if(q->method!=GSC_ACTOR_ANIMATION_KNOB||!n||n>=C1GA_COUNT||ActorGenericNamedPending(stage))return 0;
+ root=cod1GenericDefinitions[n].parent;
+ sync=n;while(sync&&(!cod1GenericDefinitions[sync].children||!(cod1GenericDefinitions[sync].flags&4)))sync=cod1GenericDefinitions[sync].parent;
+ for(i=0;i<C1GA_COUNT;i++)if(stage->notify->flags[i].token){
+  if(C1AGT14_Descendant(cod1GenericDefinitions,i,root)||
+     (sync&&C1AGT14_Descendant(cod1GenericDefinitions,i,sync)))return 0;
  }
- for(i=0;i<C1GA_COUNT;i++)if(stage->notify->flags[i].token &&
-    (!ActorSpeakingFaceLeaf(i) || stage->notify->flags[i].descendant ||
-     C1AGT14_Descendant(cod1GenericDefinitions,i,n) || C1AGT14_Descendant(cod1GenericDefinitions,n,i)))return 0;
- return 1;
+ before=malloc(C1GA_COUNT*sizeof(*before));if(!before)return 0;
+ memcpy(before,stage->nodes,C1GA_COUNT*sizeof(*before));memcpy(f,q->scalar_bits,12);
+ if(!C1AKA14_Select(cod1GenericDefinitions,stage->nodes,C1GA_COUNT,n,root,f[0],f[1],f[2],0))goto done;
+ for(i=0;i<C1GA_COUNT;i++)if(stage->notify->flags[i].token){
+  for(p=i;;p=cod1GenericDefinitions[p].parent){
+   if(memcmp(before+p,stage->nodes+p,sizeof(*before)))goto done;
+   if(!p)break;
+  }
+ }
+ ok=1;
+done:free(before);return ok;
 }
+
+/* ENGINE109 on preallocated nodes. A named animation does not lock a
+ * disjoint branch: execute the original setter on the transaction clone and
+ * require every named node and ancestor to remain byte-identical. The caller
+ * still owns the real tree, resources, frame and source receipt. No actor-name
+ * or script-phase exception is needed for an independent body/eye write. */
+static int ActorIndependentNamedSet(C1GARecord *stage,const GscActorAnimationRequest *q){
+ unsigned n=q->animation[0].ordinal,i,p;float f[3];c1atl14Node_t *before;int ok=0;
+ if(q->method!=GSC_ACTOR_ANIMATION_SET||n>=C1GA_COUNT||!stage->notify||ActorGenericNamedPending(stage))return 0;
+ before=malloc(C1GA_COUNT*sizeof(*before));if(!before)return 0;
+ memcpy(before,stage->nodes,C1GA_COUNT*sizeof(*before));memcpy(f,q->scalar_bits,12);
+ if(!C1AGT14_SetAnim(cod1GenericDefinitions,stage->nodes,C1GA_COUNT,n,f[0],f[1],f[2],0))goto done;
+ for(i=0;i<C1GA_COUNT;i++)if(stage->notify->flags[i].token){
+  for(p=i;;p=cod1GenericDefinitions[p].parent){
+   if(memcmp(before+p,stage->nodes+p,sizeof(*before)))goto done;
+   if(!p)break;
+  }
+ }
+ ok=1;
+done:free(before);return ok;
+}
+
 static int ActorGenericMutate(C1GARecord *stage,void *user) {
  const GscActorAnimationRequest *q=user;float f[3];unsigned n=q->animation[0].ordinal;
+ if(ActorLocomotionTarget(n)||((ActorAimTarget(n)||ActorAimFaceLeaf(n))&&ActorScriptedClockSelected(stage->lease.actorIndex)&&!cod1Actors[stage->lease.actorIndex].turretMount.mounted)||ActorGeneralClockActive(stage))return ActorLocomotionMutate(stage,q);
  if((q->method==GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART||q->method==GSC_ACTOR_ANIMATION_FLAGGED_ALL))return ActorGenericNamedLeafStage(stage,user);
  if(!ActorGenericBinding(q->animation,q->runtime_identity)||q->notify[0])return 0;
  memcpy(f,q->scalar_bits,sizeof(f));
  if(q->method==GSC_ACTOR_ANIMATION_CLEAR){if(!C1AGT14_Clear(cod1GenericDefinitions,stage->nodes,C1GA_COUNT,n,f[0]))return 0;ActorGenericNamedCancelSubtree(stage,n);return 1;}
- if(ActorGenericNamedActive(stage)&&!MoodyStopSet(stage,q)&&!ActorIndependentIdleLook(stage,q))return ActorReassertSpeakingEyeParent(stage,q);
+ if(ActorGenericNamedActive(stage)&&q->method==GSC_ACTOR_ANIMATION_SET)return ActorIndependentNamedSet(stage,q);
+ if(ActorGenericNamedActive(stage)&&!ActorIndependentIdleLook(stage,q)){
+  G_Printf("[376 generic named] method=%u node=%u name=%s\n",q->method,n,cod1GenericNames[n].name);
+  return q->method==GSC_ACTOR_ANIMATION_KNOB?ActorIndependentNamedKnob(stage,q):0;
+ }
  if(q->method==GSC_ACTOR_ANIMATION_SET)return C1AGT14_SetAnim(cod1GenericDefinitions,stage->nodes,C1GA_COUNT,n,f[0],f[1],f[2],0);
- if(q->method==GSC_ACTOR_ANIMATION_KNOB_ALL&&ActorGenericBinding(q->animation+1,q->runtime_identity))
-  return C1AKR14_Select(cod1GenericDefinitions,stage->nodes,C1GA_COUNT,n,q->animation[1].ordinal,f[0],f[1],f[2],0);
+ if(q->method==GSC_ACTOR_ANIMATION_KNOB && n)
+  return C1AKA14_Select(cod1GenericDefinitions,stage->nodes,C1GA_COUNT,n,cod1GenericDefinitions[n].parent,f[0],f[1],f[2],0);
+ if((q->method==GSC_ACTOR_ANIMATION_KNOB_ALL||q->method==GSC_ACTOR_ANIMATION_KNOB_ALL_RESTART)&&ActorGenericBinding(q->animation+1,q->runtime_identity))
+  return C1AKR14_Select(cod1GenericDefinitions,stage->nodes,C1GA_COUNT,n,q->animation[1].ordinal,f[0],f[1],f[2],q->method==GSC_ACTOR_ANIMATION_KNOB_ALL_RESTART);
  return 0;
 }
+extern int MapCommandSessionTake(const GscActorAnimationRequest*,int(*)(void*),void*);
 extern int R243CommandSessionTake(const GscActorAnimationRequest*,int(*)(void*),void*);
 static int ActorGenericInvoke(void *unused,const GscActorAnimationRequest *input,char *error,size_t cap,int (*current)(void*),void *ctx) {
  GscActorAnimationRequest q;(void)unused;
  if(!input||!ActorGoalBuffers(input,sizeof(*input),NULL,0,error,cap)||ActorGenericPrivate(input,sizeof(*input)))return 0;
- q=*input;if(q.precision_bits!=53||q.rounding||
-   (q.method!=GSC_ACTOR_ANIMATION_CLEAR&&q.method!=GSC_ACTOR_ANIMATION_SET&&q.method!=GSC_ACTOR_ANIMATION_KNOB_ALL&&q.method!=GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART&&q.method!=GSC_ACTOR_ANIMATION_FLAGGED_ALL))return 0;
- if(q.method==GSC_ACTOR_ANIMATION_FLAGGED_ALL&&!R243CommandSessionTake(input,current,ctx))return 0;
+ q=*input;
+ if(q.method==GSC_ACTOR_INTERRUPT_POINT){
+  cod1ActorLease_t lease;cod1ActorRecord_t *actor;int row,top;
+  if(!current || q.now_ms!=level.time || current(ctx)!=1 || memcmp(&q,input,sizeof(q)) ||
+     !ActorGoalLease(&q.entity,&lease))return 0;
+  actor=cod1Actors+lease.actorIndex;top=actor->turretMount.currentTop;
+  if(top<0 || top>=COD1_CRITICAL_STACK_CAPACITY || top!=actor->critical.top)return 0;
+  row=actor->turretMount.currentStack[top];
+  if(row!=actor->critical.stack[top] || row<1 || row>11 || row==2){
+   if(error&&cap)snprintf(error,cap,"interruptPoint state row %d outside generic callback",row);
+   return 0;
+  }
+  G_DPrintf("^3WARNING: Actor_Generic_InterruptPoint was called... is this intended?\n");
+  return 1;
+ }
+ if(q.precision_bits!=53||q.rounding||
+   (q.method!=GSC_ACTOR_ANIMATION_KNOB_ALL_RESTART&&q.method!=GSC_ACTOR_ANIMATION_KNOB&&q.method!=GSC_ACTOR_ANIMATION_CLEAR&&q.method!=GSC_ACTOR_ANIMATION_SET&&q.method!=GSC_ACTOR_ANIMATION_KNOB_ALL&&q.method!=GSC_ACTOR_ANIMATION_FLAGGED_ALL_RESTART&&q.method!=GSC_ACTOR_ANIMATION_FLAGGED_ALL&&q.method!=GSC_ACTOR_ANIMATION_FLAGGED_KNOB&&q.method!=GSC_ACTOR_ANIMATION_FLAGGED_RESTART))return 0;
+ if(q.method==GSC_ACTOR_ANIMATION_FLAGGED_ALL&&!R243CommandSessionTake(input,current,ctx)&&!MapCommandSessionTake(input,current,ctx))return 0;
  return ActorGenericTransaction(&input->entity,q.runtime_identity,q.catalog_identity,q.now_ms,input,sizeof(*input),error,cap,current,ctx,ActorGenericMutate,&q);
 }
 static int ActorGenericValidate(void *unused,const GscEntityRef *input,uint64_t runtime,int now,char *error,size_t cap,int (*current)(void*),void *ctx) {
@@ -533,7 +659,7 @@ static int ActorGenericTurretCommit(const GscTurretAnimationRequest *q,const C1T
  if(!C1AGT14_SetAnim(cod1GenericDefinitions,stage.nodes,C1GA_COUNT,q->animation.ordinal,f[0],f[1],f[2],1))goto done;
  for(t=0;t<2;t++)for(j=0;j<25;j++)stage.nodes[map[t][j]]=next->actorTree[t].node[j];
  if(!C1AGT14_Valid(cod1GenericDefinitions,stage.nodes,C1GA_COUNT))goto done;
- stage.tick=q->now_ms;stage.revision++;ActorGenericFreeOwned(old);*old=stage;stage.nodes=NULL;stage.notify=NULL;ok=1;
+ stage.tick=q->now_ms;stage.revision++;ActorGenericFreeOwned(old);*old=stage;stage.nodes=NULL;stage.notify=NULL;stage.names=NULL;ok=1;
 done:ActorGenericFreeOwned(&stage);return ok;
 }
 int G_Cod1ActorGenericPresent(const GscEntityRef *ref) {
@@ -567,7 +693,10 @@ int G_Cod1ActorGenericSample(const GscEntityRef *input,int now,float output[98],
  if(!ActorGenericDt(now-saved.tick,&dt))goto done;
  for(i=0;i<C1GA_COUNT;i++)if(!C1ATL14_AdvanceWeight(nodes+i,dt))goto done;
  for(i=0;i<C1T_CAPACITY;i++)if(cod1Turrets[i].used&&ActorRefEqual(&cod1Turrets[i].actor,&owner)){if(gun)goto done;gun=cod1Turrets+i;}
- if(gun){have=TurretAnimationActorRead(gun,now,mg,&selected);if(have<0)goto done;}
+ have=gun ? TurretAnimationActorRead(gun,now,mg,&selected)
+          : ActorDismountTrees(&saved,map,now,mg);
+ if(gun && !have && saved.detachedMG)have=ActorDismountTrees(&saved,map,now,mg);
+ if(have<0)goto done;
  if(have==1)for(t=0;t<2;t++)for(j=0;j<25;j++)nodes[map[t][j]]=mg[t].node[j];
  for(i=1;i<C1GA_COUNT;i++)if(!cod1GenericDefinitions[i].children&&(nodes[i].currentWeight||nodes[i].goalWeight)){
   int covered=0;for(j=0;j<C1ALT14_NODES;j++)if(c1alt14Definitions[j].ordinal==i&&c1alt14Definitions[j].leaf>=0)covered=1;
@@ -582,7 +711,7 @@ int G_Cod1ActorGenericSample(const GscEntityRef *input,int now,float output[98],
     memcmp(&saved,cod1GenericActors+lease.actorIndex,sizeof(saved))||!ActorGoalLease(&owner,&after)||memcmp(&lease,&after,sizeof(lease))||
     memcmp(actorCopy,&cod1Actors[lease.actorIndex],sizeof(*actorCopy))||memcmp(entityCopy,&g_entities[owner.slot],sizeof(*entityCopy)))goto done;
  memcpy(output,values,sizeof(values));ok=1;
-done:free(nodes);free(actorCopy);free(entityCopy);cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.busy=0;return ok;
+done:free(nodes);free(actorCopy);free(entityCopy);cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.nameStage=NULL;cod1GenericOperation.nameBytes=0;cod1GenericOperation.busy=0;return ok;
 }
 /* Read only the actual already advanced unmounted tree. A future walk entry
  * must select and clock its genuine clips before this view can publish them. */
@@ -601,6 +730,11 @@ int G_Cod1ActorUnmountedSample(const GscEntityRef *input,int now,float output[98
  cod1GenericOperation.stage=copy;cod1GenericOperation.bytes=C1GA_COUNT*sizeof(*copy);
  if(current(ctx)!=1||now!=level.time||epoch!=cod1EntityEpoch||cod1GenericOperation.cancelled||memcmp(input,&owner,sizeof(owner))||
     memcmp(&saved,cod1GenericActors+lease.actorIndex,sizeof(saved))||memcmp(actorCopy,cod1Actors+lease.actorIndex,sizeof(*actorCopy))||memcmp(entityCopy,g_entities+owner.slot,sizeof(*entityCopy)))goto done;
+ if(saved.detachedMG){
+  C1GARecord view=saved;
+  view.nodes=copy;
+  if(!ActorDismountSample(&view,values,times))goto done;
+ }else{
  for(i=1;i<C1GA_COUNT;i++)if(!cod1GenericDefinitions[i].children&&(copy[i].currentWeight||copy[i].goalWeight)){
   int covered=0;for(j=0;j<C1AUT14_NODES;j++)if(c1aut14Definitions[j].ordinal==i&&c1aut14Definitions[j].leaf>=0)covered=1;if(!covered)goto done;
  }
@@ -611,12 +745,13 @@ int G_Cod1ActorUnmountedSample(const GscEntityRef *input,int now,float output[98
   values[i]=copy[d->ordinal].currentWeight;if(d->leaf>=0&&d->leaf<2)times[0][d->leaf]=copy[d->ordinal].phase;
  }
  if(!C1AUT14_Nodes(values,times,checked))goto done;
+ }
  if(current(ctx)!=1||now!=level.time||epoch!=cod1EntityEpoch||cod1GenericOperation.cancelled||memcmp(input,&owner,sizeof(owner))||
     memcmp(&saved,cod1GenericActors+lease.actorIndex,sizeof(saved))||!ActorGoalLease(&owner,&after)||memcmp(&lease,&after,sizeof(lease))||
     memcmp(actorCopy,cod1Actors+lease.actorIndex,sizeof(*actorCopy))||memcmp(entityCopy,g_entities+owner.slot,sizeof(*entityCopy))||
     !R242ExactATRBytesEqual(copy,saved.nodes,C1GA_COUNT*sizeof(*copy))||cod1GenericLookEpoch!=epoch||!C1AUT14_Ready(&cod1GenericUnmountedBank))goto done;
  memcpy(output,values,sizeof(values));memcpy(phases,times,sizeof(times));ok=1;
-done:free(copy);free(actorCopy);free(entityCopy);cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.busy=0;return ok;
+done:free(copy);free(actorCopy);free(entityCopy);cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.nameStage=NULL;cod1GenericOperation.nameBytes=0;cod1GenericOperation.busy=0;return ok;
 }
 static int ActorGenericNoChange(C1GARecord *record,void *unused){(void)record;(void)unused;return 1;}
 /* ENGINE112 reads the interval of the already advanced authoritative tree.
@@ -648,7 +783,7 @@ int G_Cod1ActorRootInterval(const GscEntityRef *input,int now,int goalByte,c1ari
  actorCopy=malloc(sizeof(*actorCopy));entityCopy=malloc(sizeof(*entityCopy));copy=malloc(2*C1GA_COUNT*sizeof(*copy));
  if(!actorCopy||!entityCopy||!copy)goto done;
  memcpy(actorCopy,cod1Actors+lease.actorIndex,sizeof(*actorCopy));memcpy(entityCopy,g_entities+owner.slot,sizeof(*entityCopy));memcpy(copy,saved.nodes,C1GA_COUNT*sizeof(*copy));memcpy(copy+C1GA_COUNT,copy,C1GA_COUNT*sizeof(*copy));
- unmounted=!actorCopy->turretMount.mounted;count=unmounted?C1AUT14_NODES:C1ALT14_NODES;leaves=unmounted?C1AUT14_LEAVES:C1ALT14_LEAVES;
+ unmounted=!actorCopy->turretMount.mounted && !saved.detachedMG;count=unmounted?C1AUT14_NODES:C1ALT14_NODES;leaves=unmounted?C1AUT14_LEAVES:C1ALT14_LEAVES;
  cod1GenericOperation.stage=copy;cod1GenericOperation.bytes=2*C1GA_COUNT*sizeof(*copy);
  if(current(ctx)!=1||now!=level.time||cod1GenericOperation.cancelled||epoch!=cod1EntityEpoch||memcmp(input,&owner,sizeof(owner))||!ActorGenericRootMGCurrent(&owner,gunIndex,&gunSaved,&mgSaved,now)||
     memcmp(&saved,cod1GenericActors+lease.actorIndex,sizeof(saved))||memcmp(actorCopy,cod1Actors+lease.actorIndex,sizeof(*actorCopy))||memcmp(entityCopy,g_entities+owner.slot,sizeof(*entityCopy)))goto done;
@@ -657,9 +792,9 @@ int G_Cod1ActorRootInterval(const GscEntityRef *input,int now,int goalByte,c1ari
  }
  /* Copy an already advanced live MG owner, never ActorRead (which advances).
   * Same-tick mount selection may legitimately be newer than the generic copy. */
- if(!unmounted)for(t=0;t<2;t++)for(j=0;j<25;j++){
+ if(gunIndex>=0)for(t=0;t<2;t++)for(j=0;j<25;j++){
   if(mgSaved.used&&mgSaved.selected>=0)copy[map[t][j]]=mgSaved.actorTree[t].node[j];
-  else if(copy[map[t][j]].currentWeight||copy[map[t][j]].goalWeight)goto done;
+  else if(!saved.detachedMG && (copy[map[t][j]].currentWeight||copy[map[t][j]].goalWeight))goto done;
  }
  for(i=0;i<count;i++){
   const c1alt14Definition_t *d=c1alt14Definitions+i;const c1atl14Node_t *n;
@@ -683,7 +818,7 @@ int G_Cod1ActorRootInterval(const GscEntityRef *input,int now,int goalByte,c1ari
     memcmp(actorCopy,cod1Actors+lease.actorIndex,sizeof(*actorCopy))||memcmp(entityCopy,g_entities+owner.slot,sizeof(*entityCopy))||
     !R242ExactATRBytesEqual(copy+C1GA_COUNT,saved.nodes,C1GA_COUNT*sizeof(*copy))||!TurretAnimationBanks()||cod1GenericLookEpoch!=epoch||!C1AL14_Ready(&cod1GenericLookBank))goto done;
  memcpy(output,&value,sizeof(value));ok=1;
-done:free(copy);free(actorCopy);free(entityCopy);cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.busy=0;return ok;
+done:free(copy);free(actorCopy);free(entityCopy);cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.nameStage=NULL;cod1GenericOperation.nameBytes=0;cod1GenericOperation.busy=0;return ok;
 }
 int G_Cod1ActorGenericFrame(const GscEntityRef *ref,int now,int (*current)(void*),void *ctx){
  cod1ActorLease_t lease;C1GARecord *row;int present;
@@ -716,7 +851,9 @@ static int ActorLoadedLengthMetadata(const GscAnimationLengthRequest *q,GscAnima
  }else if((index=ActorGenericShuffleIndex(q->name))>=0){
   if(cod1GenericLookEpoch!=cod1EntityEpoch||!C1AUT14_ValidShuffle(cod1GenericUnmountedBank.root[index],cod1GenericUnmountedBank.body[index]))return 0;
   root=cod1GenericUnmountedBank.root[index];body=cod1GenericUnmountedBank.body[index];
+ }else if(ActorScriptedIndex(q->ordinal)>=0){root=ActorScriptedRoot(q->ordinal);body=ActorScriptedBody(q->ordinal);
  }else if(ActorFaceLeafIndex(q->ordinal)>=0){root=ActorFaceRoot(q->ordinal);body=ActorFaceBody(q->ordinal);
+ }else if(ActorLocomotionRoot(q->ordinal)){root=ActorLocomotionRoot(q->ordinal);body=ActorLocomotionBody(q->ordinal);
  }else{
   if(cod1TurretBankEpoch!=cod1EntityEpoch)return 0;
   for(i=0;i<2;i++)for(j=0;j<3;j++)for(k=0;k<7;k++){

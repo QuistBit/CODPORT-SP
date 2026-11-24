@@ -11,6 +11,8 @@ typedef struct {
  uint64_t completion,activity;
  int32_t spawn_count,completed_time;
 } cod1PlayerLifetime_t;
+int G_Cod1StartupPlayerEvent(const GscEntityRef*);
+int G_Cod1StartupPlayerPath(const GscEntityRef*,cod1PlayerLifetime_t*);
 int G_Cod1PlayerLifetimeRead(const GscEntityRef*,cod1PlayerLifetime_t*);
 /* Historical completed-spawn identity survives ordinary input/pregame flags.
  * g_reloading/saveGamePending do not say whether ClientBegin returned.

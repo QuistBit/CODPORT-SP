@@ -1,3 +1,4 @@
+extern void G_Printf(const char *,...);
 /* Optional whole-function admission. Original sources and executable IR are
  * retained. Only temporary validation views hide OTHER functions, never an
  * instruction or dead branch of the function being certified. Legacy profiles
@@ -12,12 +13,14 @@ static int admission_target_push(const GscProgram *g,int target,unsigned char se
     if(!seen[target]){if(*count>=MAX_FUNCS)return 0;seen[target]=1;stack[(*count)++]=target;}return 1;
 }
 static int function_admission_collect(const GscProgram *g,int first,const unsigned char *runtime_mask,unsigned char *collected,char *error,size_t size) {
-    unsigned char seen[MAX_FUNCS];int stack[MAX_FUNCS],count=0,n,f,target;const Func *fn;
+    unsigned char seen[MAX_FUNCS];int stack[MAX_FUNCS],count=0,n,f,target,blocked=0;const Func *fn;
     if(!g||!g->function_admission_selected)return g!=NULL;
     if(g->func_count<1||g->func_count>MAX_FUNCS||!g->function_admission_token)return 0;
     memset(seen,0,sizeof(seen));if(!admission_target_push(g,first,seen,stack,&count))return 0;
     while(count){f=stack[--count];fn=&g->funcs[f];
-        if(!fn->admission||(runtime_mask&&!runtime_mask[f])){if(error&&size)snprintf(error,size,"function %s::%s deferred: %s",g->modules[fn->module],fn->name,fn->admission_error[0]?fn->admission_error:"Runtime host or structural capability unavailable");return 0;}
+        if(!fn->admission||(runtime_mask&&!runtime_mask[f])){if(!strcmp(g->modules[g->funcs[first].module],"animscripts/run")){
+            G_Printf("[run dependency] %s::%s: %s\n",g->modules[fn->module],fn->name,fn->admission_error);
+        }else {if(error&&size)snprintf(error,size,"function %s::%s deferred: %s",g->modules[fn->module],fn->name,fn->admission_error[0]?fn->admission_error:"Runtime host or structural capability unavailable");return 0;}if(!blocked&&error&&size)snprintf(error,size,"function %s::%s deferred: %s",g->modules[fn->module],fn->name,fn->admission_error);blocked=1;}
         for(n=fn->start;n<fn->end;n++){const Instr *i=&g->code[n];target=-1;if(developer_code_hidden(g,n))continue;
             if(i->kind==I_CALL||i->kind==I_THREAD)target=i->target;
             else if((i->kind==I_METHOD||i->kind==I_METHOD_THREAD)&&(i->receiver_binding_kind==GSC_RECEIVER_TARGET_LOCAL_SCRIPT||i->receiver_binding_kind==GSC_RECEIVER_TARGET_QUALIFIED_SCRIPT))target=i->receiver_script_target;
@@ -31,7 +34,7 @@ static int function_admission_collect(const GscProgram *g,int first,const unsign
             else if(e->kind==E_DYNAMIC_CALL&&e->a>=0&&e->a<g->expr_count&&g->expr[e->a].kind==E_FUNC_REF)target=g->expr[e->a].target;
             if(target>=0&&!admission_target_push(g,target,seen,stack,&count))return 0;
         }
-    }if(collected)memcpy(collected,seen,sizeof(seen));return 1;
+    }if(blocked)return 0;if(collected)memcpy(collected,seen,sizeof(seen));return 1;
 }
 static int function_admission_current_mask(const GscProgram *g,int first,const unsigned char *runtime_mask,char *error,size_t size){return function_admission_collect(g,first,runtime_mask,NULL,error,size);}
 static int function_admission_current(const GscProgram *g,int first,char *error,size_t size){return function_admission_current_mask(g,first,NULL,error,size);}
@@ -162,6 +165,21 @@ static int function_admission_view(const GscProgram *g,GscProgram *view) {
 static void function_admission_view_free(GscProgram *view){free(view->code);free(view->expr);free(view->funcs);memset(view,0,sizeof(*view));}
 static int program_link(GscProgram *g,const char *entry,int entities,int access,int events,int state,int controls,int flow,int arrays,int results,int payloads,int predicates,int actor_spawners,int function_refs,char *error,size_t size) {
     GscProgram staged,probe;int f,n,module,target,ok=0,local_calls=0;static uint64_t serial;
+    if(g&&g->map_developer_selected){
+        if(g->linked||g->invalid||g->function_admission_selected||g->turret_animations_selected)return 0;
+        memset(&staged,0,sizeof(staged));
+        if(!function_admission_view(g,&staged))return 0;
+        staged.map_developer_linking=1;
+        developer_validation_view(&staged);function_admission_requirements(&staged,-1);
+        ok=program_link_strict(&staged,entry,entities,access,events,state,controls,flow,arrays,results,payloads,predicates,actor_spawners,function_refs,error,size);
+        if(ok){
+            memcpy(g->code,staged.code,(size_t)g->code_count*sizeof(*g->code));
+            memcpy(g->expr,staged.expr,(size_t)g->expr_count*sizeof(*g->expr));
+            memcpy(g->funcs,staged.funcs,(size_t)g->func_count*sizeof(*g->funcs));
+            {Expr*expr=g->expr;Instr*code=g->code;Func*funcs=g->funcs;*g=staged;g->expr=expr;g->code=code;g->funcs=funcs;g->map_developer_linking=0;}
+        }
+        function_admission_view_free(&staged);return ok;
+    }
     if(!g||!g->function_admission_selected)return program_link_strict(g,entry,entities,access,events,state,controls,flow,arrays,results,payloads,predicates,actor_spawners,function_refs,error,size);
     if(g->linked||g->invalid||!g->turret_animations_selected||!function_refs||g->func_count<1||g->func_count>MAX_FUNCS||serial==UINT64_MAX)return 0;
     memset(&staged,0,sizeof(staged));memset(&probe,0,sizeof(probe));
@@ -186,7 +204,7 @@ static int program_link(GscProgram *g,const char *entry,int entities,int access,
     module=find_module(&staged,entry);staged.entry_fn=module<0?-1:find_func(&staged,module,"main");staged.function_admission_token=serial+1;staged.requires_local_expr_call=local_calls;
     if(staged.entry_fn<0||!function_admission_current(&staged,staged.entry_fn,error,size))goto done;
     memcpy(g->code,staged.code,(size_t)g->code_count*sizeof(*g->code));memcpy(g->expr,staged.expr,(size_t)g->expr_count*sizeof(*g->expr));memcpy(g->funcs,staged.funcs,(size_t)g->func_count*sizeof(*g->funcs));
-    {Expr *expr=g->expr;Instr *code=g->code;Func *funcs=g->funcs;*g=staged;g->expr=expr;g->code=code;g->funcs=funcs;g->linked=1;g->function_admission_token=++serial;}
+    {Expr *expr=g->expr;Instr *code=g->code;Func *funcs=g->funcs;*g=staged;g->expr=expr;g->code=code;g->funcs=funcs;developer_index_code(g);g->linked=1;g->function_admission_token=++serial;}
     ok=1;if(error&&size)error[0]=0;
 done:function_admission_view_free(&probe);function_admission_view_free(&staged);return ok;
 }

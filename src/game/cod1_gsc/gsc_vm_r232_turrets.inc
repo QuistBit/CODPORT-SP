@@ -1,3 +1,4 @@
+static int entity_notify_internal(GscRuntime *,const GscEntityRef *,const char *);
 /* Selected typed effects only. No animation, AI state or fire event is
  * simulated by the interpreter: every admitted effect reaches this host. */
 int gsc_program_select_r232_turrets(GscProgram *g) {
@@ -84,6 +85,11 @@ static int turret_invoke(GscRuntime *r,const Value *receiver,int descriptor,
             staged.kind=V_ENTITY;staged.entity=reply.entity;
         } else if(reply.kind!=GSC_TURRET_RESULT_UNDEFINED||
                   memcmp(&reply.entity,&zero,sizeof(zero)))goto invalid;
+    } else if(kind==GSC_TURRET_STOP_USE && reply.kind==GSC_TURRET_RESULT_OWNER_RELEASED){
+        if(reply.boolean || reply.entity.epoch!=original.entity.epoch || !reply.entity.generation ||
+           state_entity_live(r,&reply.entity)!=1 || !turret_current(&lease))goto invalid;
+        r->entity_method_busy=0;
+        return entity_notify_internal(r,&reply.entity,"turretownerchange")>=0 && !r->error[0];
     } else if(reply.kind!=GSC_TURRET_RESULT_VOID||reply.boolean||
               memcmp(&reply.entity,&zero,sizeof(zero)))goto invalid;
     if(!turret_current(&lease))goto invalid;

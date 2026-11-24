@@ -9,8 +9,25 @@ int gsc_runtime_select_entity_fields(GscRuntime *r,const GscEntityFieldHost *hos
 }
 /* -2 means cancellation without a script error. Callback inputs are owned
  * local copies; the compiler's names and caller Value records stay untouched. */
+/* Called immediately after the field host returned and entity_task_current
+ * succeeded. In native Training these allocation reads cannot dispatch VM
+ * code. A refusal falls through to the ordered retirement/error path. */
+static int entity_field_native_receivers(GscRuntime *r,const GscEntityRef *ref){
+    Task *task=r->executing_task;
+    GscEntityRef borrowed;
+    int read=0;
+    if(!r->native_readonly_scan || !r->state_enabled || !task || task->status==TASK_DEAD ||
+       !ref || !ref->epoch || !ref->generation || !r->readonly_context.frame_active ||
+       !readonly_context_selected(r,task))return 0;
+    if(!readonly_receivers_live(r,task,&read) || r->error[0])return 0;
+    borrowed=*ref;
+    return r->entities.validate(r->entities.user,&borrowed)==1 &&
+           state_ref_equal(&borrowed,ref) && !r->error[0];
+}
 static int entity_field_finish(GscRuntime *r,const GscEntityRef *ref,int line) {
     int alive;
+    if(r->error[0])return -1;
+    if(entity_field_native_receivers(r,ref))return 1;
     if(r->error[0])return -1;
     if(r->executing_task) {
         if(!refresh_state_context(r,r->executing_task))return -1;

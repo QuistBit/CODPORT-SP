@@ -42,16 +42,31 @@ static int ActorGoalPosition(const cod1ActorLease_t *l,C1PostinitPosition *v) {
 }
 /* A completed waiter can select the next node and retire the actor in one
  * VM frame. The goal and its motion owner must agree before either is observable. */
-static void ActorMotionAdoptGoal(cod1ActorMotion_t *motion,uint64_t assignment) {
+static void ActorMotionAdoptGoal(cod1ActorMotion_t *motion,uint64_t assignment,unsigned nextStep) {
     int traversal=motion->route.atTraversalStart && motion->arrived &&
         motion->notified==motion->assignment && assignment==motion->assignment+1;
     int leavingLadder=motion->arrived && motion->notified==motion->assignment &&
         assignment==motion->assignment+1 && motion->route.turnCount==1 && motion->route.ladderReady;
     int shuffle=leavingLadder?motion->route.entry.shuffle:0;
+    int carryBegin=nextStep==19 && motion->route.approachingLadder &&
+        !motion->arrived && motion->notified==motion->assignment && assignment==motion->assignment+1;
+    int carryStand=(nextStep==18 || carryBegin) && motion->route.approachingStand &&
+        !motion->arrived && motion->notified==motion->assignment && assignment==motion->assignment+1;
+    vec3_t begin,stand;
+    if(carryStand)VectorCopy(motion->route.standPoint,stand);
     vec2_t residual;
+    if(carryBegin)VectorCopy(motion->route.diveStart,begin);
     if(leavingLadder)memcpy(residual,motion->route.turnDirections[0],sizeof(residual));
     memset(&motion->route,0,sizeof(motion->route));
     motion->route.diveArmed=traversal;
+    if(carryStand){
+        motion->route.approachingStand=1;
+        VectorCopy(stand,motion->route.standPoint);
+    }
+    if(carryBegin){
+        motion->route.approachingLadder=1;
+        VectorCopy(begin,motion->route.diveStart);
+    }
     if(leavingLadder){
         motion->route.entry.shuffle=shuffle;
         memcpy(motion->route.turnDirections[0],residual,sizeof(residual));
@@ -72,26 +87,34 @@ static int ActorGoalSetStationary(const GscActorGoalRequest *borrowed,const GscA
  cod1SentientRecord_t *s=cod1Sentients+lease->sentientIndex;
  cod1ActorLease_t checked;
  C1PostinitPosition old,after,staged;
+ cod1ActorGoalSnapshot_t previous=a->goal;
  int ok=0;
- if(q->positional!=1 || !e->targetname || strcmp(e->targetname,"runner") ||
-    !e->classname || strncmp(e->classname,"actor_ally_",11) || a->goal.assigned ||
+ if(q->positional!=1 ||
+    (previous.assigned && (previous.assignment==UINT64_MAX || a->turretMount.mounted)) ||
     a->motion.active || a->motion.busy || !a->spatial.linked || !e->r.linked ||
     !ActorGoalPosition(lease,&old) || memcmp(q->position,old.position,12))return 0;
  staged=old;if(!C1PostinitTargetApply(&staged,q->position))return 0;
  cod1ActorGoalBusy=1;cod1ActorGoalCancelled=0;
  if(current(context)!=1 || cod1ActorGoalCancelled || now!=level.time || level.spawning || level.restarted ||
     memcmp(borrowed,q,sizeof(*q)) || !ActorGoalLease(&q->entity,&checked) || memcmp(lease,&checked,sizeof(checked)) ||
-    a->goal.assigned || a->motion.active || a->motion.busy ||
+    memcmp(&previous,&a->goal,sizeof(previous)) || a->motion.active || a->motion.busy ||
     !ActorGoalPosition(lease,&after) || memcmp(&old,&after,sizeof(old)))goto done;
  memcpy(s->rawGoal.position,staged.goal,12);s->defaults.cell0020=staged.cell20;
  a->defaults.pathWords[(0x6f4-0x374)/4]=staged.path6f4;a->defaults.cell0774=staged.cell774;
  a->rawGoalCell07e4=staged.cell7e4;a->rawGoalCell078f=staged.cell78f;
+ /* The position command replaces an unstarted node command immediately.
+  * Keep assignment identities monotonic for readers retaining an old node. */
+ if(previous.assigned){
+     memset(&a->goal,0,sizeof(a->goal));
+     a->goal.assignment=previous.assignment+1;
+ }
  a->stationaryGoal=1;a->stationaryGoalTick=now;
  if(g_debugMove.integer)G_Printf("[Training stationary goal] owner=%u/%u tick=%d xyz=%.3f,%.3f,%.3f inrange=%u\n",
       q->entity.slot,q->entity.generation,now,staged.goal[0],staged.goal[1],staged.goal[2],staged.cell78f);
  ok=1;
 done:cod1ActorGoalBusy=0;cod1ActorGoalCancelled=0;return ok;
 }
+#include "g_cod1_actor_entity_goal.inc"
 static int ActorGoalInvoke(void *user,const GscActorGoalRequest *input,char *error,size_t size,int (*current)(void *),void *context) {
     GscActorGoalRequest q;cod1ActorLease_t lease,after;cod1ActorGoalSnapshot_t goal,old;
     C1PostinitPosition prior,check,applied;
@@ -100,7 +123,9 @@ static int ActorGoalInvoke(void *user,const GscActorGoalRequest *input,char *err
     cod1ActorNativeData_t native;cod1SentientDefaults_t sentient;(void)user;
     if(!input||!current||!ActorGoalBuffers(input,sizeof(*input),NULL,0,error,size))return 0;
     if(cod1ActorGoalBusy){cod1ActorGoalCancelled=1;return 0;}
-    q=*input;now=level.time;if(q.now_ms<0||!cod1EntityReady||level.spawning||level.restarted||!ActorMapAvailable()||!ActorGoalLease(&q.entity,&lease)||!nodes)return 0;
+    q=*input;now=level.time;if(q.now_ms<0||!cod1EntityReady||level.spawning||level.restarted||!ActorMapAvailable())return 0;
+    if(q.positional==2)return ActorSetEntityGoal(input,&q,now,error,size,current,context);
+    if(!ActorGoalLease(&q.entity,&lease)||!nodes)return 0;
     if(q.positional)return ActorGoalSetStationary(input,&q,&lease,now,current,context);
     old=cod1Actors[lease.actorIndex].goal;native=cod1Actors[lease.actorIndex].nativeData;sentient=cod1Sentients[lease.sentientIndex].defaults;
     if(old.assignment==UINT64_MAX)return 0;
@@ -136,6 +161,12 @@ static int ActorGoalInvoke(void *user,const GscActorGoalRequest *input,char *err
     cod1Sentients[lease.sentientIndex].defaults.cell0020=placed.status==1?placed.yaw:-1.0f;
     cod1Actors[lease.actorIndex].stationaryGoal=0;
     cod1Actors[lease.actorIndex].goal=goal;
+    if(g_debugMove.integer && g_entities[q.entity.slot].targetname &&
+       !strcmp(g_entities[q.entity.slot].targetname,"runner")){
+        unsigned step=G_Cod1RunnerStep(&q.entity,&goal.node);
+        if(step)G_Printf("[runner course goal] owner=%u/%u tick=%d serial=%llu step=%u node=%u\n",
+            q.entity.slot,q.entity.generation,now,(unsigned long long)goal.assignment,step,goal.node.index);
+    }
     if(TrainingJumperExitNode(&q.entity,goal.assignment,&goal.node)){
         cod1Actors[lease.actorIndex].towerGoalTick=now;
         if(g_debugMove.integer)G_Printf("[tower goal assigned] owner=%u/%u host=%d logical=%d\n",
@@ -146,7 +177,7 @@ static int ActorGoalInvoke(void *user,const GscActorGoalRequest *input,char *err
         if(old.assigned && motion->active && !motion->model && !motion->busy &&
            !cod1Actors[lease.actorIndex].turretMount.mounted && motion->arrived &&
            motion->assignment==old.assignment && motion->notified==old.assignment){
-            ActorMotionAdoptGoal(motion,goal.assignment);
+            ActorMotionAdoptGoal(motion,goal.assignment,0);
             if(g_debugMove.integer)G_Printf("[actor goal] owner=%u/%u tick=%d handoff=%llu->%llu\n",
                 q.entity.slot,q.entity.generation,now,(unsigned long long)old.assignment,(unsigned long long)goal.assignment);
         }

@@ -42,7 +42,8 @@ static int C1ATL14_SetGoal(c1atl14Node_t*node,float weight,float timePerWeight,f
 static C1ATL14_NOINLINE int C1ATL14_AdvanceWeightInner(const c1atl14Node_t*node,float dt,c1atl14Node_t*out){
  c1atl14Node_t v;float epsilon,tiny;uint32_t u=0x3a83126fu;double next;if(!node||!out||!C1ATL14_Finite(dt)||dt<0||!C1ATL14_Finite(node->remaining)||node->remaining<0||!C1ATL14_Finite(node->goalWeight)||node->goalWeight<0||node->goalWeight>1||!C1ATL14_Finite(node->currentWeight)||node->currentWeight<0||node->currentWeight>1)return 0;
  memcpy(&epsilon,&u,4);u=0x358637beu;memcpy(&tiny,&u,4);v=*node;
- if((double)dt+epsilon>=v.remaining){v.currentWeight=v.goalWeight;v.remaining=0;}
+ /* ENGINE47B1E0/47ACC7: equality stays in interpolation. */
+ if((double)dt+epsilon>v.remaining){v.currentWeight=v.goalWeight;v.remaining=0;}
  else{next=((double)v.goalWeight-v.currentWeight)/v.remaining*dt+v.currentWeight;v.currentWeight=next<tiny?(float)((double)v.goalWeight*epsilon):(float)next;v.remaining=(float)((double)v.remaining-dt);}
  *out=v;return 1;
 }

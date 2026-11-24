@@ -169,10 +169,10 @@ void G_Cod1ActorMotionStop(uint64_t epoch) {
     }
 }
 static int MotionSharedTerminal(const cod1ActorRecord_t *a,const GscEntityRef *ref){
-    return a->goal.assigned && a->goal.assignment==22 && a->motion.assignment==22 &&
+    return a->goal.assigned && G_Cod1RunnerStep(&a->owner,&a->goal.node)==22 && a->motion.assignment==a->goal.assignment &&
         a->motion.route.phase==2 && a->motion.route.cursor==0 &&
         G_Cod1RunnerSharesNode(ref,22) &&
-        G_Cod1RunnerCourseGoal(ref,22,&a->goal.node)==1;
+        G_Cod1RunnerCourseGoal(ref,a->goal.assignment,&a->goal.node)==1;
 }
 
 /* Retail actor locomotion reads its own movement mask (GAME+66a30).
@@ -183,8 +183,9 @@ static int MotionCourseSweep(const cod1ActorLease_t *lease,uint64_t assignment,i
                             const vec3_t start,const vec3_t end,int mask,trace_t *tr){
     const cod1ActorRecord_t *a=&cod1Actors[lease->actorIndex];
     const gentity_t *e=&g_entities[lease->entity.slot];
-    if((assignment==22 && MotionSharedTerminal(a,&lease->entity)) ||
-       (a->motion.route.entryPeer.epoch && (assignment==1 || assignment==2) &&
+    unsigned courseStep=G_Cod1RunnerStep(&lease->entity,&a->goal.node);
+    if(MotionSharedTerminal(a,&lease->entity) ||
+       (a->motion.route.entryPeer.epoch && (courseStep==1 || courseStep==2) &&
         G_Cod1RunnerCourseGoal(&lease->entity,assignment,&a->goal.node)==1)){
         cod1SpatialTraceQuery_t q={0};
         if((uint32_t)mask!=COD1_SPATIAL_FLOOR_MASK || !e->r.linked)return 0;
@@ -267,7 +268,10 @@ static int MotionFloor(const cod1ActorLease_t *lease,uint64_t assignment,int now
         if(!MotionCourseSweep(lease,assignment,now,start,end,mask,&tr))return 0;
     }
     if(tr.startsolid||tr.allsolid||!isfinite(tr.fraction)||tr.fraction<0||tr.fraction>=1||
-       !isfinite(tr.plane.normal[2])||tr.plane.normal[2]<.7f)return -1;
+       !isfinite(tr.plane.normal[2])||tr.plane.normal[2]<.7f){
+        if(g_debugMove.integer&&now%500==0)G_Printf("[472 floor refusal] owner=%u tick=%d assignment=%llu at=%.5f,%.5f,%.5f trace=%d/%d/%.6f hit=%d normal=%.5f,%.5f,%.5f hullZ=%.3f,%.3f\n",lease->entity.slot,now,(unsigned long long)assignment,at[0],at[1],at[2],tr.startsolid,tr.allsolid,tr.fraction,tr.entityNum,tr.plane.normal[0],tr.plane.normal[1],tr.plane.normal[2],g_entities[lease->entity.slot].r.mins[2],g_entities[lease->entity.slot].r.maxs[2]);
+        return -1;
+    }
     if(!isfinite(tr.endpos[0])||!isfinite(tr.endpos[1])||!isfinite(tr.endpos[2]))return -1;
     VectorCopy(tr.endpos,floor);return 1;
 }
@@ -302,7 +306,7 @@ static int MotionBindEntryPeer(const cod1ActorLease_t *lease,const cod1ActorGoal
         r->entryPeer=other.entity;
         /* The second goal leaves the shared entry. Bind the current peer again
          * for this assignment; the spawn detour belongs to the first goal. */
-        if(goal->assignment==2)return 0;
+        if(G_Cod1RunnerStep(&lease->entity,&goal->node)==2)return 0;
         clearance=self->r.maxs[0]+body->r.maxs[0];
         if(!MotionCrossesEntryPeer(start,target,body->r.currentOrigin,clearance))continue;
         /* Two observed route points bracket the peer longitudinally, both
@@ -355,7 +359,7 @@ static int MotionLocalRoute(const cod1ActorLease_t *lease,const cod1ActorGoalSna
     cod1LocalRoute_t *r=&cod1Actors[lease->actorIndex].motion.route;
     gentity_t *e=&g_entities[lease->entity.slot];
     int i,budget=6;
-    if(!r->phase && (goal->assignment==1 || goal->assignment==2) &&
+    if(!r->phase && (G_Cod1RunnerStep(&lease->entity,&goal->node)==1 || G_Cod1RunnerStep(&lease->entity,&goal->node)==2) &&
        MotionBindEntryPeer(lease,goal,now,mask,start,target,r)<0)return -1;
     while (r->phase<2 && budget>0) {
         vec3_t a,b;
@@ -390,12 +394,12 @@ static int MotionLocalRoute(const cod1ActorLease_t *lease,const cod1ActorGoalSna
         if (!MotionCurrent(lease,goal->assignment,now)) return -1;
         budget--;
         if (!r->phase) {
-            if(g_debugMove.integer && goal->assignment>=14)
+            if(g_debugMove.integer && G_Cod1RunnerStep(&lease->entity,&goal->node)>=14)
                 G_Printf("[Elder crawl route] assignment=%llu fromZ=%.2f targetZ=%.2f trace=%.4f normalZ=%.4f solid=%d\n",(unsigned long long)goal->assignment,a[2],b[2],tr.fraction,tr.plane.normal[2],tr.startsolid);
             /* A straight chord across the wire trench can run into its sloped
              * floor. Keep following the authored leg using the ordinary short
              * capsule sweeps and ground projection at each actual move. */
-            int support=(G_Cod1ElderStandingRun(goal->assignment) || (goal->assignment>=14 && cod1Actors[lease->actorIndex].motion.standingTop)) &&
+            int support=(r->approachingLadder || G_Cod1ElderStandingRun(G_Cod1RunnerStep(&lease->entity,&goal->node)) || (G_Cod1RunnerStep(&lease->entity,&goal->node)>=14 && cod1Actors[lease->actorIndex].motion.standingTop)) &&
                 tr.fraction>0 && tr.fraction<1 && tr.plane.normal[2]>=.7f;
             if (!tr.startsolid && !tr.allsolid && (tr.fraction==1 || support)) {r->phase=2;break;}
             i=G_Cod1LocalWaypoints(&lease->entity,goal->assignment,&goal->node,start,target,r->points+2,COD1_LOCAL_POINTS-2);
@@ -580,8 +584,8 @@ int G_Cod1ActorSetCourseRunRate(const GscEntityRef *ref,float rate){
     if(!ref || !(rate>=.8f && rate<=1.2f) ||
        !ActorGoalBuffers(ref,sizeof(*ref),NULL,0,NULL,0) || !MotionLease(ref,&lease))return 0;
     actor=&cod1Actors[lease.actorIndex];
-    if(!actor->alive || !actor->goal.assigned || actor->goal.assignment!=1 ||
-       G_Cod1RunnerCourseGoal(ref,1,&actor->goal.node)!=1 ||
+    if(!actor->alive || !actor->goal.assigned || G_Cod1RunnerStep(ref,&actor->goal.node)!=1 ||
+       G_Cod1RunnerCourseGoal(ref,actor->goal.assignment,&actor->goal.node)!=1 ||
        actor->turretMount.mounted || actor->motion.busy || actor->courseRunRate)return 0;
     actor->courseRunRate=rate;
     if(g_debugMove.integer)G_Printf("[Training crouch rate] owner=%u/%u rate=%.8f\n",ref->slot,ref->generation,rate);
@@ -598,10 +602,10 @@ int G_Cod1ActorSetCourseEntryIdle(const GscEntityRef *ref,const char *idle){
     else if(!strcmp(idle,"b"))selected=C1_SHUFFLE_B;
     else return 0;
     actor=&cod1Actors[lease.actorIndex];m=&actor->motion;
-    if(!actor->goal.assigned || actor->goal.assignment!=21 ||
-       G_Cod1RunnerCourseGoal(ref,21,&actor->goal.node)!=4 || !m->active || m->model ||
-       m->busy || !m->arrived || m->moving || m->blocked || m->assignment!=21 ||
-       m->notified!=21 || !m->route.ladderReady || m->route.entry.shuffle)return 0;
+    if(!actor->goal.assigned || G_Cod1RunnerStep(ref,&actor->goal.node)!=21 ||
+       G_Cod1RunnerCourseGoal(ref,actor->goal.assignment,&actor->goal.node)!=4 || !m->active || m->model ||
+       m->busy || !m->arrived || m->moving || m->blocked || m->assignment!=actor->goal.assignment ||
+       m->notified!=actor->goal.assignment || !m->route.ladderReady || m->route.entry.shuffle)return 0;
     m->route.entry.shuffle=selected;
     return 1;
 }
@@ -623,7 +627,7 @@ static int MotionLadderStep(const cod1ActorLease_t *lease,const cod1ActorGoalSna
                             int now,int dt,int mask,const vec3_t origin,vec3_t pos,vec3_t facing,const char *runner){
     cod1LocalRoute_t *r=&cod1Actors[lease->actorIndex].motion.route;
     gentity_t *e=g_entities+lease->entity.slot;
-    int down=goal->assignment==21,sign=down?-1:1;
+    int down=G_Cod1RunnerStep(&lease->entity,&goal->node)==21,sign=down?-1:1;
     cod1LadderRoots_t *roots=&ladderRoots[down];
     const float transitionTime=29.f/30.f;
     float spanX,spanY,length,height,cycleZ,transitionZ,seconds,cycles,phase;
@@ -755,14 +759,14 @@ static int MotionRestRequestOwner(const cod1ActorLease_t *lease){
     const cod1ActorMotion_t *m=&a->motion;
     const cod1SentientRecord_t *s=cod1Sentients+lease->sentientIndex;
     const gentity_t *e=g_entities+lease->entity.slot;
-    return a->alive && !a->turretMount.mounted && a->goal.assigned && a->goal.assignment==22 &&
-        m->active && !m->model && m->assignment==22 && m->notified==22 &&
+    return a->alive && !a->turretMount.mounted && a->goal.assigned && G_Cod1RunnerStep(&a->owner,&a->goal.node)==22 &&
+        m->active && !m->model && m->assignment==a->goal.assignment && m->notified==a->goal.assignment &&
         !m->blocked && a->nativeData.actor.cell0234==2 &&
         a->defaults.allocation.interval==64 && e->target &&
         e->targetname && !strcmp(e->targetname,"runner") && a->scriptStrings.weaponPresent &&
         !Q_stricmp(a->scriptStrings.weapon,"m1garand") && s->enemyKnown &&
         !s->enemy.epoch && !s->enemy.slot && !s->enemy.generation &&
-        G_Cod1RunnerCourseGoal(&lease->entity,22,&a->goal.node)==1;
+        G_Cod1RunnerCourseGoal(&lease->entity,a->goal.assignment,&a->goal.node)==1;
 }
 /* Original GAME 54F50 sums ten movement directions; 55040 ages their weights
  * from 1.0 to 0.1. The selected yaw goes through 54DE0's bounded body turn. */
@@ -818,10 +822,10 @@ int G_Cod1TrainingRunnerAppearance(const GscEntityRef *ref,int after,
  if(!read || !ref || !MotionLease(ref,&lease))return 0;
  a=cod1Actors+lease.actorIndex;m=&a->motion;
  if(!a->goal.assigned || m->busy || m->model)return 0;
- if(!after && a->goal.assignment==1 && !a->courseRunRate)kind=1;
- if(after && a->goal.assignment==21 && m->assignment==21 && m->arrived && m->notified==21 &&
+ if(!after && G_Cod1RunnerStep(&a->owner,&a->goal.node)==1 && !a->courseRunRate)kind=1;
+ if(after && G_Cod1RunnerStep(&a->owner,&a->goal.node)==21 && m->assignment==a->goal.assignment && m->arrived && m->notified==a->goal.assignment &&
     m->route.ladderReady && !m->route.entry.shuffle)kind=2;
- if(after && a->goal.assignment==22 && !a->courseRestSampled && !m->route.restRate &&
+ if(after && G_Cod1RunnerStep(&a->owner,&a->goal.node)==22 && !a->courseRestSampled && !m->route.restRate &&
     MotionRestRequestOwner(&lease))kind=3;
  if(!kind)return 1;
  if(!read(ref,kind,&input) || !ActorLeaseValid(&lease))return 0;
@@ -873,9 +877,10 @@ static int MotionWalkDistance(const cod1ActorLease_t *lease,int now,cod1LocalRou
     vec3_t before,after;
     int frame;
     float phase;
+    uint64_t assignment=cod1Actors[lease->actorIndex].goal.assignment;
     if(courseWalkRoots.epoch!=lease->entity.epoch){
-        if(!MotionLoadRootSamples(lease,22,now,"xanim/crouch2crouchwalk_straight",13,2,15,54,courseWalkRoots.start,NULL) ||
-           !MotionLoadRootSamples(lease,22,now,"xanim/crouchwalk_loop",18,3,15,54,courseWalkRoots.loop,NULL))return 0;
+        if(!MotionLoadRootSamples(lease,assignment,now,"xanim/crouch2crouchwalk_straight",13,2,15,54,courseWalkRoots.start,NULL) ||
+           !MotionLoadRootSamples(lease,assignment,now,"xanim/crouchwalk_loop",18,3,15,54,courseWalkRoots.loop,NULL))return 0;
         courseWalkRoots.epoch=lease->entity.epoch;
     }
     /* After the start clip, 18 frames at 15 fps repeat every 1200 ms. */
@@ -956,14 +961,16 @@ static int MotionYieldTerminal(const cod1ActorLease_t *lease,int now,int dt,
     int i,result,remaining=0,mask=a->nativeData.entity.nativeClipMask;
     float xy2,step,rootDistance=0;
     trace_t tr;
-    if(!a->motion.arrived || a->motion.notified!=22 || !MotionSharedTerminal(a,&lease->entity))return 1;
+    uint64_t assignment=a->goal.assignment,peerAssignment;
+    if(!a->motion.arrived || a->motion.notified!=a->goal.assignment || !MotionSharedTerminal(a,&lease->entity))return 1;
     for(i=0;i<COD1_ACTOR_CAPACITY;i++){
         const cod1ActorRecord_t *p=&cod1Actors[i];
-        if(i==(int)lease->actorIndex || !p->alive || !p->motion.active || p->motion.notified!=22 ||
+        if(i==(int)lease->actorIndex || !p->alive || !p->motion.active || p->motion.notified!=p->goal.assignment ||
            p->turretMount.mounted || !MotionLease(&p->owner,&other) || other.actorIndex!=(unsigned)i ||
            !MotionSharedTerminal(p,&p->owner) ||
            memcmp(&a->goal.node,&p->goal.node,sizeof(a->goal.node)))continue;
         if(held->epoch && memcmp(held,&p->owner,sizeof(*held)))continue;
+        peerAssignment=p->goal.assignment;
         VectorSubtract(body->r.currentOrigin,g_entities[p->owner.slot].r.currentOrigin,away);
         xy2=away[0]*away[0]+away[1]*away[1];
         if(!isfinite(xy2) || !isfinite(away[2]))return 0;
@@ -1020,19 +1027,33 @@ static int MotionYieldTerminal(const cod1ActorLease_t *lease,int now,int dt,
     VectorCopy(body->r.currentOrigin,wanted);
     wanted[0]+=away[0]*step;wanted[1]+=away[1]*step;
     if(route->returning && step>=1){wanted[0]=a->goal.position[0];wanted[1]=a->goal.position[1];}
-    result=MotionFloor(lease,22,now,wanted,ground,mask,1);
+    result=MotionFloor(lease,assignment,now,wanted,ground,mask,1);
     if(!result)return 0;
     if(result<0 || fabsf(ground[2]-body->r.currentOrigin[2])>18.1f)return 1;
-    if(!MotionCourseSweep(lease,22,now,body->r.currentOrigin,ground,mask,&tr))return 0;
+    if(!MotionCourseSweep(lease,assignment,now,body->r.currentOrigin,ground,mask,&tr))return 0;
     if(tr.startsolid || tr.allsolid || tr.fraction<1)return 1;
-    if(current(context)!=1 || !MotionCurrent(lease,22,now) || !MotionCurrent(&other,22,now))return 0;
+    if(current(context)!=1 || !MotionCurrent(lease,assignment,now) || !MotionCurrent(&other,peerAssignment,now))return 0;
     if(route->returning)MotionBrakeCommit(lease,route,remaining,dt,body->r.currentOrigin,ground,now);
     G_SetOrigin(&g_entities[lease->entity.slot],ground);
     g_entities[lease->entity.slot].s.pos.trType=TR_INTERPOLATE;
     VectorCopy(ground,a->nativeData.entity.origin);
     VectorCopy(ground,a->nativeData.entity.originTrajectory);
-    return MotionLink(lease) && MotionCurrent(lease,22,now) && MotionCurrent(&other,22,now);
+    return MotionLink(lease) && MotionCurrent(lease,assignment,now) && MotionCurrent(&other,peerAssignment,now);
 }
+
+/* GAME+51eb0/+619d0 on a live, final, direct segment. The physical
+ * negotiation endpoint remains distinct from the scripted goal radius. */
+static int MotionWireGoalReached(const cod1ActorLease_t *lease,const vec3_t target){
+    const cod1ActorRecord_t *actor=cod1Actors+lease->actorIndex;
+    const cod1SentientDefaults_t *s=&cod1Sentients[lease->sentientIndex].defaults;
+    vec3_t d;
+    if(actor->motion.route.phase!=2 || actor->motion.route.cursor || !actor->motion.moving ||
+       actor->motion.blocked || actor->defaults.allocation.cell0120==5 || actor->defaults.allocation.cell0134)return 0;
+    VectorSubtract(actor->nativeData.entity.origin,target,d);
+    return d[2]*d[2]<=6400.f && d[0]*d[0]+d[1]*d[1]<=s->goalradiusSquared &&
+        VectorLengthSquared(d)<=4.f*s->goalradiusSquared;
+}
+static int MotionWireExitDistance(const cod1ActorLease_t *,int,float *);
 
 int G_Cod1ActorMotionFrame(const GscEntityRef *ref,int now,
     int (*current)(void *),int (*notify)(void *,const GscEntityRef *),void *context) {
@@ -1040,18 +1061,25 @@ int G_Cod1ActorMotionFrame(const GscEntityRef *ref,int now,
     gentity_t *e;vec3_t origin,target,desired,delta,ground,angles,up,over;
     float distance,step,travelled,approachPhase=0,approachStep=0;
     int approachTime=0,dt,result,mask=MASK_PLAYERSOLID,runnerGoal,scriptGoalReached=0,terminalPath=0,remaining=0;trace_t tr;
-    int sharedRun=0,holdStanding=0,entryStep=0;int jumperExit=0;
+    int sharedRun=0,holdStanding=0,entryStep=0;int jumperExit=0;unsigned courseStep;
+    int blockLine=0,approachingLadder=0,walkingToStand=0;
+    vec3_t scriptedTarget;
     c1CourseEntry_t entry={0};
     if(!ref||!current||!notify||!ActorGoalBuffers(ref,sizeof(*ref),NULL,0,NULL,0)||
        current(context)!=1||!MotionLease(ref,&lease)||now!=level.time)return 0;
     m=&cod1Actors[lease.actorIndex].motion;
     if(!m->active||m->busy||now<m->lastTime)return 0;
     goal=cod1Actors[lease.actorIndex].goal;m->busy=1;
+    courseStep=goal.assigned?G_Cod1RunnerStep(ref,&goal.node):0;
     dt=now-m->lastTime;m->lastTime=now;
+    /* Publish this frame's committed movement to script readers after
+     * the mover leaves its busy scope. Waiting and obstruction have zero velocity. */
+    if(dt>0)VectorClear(m->velocity);
+
     /* Split frame hitches by dropping excess simulation time, never by a long
      * collision-free position jump. At most 6.2 units are attempted per frame. */
     if(dt>100)dt=100;
-    if(m->assignment!=goal.assignment)ActorMotionAdoptGoal(m,goal.assignment);
+    if(m->assignment!=goal.assignment)ActorMotionAdoptGoal(m,goal.assignment,courseStep);
     /* Mounted native state3 owns displacement through the fit controller.
      * Keep a new path goal pending until that state releases its ROOT link. */
     if(cod1Actors[lease.actorIndex].turretMount.mounted){m->moving=0;goto done;}
@@ -1068,7 +1096,7 @@ int G_Cod1ActorMotionFrame(const GscEntityRef *ref,int now,
     }
     if(m->arrived){
         MotionRestAdvance(&lease,now);
-        if(goal.assignment==22 && !MotionYieldTerminal(&lease,now,dt,current,context))goto lost;
+        if(courseStep==22 && !MotionYieldTerminal(&lease,now,dt,current,context))goto lost;
     }
     if(!goal.assigned||m->arrived||!dt)goto done;
     e=&g_entities[ref->slot];VectorCopy(e->r.currentOrigin,origin);
@@ -1085,20 +1113,23 @@ int G_Cod1ActorMotionFrame(const GscEntityRef *ref,int now,
          * monsterclip, bodies and solid geometry. */
         mask=cod1Actors[lease.actorIndex].nativeData.entity.nativeClipMask;
         if((uint32_t)mask!=COD1_SPATIAL_FLOOR_MASK)goto lost;
-        if(goal.assignment>=14 && goal.assignment<=17){
+        if(courseStep>=14 && courseStep<=17 && m->notified!=goal.assignment){
             if(cod1Actors[lease.actorIndex].nativeData.actor.cell0234!=4)goto lost;
             result=MotionCourseHull(&lease,goal.assignment,now,mask,1);
             if(result<0)goto lost;
-            if(!result)goto blocked;
+            if(!result){blockLine=__LINE__;goto blocked;}
         }
-        if(runnerGoal==3 || runnerGoal==4){
+        approachingLadder=courseStep==19 && runnerGoal==4 && m->route.approachingLadder;
+        if(runnerGoal==3 || (runnerGoal==4 && !approachingLadder)){
             result=runnerGoal==4?MotionLadderStep(&lease,&goal,now,dt,mask,origin,ground,target,G_Cod1RunnerName(ref)):
                 MotionDiveStep(&lease,&goal,now,dt,mask,origin,ground,target,G_Cod1RunnerName(ref));
             if(result<0)goto lost;
-            if(!result)goto blocked;
+            if(!result){blockLine=__LINE__;goto blocked;}
             distance=1;goto commit_motion;
         }
-        if(runnerGoal==2){
+        if(approachingLadder){
+            VectorCopy(m->route.diveStart,target);
+        }else if(runnerGoal==2){
             /* A negotiation Begin remains a script-owned traversal. Approach
              * its authored XY on foot while its goal waiter remains pending. */
             if(m->route.atTraversalStart)goto done;
@@ -1106,17 +1137,24 @@ int G_Cod1ActorMotionFrame(const GscEntityRef *ref,int now,
             target[2]=origin[2];
             result=MotionFloor(&lease,goal.assignment,now,target,ground,mask,runnerGoal);
             if(!result)goto lost;
-            if(result<0)goto blocked;
+            if(result<0){blockLine=__LINE__;goto blocked;}
             VectorCopy(ground,target);
         }else VectorCopy(placed.position,target);
+        VectorCopy(target,scriptedTarget);
+        walkingToStand=m->route.approachingStand &&
+            ((courseStep==17 && m->notified==goal.assignment) || courseStep==18 || approachingLadder);
+        if(walkingToStand)VectorCopy(m->route.standPoint,target);
         result=MotionLocalRoute(&lease,&goal,now,mask,origin,target);
         if(result<0 || current(context)!=1 || !MotionCurrent(&lease,goal.assignment,now))goto lost;
-        if(!result)goto blocked;
+        if(!result){blockLine=__LINE__;goto blocked;}
+        m->route.headingValid=1;
+        m->route.heading[0]=target[0]-origin[0];
+        m->route.heading[1]=target[1]-origin[1];
     }else if(jumperExit){
         VectorCopy(goal.position,target);
         result=MotionJumperRoute(&lease,&goal,now,mask,origin,target);
         if(result<0||!MotionCurrent(&lease,goal.assignment,now))goto lost;
-        if(!result)goto blocked;
+        if(!result){blockLine=__LINE__;goto blocked;}
     }else{
         result=MotionFloor(&lease,goal.assignment,now,goal.position,target,mask,runnerGoal);
         if(!result)goto lost;
@@ -1126,13 +1164,13 @@ int G_Cod1ActorMotionFrame(const GscEntityRef *ref,int now,
     /* Authored leaderwalk root delta: 63.4768 units / (31 frames /30fps).
      * Controller applies displacement; the renderer samples bone tracks only. */
     step=(jumperExit?COD1_PRECOMBAT_RUN_FORWARD*1.5f:61.435f)*dt*.001f;
-    sharedRun=runnerGoal==1 && goal.assignment==22 && MotionSharedTerminal(&cod1Actors[lease.actorIndex],ref);
-    terminalPath=sharedRun && m->notified==22;
+    sharedRun=runnerGoal==1 && courseStep==22 && MotionSharedTerminal(&cod1Actors[lease.actorIndex],ref);
+    terminalPath=sharedRun && m->notified==goal.assignment;
     holdStanding=terminalPath && cod1Actors[lease.actorIndex].nativeData.actor.cell0234==2 &&
         m->route.nextRunPoseReview>now && !m->route.approachTime;
     if(holdStanding){
         step=COD1_PRECOMBAT_RUN_FORWARD*1.5f*dt*.001f;
-    }else if(runnerGoal && (goal.assignment<=13 || (goal.assignment==22 && m->notified==22 &&
+    }else if(runnerGoal && (courseStep<=13 || (courseStep==22 && m->notified==goal.assignment &&
        cod1Actors[lease.actorIndex].nativeData.actor.cell0234==2 &&
        MotionSharedTerminal(&cod1Actors[lease.actorIndex],ref)))){
         int gait=Cod1CourseCrouchFrame(ref->slot);
@@ -1140,18 +1178,19 @@ int G_Cod1ActorMotionFrame(const GscEntityRef *ref,int now,
         float stride,frequency;
         const float runRate=cod1Actors[lease.actorIndex].courseRunRate;
         if(!MotionCrouchCycle(gait,&stride,&frequency))goto lost;
-        if(runRate && goal.assignment<=13){
+        if(runRate && courseStep<=13){
             step=stride*frequency*runRate*dt*.001f;
-            if(g_debugMove.integer && goal.assignment<=2 && !(now%200))
+            if(g_debugMove.integer && courseStep<=2 && !(now%200))
                 G_Printf("[Training crouch stride] owner=%u/%u tick=%d goal=%llu gait=%d rate=%.8f dt=%d step=%.7f\n",
                     ref->slot,ref->generation,now,(unsigned long long)goal.assignment,gait,runRate,dt,step);
         }else if(gait!=COD1_FRAME_RIFLE_CROUCHRUN_2){
             step=stride*frequency*dt*.001f;
         }
-    }else if(runnerGoal && G_Cod1ElderStandingRun(goal.assignment)){
-        if(m->standingTop || cod1Actors[lease.actorIndex].nativeData.actor.cell0234!=1)goto lost;
+    }else if(approachingLadder || (runnerGoal && G_Cod1ElderStandingRun(courseStep))){
+        if((m->standingTop && !walkingToStand) || cod1Actors[lease.actorIndex].nativeData.actor.cell0234!=1)goto lost;
         step=COD1_PRECOMBAT_RUN_FORWARD*(30.f/20.f)*dt*.001f;
-    }else if(runnerGoal && goal.assignment>=14){
+        if((courseStep==18 || approachingLadder) && !MotionWireExitDistance(&lease,now,&step))goto lost;
+    }else if(runnerGoal && courseStep>=14){
         step=COD1_PRONE_CRAWL_FORWARD*(30.f/67.f)*dt*.001f;
     }
     if(jumperExit){
@@ -1160,7 +1199,7 @@ int G_Cod1ActorMotionFrame(const GscEntityRef *ref,int now,
         if(!MotionLoadEntryRoots(&lease,goal.assignment,now)||!C1EntryStep(&entry,&courseEntryRoots,relative,dt,&step))goto lost;
         entryStep=1;
     }
-    if(runnerGoal==1 && goal.assignment==22 && m->route.entry.shuffle &&
+    if(runnerGoal==1 && courseStep==22 && m->route.entry.shuffle &&
        (cod1Actors[lease.actorIndex].nativeData.actor.cell0234==1 || holdStanding) &&
        !m->route.approachTime){
         float relative=vectoyaw(delta)-e->r.currentAngles[YAW];
@@ -1192,18 +1231,18 @@ int G_Cod1ActorMotionFrame(const GscEntityRef *ref,int now,
          * Final descending sweep prevents stepping through a solid ledge. */
         VectorCopy(origin,up);up[2]+=18;
         if(!MotionCourseSweep(&lease,goal.assignment,now,origin,up,mask,&tr))goto lost;
-        if(tr.startsolid||tr.allsolid||tr.fraction<1)goto blocked;
+        if(tr.startsolid||tr.allsolid||tr.fraction<1){blockLine=__LINE__;goto blocked;}
         VectorCopy(ground,over);over[2]+=18;
         if(!MotionCourseSweep(&lease,goal.assignment,now,up,over,mask,&tr))goto lost;
-        if(tr.startsolid||tr.allsolid||tr.fraction<1)goto blocked;
+        if(tr.startsolid||tr.allsolid||tr.fraction<1){blockLine=__LINE__;goto blocked;}
         if(!MotionCourseSweep(&lease,goal.assignment,now,over,ground,mask,&tr))goto lost;
-        if(tr.startsolid||tr.allsolid||VectorLengthSquared(tr.endpos)==0||fabsf(tr.endpos[2]-ground[2])>.1f)goto blocked;
+        if(tr.startsolid||tr.allsolid||VectorLengthSquared(tr.endpos)==0||fabsf(tr.endpos[2]-ground[2])>.1f){blockLine=__LINE__;goto blocked;}
     }
 commit_motion:
     if(current(context)!=1||!MotionCurrent(&lease,goal.assignment,now))goto lost;
     e=&g_entities[ref->slot];m=&cod1Actors[lease.actorIndex].motion;
-    if(MotionOccupiesPlayer(e,ground))goto blocked;
-    if(runnerGoal && (goal.assignment==1 || (goal.assignment==2 && m->route.entryPeer.epoch))){
+    if(MotionOccupiesPlayer(e,ground)){blockLine=__LINE__;goto blocked;}
+    if(runnerGoal && (courseStep==1 || (courseStep==2 && m->route.entryPeer.epoch))){
         int peer=G_Cod1WaitingRunnerContact(ref,ground);
         /* The actual actor mask excludes 0x4000 bodies. Preserve space
          * between two moving capsules while letting a separating step pass.
@@ -1229,7 +1268,7 @@ commit_motion:
         if(peer>=0){
             if(g_debugMove.integer && !m->blocked)
                 G_Printf("[Training contact] moving=%u/%u waitingSlot=%d tick=%d\n",ref->slot,ref->generation,peer,now);
-            goto blocked;
+            {blockLine=__LINE__;goto blocked;}
         }
     }
     /* run.gsc resumes after BlendIntoStandRun (1 s), then after each
@@ -1256,6 +1295,7 @@ commit_motion:
     }
     if(terminalPath)MotionBrakeCommit(&lease,&m->route,remaining,dt,origin,ground,now);
     VectorSubtract(ground,origin,delta);travelled=VectorLength(delta);
+    VectorScale(delta,1000.0f/dt,m->velocity);
     m->travelled+=travelled;m->blocked=0;m->moving=travelled>.001f;MotionClip(e,m->moving,now);
     G_SetOrigin(e,ground);e->s.pos.trType=TR_INTERPOLATE;
     if(distance>.001f){VectorSubtract(target,origin,delta);vectoangles(delta,angles);angles[0]=angles[2]=0;
@@ -1268,22 +1308,26 @@ commit_motion:
             VectorScale(m->route.tower.aim,1.f-ahead,facing);
             VectorMA(facing,ahead,m->route.tower.face,facing);
             angles[YAW]=MotionDepartureYaw(&m->route,facing,e->r.currentAngles[YAW],dt);
-        }else if(runnerGoal==1 && goal.assignment==22 && !m->notified && m->route.turnCount){
+        }else if(runnerGoal==1 && courseStep==22 && !m->notified && m->route.turnCount){
             angles[YAW]=MotionDepartureYaw(&m->route,delta,e->r.currentAngles[YAW],dt);
         }
+        /* Keep the path's default target, while native override owns the
+         * actual body rotation in ActorOrientationFrame. */
+        cod1Actors[lease.actorIndex].nativeData.orientation.yawCopy=angles[1];
+        if(!cod1Actors[lease.actorIndex].defaults.allocation.cell0134){
         G_SetAngle(e,angles);e->s.apos.trType=TR_INTERPOLATE;
         VectorCopy(angles,cod1Actors[lease.actorIndex].nativeData.entity.angles);
         VectorCopy(angles,cod1Actors[lease.actorIndex].nativeData.entity.angleTrajectory);
         cod1Actors[lease.actorIndex].nativeData.orientation.yaw=angles[1];
-        cod1Actors[lease.actorIndex].nativeData.orientation.yawCopy=angles[1];}
+        cod1Actors[lease.actorIndex].nativeData.orientation.yawCopy=angles[1];}}
     VectorCopy(ground,cod1Actors[lease.actorIndex].nativeData.entity.origin);
     VectorCopy(ground,cod1Actors[lease.actorIndex].nativeData.entity.originTrajectory);
     if(!MotionLink(&lease))goto lost;
     if(current(context)!=1||!MotionCurrent(&lease,goal.assignment,now))goto lost;
     m=&cod1Actors[lease.actorIndex].motion;e=&g_entities[ref->slot];
-    if(runnerGoal==4){
+    if(runnerGoal==4 && !approachingLadder){
         if(result==2){
-            if(goal.assignment==21){
+            if(courseStep==21){
                 /* The last path direction aims from committed feet back to the
                  * placed node; it survives this completed assignment only. */
                 float dx=m->route.ladderExit[0]-ground[0],dy=m->route.ladderExit[1]-ground[1];
@@ -1314,16 +1358,49 @@ commit_motion:
                  ref->slot,ground[0],ground[1],ground[2]);
         m->route.cursor--;goto done;
     }
+    /* The animation waiter is independent of the port's actual stand-hull
+     * transition. Check and relink the hull only at the authored stand point. */
+    if(walkingToStand && VectorLengthSquared(delta)<=.25f){
+        result=MotionCourseHull(&lease,goal.assignment,now,mask,0);
+        if(result<0)goto lost;
+        if(!result){blockLine=__LINE__;goto blocked;}
+        m->route.approachingStand=0;
+        if(courseStep==17){m->moving=0;m->arrived=1;MotionClip(e,0,now);}
+        /* Plan the next physical segment against the restored full hull. */
+        m->route.phase=m->route.count=m->route.length=m->route.cursor=0;
+        if(g_debugMove.integer)G_Printf("[Training stand clearance] owner=%u tick=%d at=%.3f,%.3f,%.3f target=%.3f,%.3f,%.3f height=%.1f\n",
+            ref->slot,now,ground[0],ground[1],ground[2],target[0],target[1],target[2],e->r.maxs[2]-e->r.mins[2]);
+        goto done;
+    }
+    if(approachingLadder && VectorLengthSquared(delta)<=.25f){
+        m->route.approachingLadder=0;m->route.diveArmed=1;
+        goto done;
+    }
     if(runnerGoal==2 && VectorLengthSquared(delta)<=.25f){
         m->moving=0;m->route.atTraversalStart=1;m->arrived=1;MotionClip(e,0,now);
-        G_Printf("[Training] %s at %s Begin owner=%u/%u xy=%.2f,%.2f\n",G_Cod1RunnerName(ref),goal.assignment==18?"ladder_up":goal.assignment==20?"ladder_down":"wall_dive",
+        G_Printf("[Training] %s at %s Begin owner=%u/%u xy=%.2f,%.2f\n",G_Cod1RunnerName(ref),courseStep==18?"ladder_up":courseStep==20?"ladder_down":"wall_dive",
                  ref->slot,ref->generation,ground[0],ground[1]);
         goto done;
     }
-    if(runnerGoal && goal.assignment==17 && VectorLengthSquared(delta)<=.25f){
-        result=MotionCourseHull(&lease,goal.assignment,now,mask,0);
-        if(result<0)goto lost;
-        if(!result)goto blocked;
+    if(runnerGoal && courseStep>=16 && courseStep<=18 && !m->notified){
+        int exact=VectorLengthSquared(delta)<=.25f;
+        scriptGoalReached=MotionWireGoalReached(&lease,scriptedTarget);
+        if(courseStep==17 && scriptGoalReached && !exact){
+            m->route.approachingStand=1;
+            VectorCopy(scriptedTarget,m->route.standPoint);
+        }
+        if(courseStep==17 && exact){
+            result=MotionCourseHull(&lease,goal.assignment,now,mask,0);
+            if(result<0)goto lost;
+            if(!result){
+                scriptGoalReached=0;
+                if(exact){blockLine=__LINE__;goto blocked;}
+            }
+        }
+        if(courseStep==18 && scriptGoalReached){
+            m->route.approachingLadder=1;
+            VectorCopy(scriptedTarget,m->route.diveStart);
+        }
     }
     if(jumperExit&&!m->notified){
         const cod1SentientDefaults_t *sent=&cod1Sentients[lease.sentientIndex].defaults;
@@ -1332,13 +1409,14 @@ commit_motion:
         scriptGoalReached=d[2]*d[2]<=6400.f && d[0]*d[0]+d[1]*d[1]<=sent->goalradiusSquared &&
             VectorLengthSquared(d)<=4*sent->goalradiusSquared;
     }
-    if(runnerGoal==1 && goal.assignment==22 && !m->notified)
+    if(runnerGoal==1 && courseStep==22 && !m->notified)
         scriptGoalReached=MotionSharedGoalReached(&lease,target);
     if((!terminalPath || (delta[0]==0 && delta[1]==0)) && VectorLengthSquared(delta)<=.25f &&
        (!e->targetname || strcmp(e->targetname,"foley") ||
         !memcmp(e->r.currentOrigin,goal.position,2*sizeof(float)))){m->arrived=1;m->moving=0;MotionClip(e,0,now);}
     goto done;
 blocked:
+    if(g_debugMove.integer&&now%500==0)G_Printf("[472 blocked] owner=%u tick=%d assignment=%llu step=%u line=%d origin=%.5f,%.5f,%.5f target=%.5f,%.5f,%.5f\n",ref->slot,now,(unsigned long long)goal.assignment,courseStep,blockLine,origin[0],origin[1],origin[2],target[0],target[1],target[2]);
     if(jumperExit&&g_debugMove.integer&&!(now%500))G_Printf("[tower obstruction] travel refused cursor=%d target=%.1f %.1f tick=%d\n",m->route.cursor,target[0],target[1],now);
     m=&cod1Actors[lease.actorIndex].motion;m->route.terminalSpeed=0;m->blocked=1;m->moving=0;MotionClip(e,0,now);
 done:
@@ -1355,4 +1433,25 @@ done:
 lost:
     if(ActorLeaseValid(&lease))cod1Actors[lease.actorIndex].motion.busy=0;
     return 0;
+}
+
+/* Prepare the existing real graph path before the animation script asks
+ * about its stances. This performs no displacement or goal notification. */
+int G_Cod1TrainingJumperPreparePath(const GscEntityRef*ref,int now,int(*current)(void*),void*ctx){
+ cod1ActorLease_t lease;cod1ActorGoalSnapshot_t goal;cod1ActorMotion_t*m;vec3_t target,origin;int ok;
+ if(!ref||!current||current(ctx)!=1||!MotionLease(ref,&lease)||now!=level.time)return 0;
+ goal=cod1Actors[lease.actorIndex].goal;
+ if(!goal.assigned||!TrainingJumperExitNode(ref,goal.assignment,&goal.node)||
+    !G_Cod1ActorMotionBeginUnpublished(ref,now)||!MotionCurrent(&lease,goal.assignment,now))return 0;
+ m=&cod1Actors[lease.actorIndex].motion;if(m->busy||m->model||now<=m->lastTime||m->route.tower.prepared)return 0;
+ if(m->assignment!=goal.assignment)ActorMotionAdoptGoal(m,goal.assignment,0);
+ m->busy=1;VectorCopy(g_entities[ref->slot].r.currentOrigin,origin);
+ ok=MotionJumperRoute(&lease,&goal,now,cod1Actors[lease.actorIndex].nativeData.entity.nativeClipMask,origin,target);
+ if(ok==1&&MotionCurrent(&lease,goal.assignment,now)){
+  cod1TowerPath_t*p=&cod1Actors[lease.actorIndex].motion.route.tower;
+  p->prepared=1;p->preparedTick=now;VectorCopy(origin,p->preparedOrigin);
+ }
+ if(!MotionCurrent(&lease,goal.assignment,now))return 0;
+ m=&cod1Actors[lease.actorIndex].motion;m->busy=0;
+ return ok==1&&current(ctx)==1&&MotionCurrent(&lease,goal.assignment,now);
 }

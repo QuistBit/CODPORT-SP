@@ -43,12 +43,22 @@ static int GscSoundAlias(void *user,char *out,size_t cap) {
 static int GscSoundIndependentVoice(const GscSoundCall *c){
  const GscSoundOwner *side=gscSoundOwners+c->owner.slot;
  unsigned i;
- if(c->argc!=1 || !Cod1SS_Equal(c->map,"training") || !c->plan.count || !side->pending.pending ||
+ if(c->argc!=1 || (!Cod1SS_Equal(c->map,"training")&&!(gscSoundStreamedSelected==COD1_SS_CAMPAIGN_VOICE_PROFILE&&Cod1SS_Equal(c->map,"us_intro"))) || !c->plan.count || !side->pending.pending ||
     !side->voiced || side->loadedCaption || side->voiceFailed ||
     side->pending.identity.epoch!=c->scene.epoch || side->pending.identity.session!=gscTestId ||
     side->pending.identity.entity!=c->owner.slot || side->pending.identity.generation!=c->owner.generation ||
     (!side->pendingSeparate && side->voicePacket.sound.sequence!=side->pending.identity.sequence))return 0;
- for(i=0;i<c->plan.count;i++)if(!c->plan.variants[i].streamed || !Cod1SS_Equal(c->plan.variants[i].channel,"voice"))return 0;
+ for(i=0;i<c->plan.count;i++)if((!c->plan.variants[i].streamed&&gscSoundStreamedSelected!=COD1_SS_CAMPAIGN_VOICE_PROFILE) || !Cod1SS_Equal(c->plan.variants[i].channel,"voice"))return 0;
+ return 1;
+}
+/* A plain loaded body sound has no completion slot and uses a separate mixer channel. */
+static int GscSoundPlainBody(const GscSoundCall *c){
+ unsigned i;
+ if(c->argc!=1 || !c->plan.count)return 0;
+ for(i=0;i<c->plan.count;i++){
+  const Cod1SSVariant *v=&c->plan.variants[i];
+  if(v->streamed || v->subtitle[0] || (!Cod1SS_Equal(v->channel,"body")&&!Cod1SS_Equal(v->channel,"local")))return 0;
+ }
  return 1;
 }
 static int GscSoundResolve(void *user,const char *alias) {
@@ -63,7 +73,7 @@ static int GscSoundResolve(void *user,const char *alias) {
     trap_Cvar_VariableIntegerValue("g_cod1GscLoadedCaptions")==1)
   profile=COD1_SS_LOADED_CAPTION_PROFILE;
  status=Cod1ScriptSoundResolveSelected(&files,alias,c->map,&c->plan,&c->diag,profile);
- if(status==COD1_SS_RESOURCE_READY){unsigned i;if(c->argc==1&&gscSoundOwners[c->owner.slot].pending.pending&&(gscSoundOwners[c->owner.slot].voiced||gscSoundOwners[c->owner.slot].loadedCaption||c->plan.variants[0].streamed)&&!GscSoundIndependentVoice(c)){c->diag.reason=COD1_SS_REASON_UNSUPPORTED;return -1;}for(i=1;i<c->plan.count;i++)if(c->plan.variants[i].streamed!=c->plan.variants[0].streamed || !!c->plan.variants[i].subtitle[0]!=!!c->plan.variants[0].subtitle[0]){c->diag.reason=COD1_SS_REASON_UNSUPPORTED;return -1;}}
+ if(status==COD1_SS_RESOURCE_READY){unsigned i;if(c->argc==1&&gscSoundOwners[c->owner.slot].pending.pending&&(gscSoundOwners[c->owner.slot].voiced||gscSoundOwners[c->owner.slot].loadedCaption||c->plan.variants[0].streamed)&&!GscSoundIndependentVoice(c)&&!GscSoundPlainBody(c)){c->diag.reason=COD1_SS_REASON_UNSUPPORTED;return -1;}for(i=1;i<c->plan.count;i++)if(c->plan.variants[i].streamed!=c->plan.variants[0].streamed || !!c->plan.variants[i].subtitle[0]!=!!c->plan.variants[0].subtitle[0]){c->diag.reason=COD1_SS_REASON_UNSUPPORTED;return -1;}}
  return status==COD1_SS_RESOURCE_READY?1:status==COD1_SS_RESOURCE_NONE?0:-1;
 }
 static int GscSoundIndexGet(void *user,unsigned i,char *out,size_t cap) {
@@ -128,6 +138,7 @@ static int GscSoundNotifyFlush(int now,char *error,size_t cap){
   event=gscSoundEvents[i];
   if(!GscSoundNotifyCurrent(NULL,&event.identity)||!G_Cod1EntitySameAllocation(&event.owner))continue;
   awakened=0;if(!gsc_session_notify_entity(gscTestSession,event.identity.session,&event.owner,event.notify,&awakened,error,cap))return 0;
+  G_Printf("[sound completion] owner=%u tick=%d seq=%llu event=%s woken=%d\n",event.owner.slot,now,(unsigned long long)event.identity.sequence,event.notify,awakened);
  }
  memset(gscSoundEvents,0,sizeof(gscSoundEvents));gscSoundEventCount=0;return 1;
 }
@@ -220,7 +231,7 @@ static int GscSoundInvokeSelected(void *user,const GscEntityRef *owner,const cha
  v=&c.plan.variants[pick];memset(&packet,0,sizeof(packet));
  packet.epoch=c.scene.epoch;next=gscTestQuake.sequence;
  if(next==UINT64_MAX)goto refuse;packet.sequence=next+1;packet.entity=owner->slot;
- channel=Cod1SS_Equal(v->channel,"body")?1:Cod1SS_Equal(v->channel,"weapon")?2:Cod1SS_Equal(v->channel,"voice")?3:Cod1SS_Equal(v->channel,"item")?4:0;
+ channel=Cod1SS_Equal(v->channel,"body")?1:Cod1SS_Equal(v->channel,"weapon")?2:Cod1SS_Equal(v->channel,"voice")?3:Cod1SS_Equal(v->channel,"item")?4:Cod1SS_Equal(v->channel,"local")?5:0;
  packet.channel=(uint32_t)channel;strcpy(packet.path,v->path);
  memcpy(packet.origin,g_entities[owner->slot].r.currentOrigin,sizeof(packet.origin));
  packet.gain=C1S_ALIAS_GAIN*(v->volume_min+(v->volume_max-v->volume_min)*GscSoundUnit());
@@ -241,7 +252,11 @@ static int GscSoundInvokeSelected(void *user,const GscEntityRef *owner,const cha
   if(!request || !side->loadedCaption || !C1V_EncodeLoadedCaption(command,sizeof(command),&caption))goto refuse;
   GscSoundVoiceStop(side);
   side->voicePacket=caption.sound;side->voiceHasNotify=1;side->voiceActive=1;
- }else{GscSoundVoiceStop(side);if(request){C1NPacket p;memset(&p,0,sizeof(p));p.sound=packet;p.session=gscTestId;p.generation=owner->generation;
+ }else{
+  /* Event AC replaces the audible channel, retaining an older AD deadline.
+   * Its completion still uses that original sample's positive duration. */
+  if(GscSoundIndependentVoice(&c))side->pendingSeparate=1;
+  if(!GscSoundPlainBody(&c))GscSoundVoiceStop(side);if(request){C1NPacket p;memset(&p,0,sizeof(p));p.sound=packet;p.session=gscTestId;p.generation=owner->generation;
   if(!C1N_EncodePacket(command,sizeof(command),&p))goto refuse;
  }else if(!C1S_Encode(command,sizeof(command),&packet))goto refuse;}
  if(!CQ_EncodeMetadata(marker,sizeof(marker),c.scene.epoch)||
@@ -250,6 +265,10 @@ static int GscSoundInvokeSelected(void *user,const GscEntityRef *owner,const cha
  if(!GscSoundCurrent(&c)||strcmp(actual,marker)||gscTestQuake.sequence!=next)goto refuse;
  gscTestQuake.sequence=packet.sequence;trap_SendServerCommand(0,command);
  if(!GscSoundCurrent(&c)||gscTestQuake.sequence!=packet.sequence)goto refuse;
+ if(side->voiceActive && side->pending.pending && GscSoundPlainBody(&c))
+  G_Printf("[voice/body] owner=%u generation=%u tick=%d voice=%llu body=%s\n",owner->slot,owner->generation,level.time,(unsigned long long)side->pending.identity.sequence,alias);
+ if(v->streamed && request)
+  G_Printf("[voice start] owner=%u tick=%d seq=%llu alias=%s\n",owner->slot,level.time,(unsigned long long)packet.sequence,alias);
  G_Printf("[R194] SOUND_SENT alias=%s path=%s owner=%u\n",alias,packet.path,owner->slot);
  return GscSoundCurrent(&c);
 refuse:

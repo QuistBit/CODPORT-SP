@@ -8,14 +8,33 @@ typedef struct {
     int expression, frame, phase, argument, destination, receiver_guard, function_guard;
     Value a,b,receiver,args[MAX_PARAMS];
 } ResultsNode;
+/* Each capture is compared as an undefined/array identity. GC and COW
+ * also inspect its ownership token and may remap its array number. The
+ * complete value returned by an indexed read lives in ResultsPending.current. */
+typedef struct {
+    int kind;
+    uint32_t array;
+    uint64_t object_token;
+} ResultsAncestor;
+static ResultsAncestor results_capture_ancestor(const Value *value) {
+    ResultsAncestor ref;
+    ref.kind=value->kind;
+    memcpy(&ref.array,&value->array,sizeof(ref.array));
+    memcpy(&ref.object_token,&value->object_token,sizeof(ref.object_token));
+    return ref;
+}
+static int results_same_ancestor(const Value *value,const ResultsAncestor *ref) {
+    return value->kind==ref->kind && (value->kind==V_UNDEFINED ||
+        (value->kind==V_ARRAY && value->array==ref->array));
+}
 typedef struct {
     int active, instruction, stage, argument, expression_active;
     int assignment_active, lhs,rhs,op,assign_phase,key_index,chain[48];
     int owner_guard, receiver_guard, path_ready, boundary, function_guard;
     Value owner,receiver,current,value,args[MAX_PARAMS];
-    ArrayLvalue path;
-    Value ancestors[48];
     FlowLoop loop;
+    ResultsAncestor ancestors[48];
+    ArrayLvalue path;
 } ResultsPending;
 struct ResultsTask {
     int node_count;
@@ -41,34 +60,90 @@ static int results_readonly_receiver(GscRuntime *r,const Value *v,int *read) {
 }
 /* The caller has just checked the current task and every frame's self.
  * Only level references and pure allocation reads can occur in this pass.
- * A path or function guard requires the ordinary, ordered evaluator. */
+ * Captured paths/functions are VM-owned reads; mismatches retain the ordered evaluator. */
+/* A speculative, side-effect-free read of the same captured path used by
+ * the ordered guard below. A mismatch falls back there for its original
+ * error/retirement order. No failed speculative read may set r->error. */
+static int results_readonly_path(GscRuntime *r,Task *task,int frame,const ResultsPending *p){
+    Value root,current,next;const Expr *e;int k,index;
+    if(p->path.root<0||p->path.root>=r->program->expr_count)return 0;
+    e=&r->program->expr[p->path.root];memset(&root,0,sizeof(root));
+    if(e->kind==E_VAR){
+        Frame *f=&task->frames[frame];
+        if(game_array_selected(r,e->name)){
+            if(!game_array_value_valid(r,&r->game_array_root))return 0;
+            root=r->game_array_root;
+        }else for(k=f->local_count-1;k>=0;k--)if(!strcmp(f->locals[k].name,e->name)){
+            root=f->locals[k].value;break;
+        }
+    }else{
+        index=state_field_index(r,&p->path.owner,e->name);
+        if(index>=0)root=r->state_fields[index].value;
+    }
+    if(!results_same_value(&root,&p->path.base))return 0;
+    current=p->path.base;
+    for(k=0;k<p->key_index&&k<p->path.count-1;k++){
+        memset(&next,0,sizeof(next));
+        if(current.kind==V_ARRAY){
+            if(!array_value_valid(r,current.array))return 0;
+            index=array_entry_find(r,current.array,&p->path.keys[k]);
+            if(index>=0)next=r->array_entries[index].value;
+        }
+        if(!results_same_ancestor(&next,&p->ancestors[k]))return 0;
+        current=next;
+    }
+    return 1;
+}
 static int results_readonly_guards(GscRuntime *r,Task *task,int *read) {
     ResultsTask *state=task->results;
-    int n;
-    if(!r->state_enabled||!r->readonly_context.frame_active||
-       r->state_arena_busy||r->entity_prepare_busy||r->entity_certificate_busy||
-       !readonly_context_selected(r,task))return 0;
+    int n,captured=0,functionCaptured=0;
     for(n=0;n<task->depth;n++) {
         ResultsPending *p=&state->pending[n];
-        if(p->function_guard||p->path_ready)return 0;
+        if(p->function_guard){if(!function_value_valid(r,&p->current))return 0;captured=functionCaptured=1;}
+        if(p->path_ready && !results_readonly_path(r,task,n,p))return 0;
+        if(p->path_ready)captured=1;
         if(p->owner_guard&&!results_readonly_receiver(r,&p->owner,read))return 0;
         if(p->receiver_guard&&!results_readonly_receiver(r,&p->receiver,read))return 0;
     }
     for(n=0;n<state->node_count;n++) {
         ResultsNode *p=&state->nodes[n];
-        if(p->function_guard)return 0;
+        if(p->function_guard){if(!function_value_valid(r,&p->b))return 0;captured=functionCaptured=1;}
         if(p->receiver_guard&&!results_readonly_receiver(r,&p->receiver,read))return 0;
     }
-    return 1;
+    /* Captured paths retain both certificate fences. VM-local expression
+     * reads do not assign roots or ancestors; pushing an empty node adds no
+     * guards and popping a local result only removes guards. The evaluator
+     * already discards its carry at every host-backed operation or return.
+     * Function guards still prohibit carry: writing a parent b result can
+     * replace their captured function value. */
+    if(captured)*read=1;
+    return functionCaptured?2:1;
 }
 static int results_guard_read(GscRuntime *r,Task *task,int line,int *nativeRead) {
     int n,k,read=0;ResultsTask *state=task->results;
-    if(!refresh_state_context(r,task)||task->status==TASK_DEAD)return 0;
-    if(results_readonly_guards(r,task,&read)){
-        int valid=!read || (entity_certificate_current(r,task)&&task->status!=TASK_DEAD);
-        if(nativeRead)*nativeRead=valid;
-        return valid;
-    }
+    /* All reads in this scope use the bound Session allocation validator.
+     * Fence once on each side, including when a read fails. Unbound callers,
+     * unsupported captures use the original order. */
+    if(r->state_enabled && task->status!=TASK_DEAD && r->readonly_context.frame_active &&
+       !r->state_arena_busy && !r->entity_prepare_busy && !r->entity_certificate_busy &&
+       readonly_context_selected(r,task)){
+        int alive,eligible;
+        if(!entity_certificate_current(r,task))return 0;
+        alive=readonly_receivers_live(r,task,&read);
+        if(r->error[0])return 0;
+        eligible=alive ? results_readonly_guards(r,task,&read) : 0;
+        /* On the native binding, the successful scan above read only VM
+         * values and GAME allocations after the entry certificate. Nothing
+         * dispatched an effect or changed an owner. The proof ends here.
+         * Failed/unsupported scans and generic hosts retain the exit call. */
+        if(read && !(r->native_readonly_scan && alive && eligible) &&
+           !entity_certificate_current(r,task))return 0;
+        if(!alive){entity_task_retire(task);return 0;}
+        if(eligible){
+            if(nativeRead)*nativeRead=eligible==1;
+            return 1;
+        }
+    }else if(!refresh_state_context(r,task)||task->status==TASK_DEAD)return 0;
 
     for(n=0;n<task->depth;n++) {
         ResultsPending *p=&state->pending[n];
@@ -96,7 +171,7 @@ static int results_guard_read(GscRuntime *r,Task *task,int line,int *nativeRead)
             for(k=0;k<p->key_index&&k<p->path.count-1;k++) {
                 memset(&next,0,sizeof(next));
                 if(current.kind==V_ARRAY&&!array_read_key(r,current.array,&p->path.keys[k],line,&next))return 0;
-                if(!results_same_value(&next,&p->ancestors[k]))
+                if(!results_same_ancestor(&next,&p->ancestors[k]))
                     return rfail(r,line,"captured array ancestor changed during expression");
                 current=next;
             }
@@ -123,6 +198,7 @@ static int results_operator(GscRuntime *r,const Expr *e,Value a,Value b,int line
     if(animation_namespace_kind(a.kind)||animation_namespace_kind(b.kind))return animation_namespace_compare(r,e->op,&a,&b,line,out);
     if(a.kind==V_ANIMATION||b.kind==V_ANIMATION)return animation_compare(r,e->op,&a,&b,line,out);
     if(a.kind==V_HUDELEM||b.kind==V_HUDELEM)return hud_compare(r,e->op,&a,&b,line,out);
+    if(a.kind==V_VEHICLE_NODE||b.kind==V_VEHICLE_NODE)return vehicle_node_compare(r,e->op,&a,&b,line,out);
     if(a.kind==V_NODE||b.kind==V_NODE)return node_compare(r,e->op,&a,&b,line,out);
     if(a.kind==V_UNDEFINED)return rfail(r,line,"undefined value in expression");
     if(e->kind==E_UNARY) {
@@ -151,6 +227,7 @@ static int results_operator(GscRuntime *r,const Expr *e,Value a,Value b,int line
         out->kind=V_NUMBER;out->integer=1;out->number=(float)(e->op==T_EQ?k:!k);
         return 1;
     }
+    if(e->op=='+'&&string_vector_concat_pair(r,&a,&b))return string_vector_concat(r,&a,&b,line,out);
     if(r->vector_arithmetic_enabled&&(a.kind==V_VECTOR||b.kind==V_VECTOR)&&
        e->op!=T_EQ&&e->op!=T_NE)
         return vector_arithmetic_binary(r,e->op,&a,&b,line,out);
@@ -201,13 +278,22 @@ static int results_operator(GscRuntime *r,const Expr *e,Value a,Value b,int line
 /* 1: result delivered, 2: callee pushed; 0: refusal/cancellation. No expression
  * is restarted on resume. Parent destination and already computed values live
  * in the task-owned nodes. All node transitions share the scheduler budget. */
-static int results_eval(GscRuntime *r,Task *task,Frame *f,int expression,Value *out,int line,int *budget) {
+static int thread_expression_bound(const GscProgram *g,const Expr *e){
+    if(e->argc<0 || e->argc>MAX_PARAMS)return 0;
+    if(e->op==GSC_THREAD_EXPR_COMPUTED)return g->function_ref_mode && e->a>=0 && e->a<g->expr_count;
+    if(e->op!=GSC_THREAD_EXPR_NAMED)return 0;
+    if(e->b<0)return e->target>=0 && e->target<g->func_count;
+    return (e->receiver_binding_kind==GSC_RECEIVER_TARGET_LOCAL_SCRIPT ||
+            e->receiver_binding_kind==GSC_RECEIVER_TARGET_QUALIFIED_SCRIPT) &&
+           e->receiver_script_target>=0 && e->receiver_script_target<g->func_count;
+}
+static int results_eval_checked(GscRuntime *r,Task *task,Frame *f,int expression,Value *out,int line,int *budget,int entryChecked) {
     ResultsTask *state=task->results;int frame=task->depth-1,k,target,argc,script;
     ResultsPending *pending=&state->pending[frame];
     /* Only the bound read-only context can carry a guard across a local
      * expression-stack change. Host results always take a fresh guard before
      * delivery. The proof is local to this evaluation and this task. */
-    int continuationChecked=0;
+    int continuationChecked=entryChecked;
     if(!pending->expression_active) {
         if(!results_node_push(r,task,frame,expression,0,line))return 0;
         pending->expression_active=1;
@@ -238,8 +324,10 @@ static int results_eval(GscRuntime *r,Task *task,Frame *f,int expression,Value *
                 if(!r->scalar_switch_enabled||!scalar_cast(r,e->op,&node->a,line,&value))return 0;
             } else if(e->kind==E_UNARY) {
                 if(!results_operator(r,e,node->a,node->b,line,&value))return 0;
+                localOnly=node->a.kind==V_NUMBER || e->op=='!';
             } else if(e->kind==E_FIELD) {
-                if(!(node->a.kind==V_ARRAY?array_field_read(r,&node->a,e->name,line,&value):
+                localOnly=node->a.kind==V_ARRAY || string_size_field(&node->a,e->name);
+                if(!(localOnly?array_field_read(r,&node->a,e->name,line,&value):
                     state_field_read(r,&node->a,e->name,line,&value)))return 0;
             } else if(!invoke_builtin_expression(r,e->target,&node->a,1,line,&value))return 0;
             done=1;break;
@@ -254,16 +342,25 @@ static int results_eval(GscRuntime *r,Task *task,Frame *f,int expression,Value *
                         return rfail(r,line,"vector/entity boolean semantics are unsupported");
                     if(e->float_arithmetic&&(e->op==T_AND||e->op==T_OR)&&node->a.kind==V_NUMBER&&!node->a.integer)return rfail(r,line,"selected module float boolean operation is unsupported");
                     if((e->op==T_AND&&!truth(node->a))||(e->op==T_OR&&truth(node->a))) {
-                        value.kind=V_NUMBER;value.integer=1;value.number=(float)(e->op==T_OR);done=1;break;
+                        value.kind=V_NUMBER;value.integer=1;value.number=(float)(e->op==T_OR);localOnly=1;done=1;break;
                     }
                 }
                 node->phase=2;if(!results_node_push(r,task,frame,e->b,-2,line))return 0;continuationChecked=nativeRead;continue;
             }
             if(!(e->kind==E_INDEX?array_index_read(r,&node->a,&node->b,line,&value):
                 results_operator(r,e,node->a,node->b,line,&value)))return 0;
+            /* Index lookup reads the VM's own values. Both int32 operands
+             * select the in-process integer lane of the scalar evaluator. */
+            localOnly=e->kind==E_INDEX || (node->a.kind==V_NUMBER && node->a.integer &&
+                node->b.kind==V_NUMBER && node->b.integer);
             done=1;break;
+          case E_THREAD_CALL:
+            if(!r->r243_thread_start_enabled || !thread_expression_bound(r->program,e))
+                return rfail(r,line,"thread expression requires a bound script and native thread entry");
+            /* Arguments, receiver and optional function pointer follow the
+             * same evaluation order as the other script calls below. */
           case E_DYNAMIC_CALL:
-            if(!r->function_refs_enabled)return rfail(r,line,"computed call mode is unavailable");
+            if((e->kind==E_DYNAMIC_CALL || e->op==GSC_THREAD_EXPR_COMPUTED) && !r->function_refs_enabled)return rfail(r,line,"computed call mode is unavailable");
             if(node->phase==RESULTS_CALL_READY){value=node->a;done=1;break;}
             if(node->phase==RESULTS_CALL_WAIT)return rfail(r,line,"computed callee result is unavailable");
             if(node->phase==0) {
@@ -282,6 +379,10 @@ static int results_eval(GscRuntime *r,Task *task,Frame *f,int expression,Value *
                     if(!state_receiver(r,&node->receiver,line))return 0;
                     node->receiver_guard=1;
                 }
+                if(e->kind==E_THREAD_CALL && e->op==GSC_THREAD_EXPR_NAMED){
+                    target=e->b>=0?e->receiver_script_target:e->target;
+                    goto enter_thread_expression;
+                }
                 node->phase=2;if(!results_node_push(r,task,frame,e->a,-1,line))return 0;continue;
             }
             if(node->phase==2) {
@@ -289,6 +390,13 @@ static int results_eval(GscRuntime *r,Task *task,Frame *f,int expression,Value *
                 node->b=node->a;node->function_guard=1;node->phase=3;
             }
             if(!function_target(r,&node->b,e->argc,line,&target))return 0;
+            if(e->kind==E_THREAD_CALL){
+enter_thread_expression:
+                if(!results_guard(r,task,line))return 0;
+                if(!r243_spawn_initial(r,target,node->args,e->argc,e->b>=0?&node->receiver:&f->self,line,&value))return 0;
+                if(task->status==TASK_DEAD || !results_guard(r,task,line))return 0;
+                done=1;break;
+            }
             node->phase=RESULTS_CALL_WAIT;
             {Value self=e->b>=0?node->receiver:f->self;
              if(!push_frame(r,task,target,node->args,e->argc,&self,line))return 0;}
@@ -394,20 +502,28 @@ script_call:
                 if(!push_frame(r,task,target,node->args,argc,&self,line))return 0;
                 memset(&state->pending[task->depth-1],0,sizeof(state->pending[0]));
                 return 2;
+            } else if(e->call_binding==GSC_EXPR_TARGET_BULLET_TRACE_NATIVE){if(!r->bullet_trace_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||find_func(r->program,e->owner_module,e->name)>=0||!bullet_trace_descriptor(r->program,e->name)||bullet_trace_issues(r->program,e->args,e->argc))return rfail(r,line,"invalid bulletTrace binding");
+ if(!bullet_trace_call(r,node->args,e->argc,line,&value))return 0;
+            } else if(e->call_binding==GSC_EXPR_TARGET_VEHICLE_SPAWN_NATIVE){if(!r->vehicle_spawn_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||find_func(r->program,e->owner_module,e->name)>=0||!vehicle_spawn_descriptor(r->program,e->name)||vehicle_spawn_issues(r->program,e->args,e->argc))return rfail(r,line,"invalid spawnVehicle binding");
+ if(!vehicle_spawn_call(r,node->args,e->argc,line,&value))return 0;
+            } else if(e->call_binding==GSC_EXPR_TARGET_TURRET_PRECACHE_NATIVE){if(!r->turret_precache_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||find_func(r->program,e->owner_module,e->name)>=0||!turret_precache_descriptor(r->program,e->name)||turret_precache_issues(r->program,e->args,e->argc))return rfail(r,line,"invalid precacheTurret binding");
+ if(!turret_precache_call(r,node->args,e->argc,line,&value))return 0;
+            } else if(e->call_binding==GSC_EXPR_TARGET_TURRET_SPAWN_NATIVE){if(!r->turret_spawn_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||find_func(r->program,e->owner_module,e->name)>=0||!turret_spawn_descriptor(r->program,e->name)||turret_spawn_issues(r->program,e->args,e->argc))return rfail(r,line,"invalid spawnTurret binding");
+ if(!turret_spawn_call(r,node->args,e->argc,line,&value))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_HUDELEM_NATIVE) {
                 if(!r->hud_elements_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->argc||e->target!=GSC_HUDELEM_CREATE||find_func(r->program,e->owner_module,e->name)>=0||!hud_elem_global(r->program,e->name))return rfail(r,line,"invalid HUD expression binding");
                 if(!hud_create(r,e->argc,line,&value))return 0;
             } else if(e->call_binding==R243_EXPR_TARGET_MOVE_DELTA){if(!r->move_delta_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||find_func(r->program,e->owner_module,e->name)>=0||!move_delta_descriptor(r->program,e->name)||move_delta_static_issues(r->program,e->args,e->argc)||!move_delta_call(r,node->args,e->argc,line,&value))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_START_ORIGIN_NATIVE) {
-                if((!r->start_origin_enabled&&!r->namespace_start_origin_enabled)||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||
+                if((!r->start_origin_enabled&&!r->namespace_start_origin_enabled)||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=start_origin_descriptor(r->program,e->name)||
                    find_func(r->program,e->owner_module,e->name)>=0||!start_origin_descriptor(r->program,e->name)||
-                   start_origin_static_issues(r->program,e->args,e->argc)||!start_origin_selected_call(r,node->args,e->argc,line,&value))return 0;
+                   start_origin_static_issues(r->program,e->args,e->argc)||!start_origin_selected_call(r,node->args,e->argc,line,e->target,&value))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_AI_ARRAY_NATIVE) {
                 if(!r->ai_arrays_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||
                    find_func(r->program,e->owner_module,e->name)>=0||!ai_array_descriptor(r->program,e->name)||
                    ai_array_static_issues(r->program,e->args,e->argc)||!ai_array_call(r,node->args,e->argc,line,&value))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_NODE_QUERY_NATIVE) {
-                if(!r->node_queries_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||
+                if(!node_query_capability(r,e->target)||e->module[0]||e->kind!=E_NATIVE_CALL||
                    find_func(r->program,e->owner_module,e->name)>=0||
                    node_query_descriptor(r->program,e->name)!=e->target||
                    node_query_static_issues(r->program,e->target,e->args,e->argc)||
@@ -453,6 +569,8 @@ script_call:
             } else if(e->call_binding==GSC_EXPR_TARGET_ANIMATION_LENGTH_NATIVE) {
                 if(e->kind!=E_NATIVE_CALL||e->module[0]||!animation_length_descriptor(r->program,e->name)||
                    find_func(r->program,e->owner_module,e->name)>=0||!animation_length_call(r,node->args,e->argc,e->float_arithmetic,line,&value))return 0;
+            } else if(e->call_binding==GSC_EXPR_TARGET_MODEL_PART_NATIVE){
+                if(e->kind!=E_NATIVE_CALL||e->module[0]||!model_part_descriptor(r->program,e->name)||find_func(r->program,e->owner_module,e->name)>=0||!model_part_call(r,node->args,e->argc,line,&value))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_WEAPON_CLASSNAME_NATIVE){
                 if(e->kind!=E_NATIVE_CALL||e->module[0]||!weapon_classname_descriptor(r->program,e->name)||find_func(r->program,e->owner_module,e->name)>=0||!weapon_classname_call(r,node->args,e->argc,line,&value))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_WEAPON_MODEL_NATIVE) {
@@ -569,7 +687,7 @@ script_call:
             int destination=node->destination;
             int parentChecked=nativeRead && localOnly;
             state->node_count--;
-            /* Dropping a locally read leaf only removes guards. Recheck after
+            /* Dropping a node after a VM-local operation only removes guards. Recheck after
              * all other operations, including host-backed variable reads. */
             if(!parentChecked && !results_guard_read(r,task,line,&parentChecked))return 0;
             if(!state->node_count||state->nodes[state->node_count-1].frame!=frame) {
@@ -581,17 +699,26 @@ script_call:
             else if(destination==-2)node->b=value;
             else node->receiver=value;
             /* args, a and b do not replace a guarded receiver. A successful
-             * read-only pass also excludes captured path and function guards. */
+             * read-only carry excludes captured function guards; captured array
+             * roots/ancestors are unchanged by these node result stores. */
             continuationChecked=parentChecked && destination>=-2;
         }
     }
     return rfail(r,line,"lost expression continuation");
+}
+/* The default entry always establishes its own guard. The checked entry
+ * is used only immediately after a successful bound read-only guard, before
+ * any host call or guard-changing VM mutation. It consumes that proof on
+ * its first iteration; all existing post-host and result fences remain. */
+static int results_eval(GscRuntime *r,Task *task,Frame *f,int expression,Value *out,int line,int *budget){
+ return results_eval_checked(r,task,f,expression,out,line,budget,0);
 }
 static int results_return(GscRuntime *r,Task *task,const Value *value,int line) {
     ResultsTask *state=task->results;int frame=task->depth-1,consumed;Value returned=*value;
     consumed=frame>0&&state->node_count&&
         state->nodes[state->node_count-1].frame==frame-1&&
         state->nodes[state->node_count-1].phase==RESULTS_CALL_WAIT;
+    if(frame==0 && task->initial_thread_result)consumed=1;
     if(!results_guard(r,task,line))return 0;
     if(animation_namespace_kind(returned.kind)&&!animation_namespace_value_valid(r,&returned))return rfail(r,line,"invalid returned animation metadata");
     if(returned.kind==V_ANIMATION&&!animation_value_valid(r,&returned))return rfail(r,line,"invalid returned animation reference");
@@ -599,12 +726,14 @@ static int results_return(GscRuntime *r,Task *task,const Value *value,int line) 
     if(consumed&&returned.kind==V_ARRAY&&!array_value_valid(r,returned.array))return rfail(r,line,"invalid returned array");
     if(consumed&&returned.kind==V_STRUCT&&!struct_value_valid(r,&returned))return rfail(r,line,"invalid returned structure");
     if(consumed&&returned.kind==V_HUDELEM&&!hud_value_valid(r,&returned))return rfail(r,line,"invalid returned HUD element");
+    if(consumed&&returned.kind==V_VEHICLE_NODE&&!vehicle_node_value_valid(r,&returned))return rfail(r,line,"invalid returned vehicle-node identity");
     if(consumed&&returned.kind==V_NODE&&!node_value_valid(r,&returned))return rfail(r,line,"invalid returned node identity");
     if(returned.kind==V_ANIM)return rfail(r,line,"whole anim owner return is unsupported");
     if(consumed&&returned.kind==V_LEVEL)return rfail(r,line,"whole level result is unsupported");
     if(!results_guard(r,task,line))return 0;
     memset(&state->pending[frame],0,sizeof(state->pending[0]));
     if(!r243_pop_normal_frame(r,task,line))return 0;
+    if(frame==0 && task->initial_thread_result && !task->context_retired)*task->initial_thread_result=returned;
     if(task->depth&&state->node_count) {
         ResultsNode *node=&state->nodes[state->node_count-1];
         if(node->frame==task->depth-1&&node->phase==RESULTS_CALL_WAIT) {
@@ -617,6 +746,7 @@ static int results_mutation(GscRuntime *r,int lhs,int op,const Value *current,co
     int k;memset(out,0,sizeof(*out));
     if(r->integer_bitwise_enabled&&integer_bitwise_mutation_op(op))
         return integer_bitwise_mutation(r,op,current,arg,line,out);
+    if(op==GSC_MUT_ADD&&string_vector_concat_pair(r,current,arg))return string_vector_concat(r,current,arg,line,out);
     if(r->vector_arithmetic_enabled&&(current->kind==V_VECTOR||arg->kind==V_VECTOR))
         return vector_arithmetic_mutation(r,op,current,arg,line,out);
     if(current->kind==V_VECTOR&&arg->kind==V_VECTOR&&op==GSC_MUT_ADD&&
@@ -663,11 +793,12 @@ static int results_assign(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int 
         } else if(!flow_lvalue_valid(r->program,lhs))return rfail(r,line,"invalid assignment lvalue");
     }
     while(p->assign_phase<6) {
+        int entryRead=0;
         const Expr *root=e->kind==E_INDEX?&r->program->expr[p->path.root]:e;
-        if(!flow_budget(r,budget,line)||!results_guard(r,task,line))return 0;
+        if(!flow_budget(r,budget,line)||!results_guard_read(r,task,line,&entryRead))return 0;
         if(p->assign_phase==0) {
             if(root->kind==E_FIELD) {
-                status=results_eval(r,task,f,root->a,&p->owner,line,budget);
+                status=results_eval_checked(r,task,f,root->a,&p->owner,line,budget,entryRead);
                 if(status!=1)return status;
                 if(p->owner.kind==V_ARRAY)return rfail(r,line,"array size field is read-only");
                 if(!state_receiver(r,&p->owner,line))return 0;
@@ -678,7 +809,7 @@ static int results_assign(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int 
                     p->current=p->path.base;
                 } else if(op&&!state_field_read(r,&p->owner,root->name,line,&p->current))return 0;
             } else if(e->kind==E_INDEX||op) {
-                status=results_eval(r,task,f,e->kind==E_INDEX?p->path.root:lhs,&p->current,line,budget);
+                status=results_eval_checked(r,task,f,e->kind==E_INDEX?p->path.root:lhs,&p->current,line,budget,entryRead);
                 if(status!=1)return status;
                 if(e->kind==E_INDEX)p->path.base=p->current;
             }
@@ -689,7 +820,7 @@ static int results_assign(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int 
             if(p->current.kind!=V_UNDEFINED&&p->current.kind!=V_ARRAY)
                 return rfail(r,line,"indexed write requires array containers");
             n=p->key_index;
-            status=results_eval(r,task,f,r->program->expr[p->chain[p->path.count-1-n]].b,&key,line,budget);
+            status=results_eval_checked(r,task,f,r->program->expr[p->chain[p->path.count-1-n]].b,&key,line,budget,entryRead);
             if(status!=1)return status;
             if(!results_guard(r,task,line)||!array_key(r,&key,line,&p->path.keys[n]))return 0;
             memset(&next,0,sizeof(next));
@@ -703,11 +834,11 @@ static int results_assign(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int 
                     return rfail(r,line,"sparse numeric array writes are unsupported");
                 if(!array_read_key(r,p->current.array,&p->path.keys[n],line,&next))return 0;
             }
-            p->ancestors[n]=next;p->current=next;p->key_index++;
+            p->ancestors[n]=results_capture_ancestor(&next);p->current=next;p->key_index++;
         } else if(p->assign_phase==3) {
             memset(&p->value,0,sizeof(p->value));p->value.kind=V_NUMBER;p->value.integer=1;p->value.number=1;
             if(rhs>=0) {
-                status=results_eval(r,task,f,rhs,&p->value,line,budget);
+                status=results_eval_checked(r,task,f,rhs,&p->value,line,budget,entryRead);
                 if(status!=1)return status;
             }
             p->assign_phase=4;
@@ -722,7 +853,7 @@ static int results_assign(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int 
         } else return rfail(r,line,"invalid assignment continuation");
     }
     p->assignment_active=0;p->assign_phase=0;p->owner_guard=0;p->path_ready=0;
-    memset(&p->path,0,sizeof(p->path));p->key_index=0;return 1;
+    memset(&p->path,0,sizeof(p->path));return 1;
 }
 static int results_condition(GscRuntime *r,const Value *value,int line,int *passes) {
     if(value->kind==V_UNDEFINED)return rfail(r,line,"undefined condition");
@@ -775,6 +906,7 @@ static int results_loop(GscRuntime *r,Task *task,Frame *f,ResultsPending *p,int 
     }
     return 1;
 }
+static int array_collect_at_boundary(GscRuntime *,Task *);
 static int run_task_results(GscRuntime *r,Task *task,int *budget) {
     const GscProgram *g=r->program;const Instr *i;const Func *fun;
     ResultsTask *state;ResultsPending *p;Frame *f;int status,n,target,delay,passes;
@@ -785,9 +917,26 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
     }
     state=task->results;
     while(task->status==TASK_READY&&task->depth) {
-        if(!flow_budget(r,budget,0)||!results_guard(r,task,0))return 0;
+        int entryRead=0;
+        if(!flow_budget(r,budget,0)||!results_guard_read(r,task,0,&entryRead))return 0;
         f=&task->frames[task->depth-1];fun=&g->funcs[f->fn];p=&state->pending[task->depth-1];
         if(!p->active) {
+            /* A top-level scheduler invocation owns this fresh statement.
+             * No native evaluator or child thread holds a borrowed Value. */
+            if(task==r->array_dispatch_root &&
+               ((r->array_count>=GSC_ARRAY_CONTAINER_CAPACITY*3/4 && r->array_count>=r->array_next_scan) ||
+                (r->array_entry_count>=GSC_ARRAY_ENTRY_CAPACITY*3/4 && r->array_entry_count>=r->array_next_entry_scan))){
+                entryRead=0; /* Collection rewrites VM-owned handles. */
+                if(!array_collect_at_boundary(r,task))return 0;
+                /* Leave room for the largest getentarray result. Rescan less often
+                 * when most objects survive, but always revisit a nearly full pool. */
+                r->array_next_scan=r->array_count+GSC_ARRAY_CONTAINER_CAPACITY/32;
+                if(r->array_next_scan>=GSC_ARRAY_CONTAINER_CAPACITY)
+                    r->array_next_scan=GSC_ARRAY_CONTAINER_CAPACITY-1;
+                r->array_next_entry_scan=r->array_entry_count+GSC_ARRAY_CONTAINER_CAPACITY;
+                if(r->array_next_entry_scan>=GSC_ARRAY_ENTRY_CAPACITY-GSC_ARRAY_CONTAINER_CAPACITY)
+                    r->array_next_entry_scan=GSC_ARRAY_ENTRY_CAPACITY-GSC_ARRAY_CONTAINER_CAPACITY;
+            }
             if(f->loop_count&&f->pc>=f->loops[f->loop_count-1].end) {
                 if(f->pc>f->loops[f->loop_count-1].end)return rfail(r,0,"escaped active loop body");
                 p->active=1;p->boundary=1;p->instruction=f->loops[f->loop_count-1].owner;
@@ -802,20 +951,20 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
         else switch(i->kind) {
           case I_EMPTY:break;
           case I_SET:
-            status=results_eval(r,task,f,i->expr,&p->value,i->line,budget);
+            status=results_eval_checked(r,task,f,i->expr,&p->value,i->line,budget,entryRead);
             if(status==1&&!assignment(r,f,i->name,p->value,i->line))return 0;
             break;
           case I_GAME_SET:case I_MUTATE:
             status=results_assign(r,task,f,i->dest,i->expr,i->kind==I_MUTATE?i->op:0,i->line,budget);break;
           case I_SWITCH:
             if(!r->scalar_switch_enabled)return rfail(r,i->line,"unsupported switch runtime semantics");
-            status=results_eval(r,task,f,i->expr,&p->value,i->line,budget);
+            status=results_eval_checked(r,task,f,i->expr,&p->value,i->line,budget,entryRead);
             if(status==1&&!flow_switch_select(r,f,p->instruction,&p->value,i->line))return 0;
             break;
           case I_FOR:case I_WHILE:case I_DO_WHILE:
             status=results_loop(r,task,f,p,i->line,budget);break;
           case I_RETURN:
-            if(i->expr>=0)status=results_eval(r,task,f,i->expr,&p->value,i->line,budget);
+            if(i->expr>=0)status=results_eval_checked(r,task,f,i->expr,&p->value,i->line,budget,entryRead);
             if(status==1) {
                 if(!results_return(r,task,&p->value,i->line))return 0;
                 continue;
@@ -839,7 +988,7 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
                     NULL,p->args,i->args,i->argc,i->line))return 0;
                 break;
             }
-            status=results_eval(r,task,f,i->expr,&p->value,i->line,budget);
+            status=results_eval_checked(r,task,f,i->expr,&p->value,i->line,budget,entryRead);
             if(status!=1)break;
             if(i->kind==I_JZ) {
                 if(!results_condition(r,&p->value,i->line,&passes))return 0;
@@ -956,12 +1105,13 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
                 if(!(descriptor==ENTITY_METHOD_SCRIPTED_START?r243_scripted_start_invoke(r,&p->receiver,p->args,i->argc,i->line):descriptor==ENTITY_METHOD_SCRIPT_STATE?r243_script_state_invoke(r,&p->receiver,p->args,i->argc,i->line):descriptor==ENTITY_METHOD_SCRIPTED_PREFIX?r243_scripted_prefix_invoke(r,&p->receiver,p->args,i->argc,i->line):R243ActorFloatMask(descriptor)?r243_actor_float_call(r,&p->receiver,descriptor,i->argc,i->line,&ignored):descriptor==COD1_ALLOWED_STANCES_METHOD?cod1_stance_invoke(r,&p->receiver,p->args,i->argc,i->line,NULL,1):descriptor==R243_STANCE_METHOD?r243_stance_call(r,&p->receiver,p->args,i->argc,i->line,&ignored):descriptor==R243_ANIMTIME_METHOD?r243_animtime_call(r,&p->receiver,p->args,i->argc,i->line,&ignored):descriptor==ENTITY_METHOD_ACTOR_DROP?actor_drop_invoke(r,&p->receiver,p->args,i->argc,i->line):actor_look_kind(descriptor)?actor_look_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored):actor_animation_kind(descriptor)?actor_animation_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line):turret_animation_kind(descriptor)?turret_animation_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line):turret_method_kind(descriptor)?turret_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored):
                      attachment_query_kind(descriptor)?attachment_query_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored):
                      descriptor==504?entity_method_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line):
-                 (descriptor==503||descriptor==COD1_SET_GOAL_POS_METHOD)?actor_goal_invoke(r,descriptor,&p->receiver,p->args,i->argc,i->line):
-                     descriptor==502?yaw_motion_invoke(r,&p->receiver,p->args,i->argc,i->line):
-                     descriptor==501?entity_collision_invoke(r,&p->receiver,i->argc,i->line):
+                 (descriptor==503||descriptor==COD1_SET_GOAL_POS_METHOD||descriptor==COD1_SET_GOAL_ENTITY_METHOD)?actor_goal_invoke(r,descriptor,&p->receiver,p->args,i->argc,i->line):
+                     (descriptor==502 || descriptor==COD1_ROTATE_VELOCITY || descriptor==COD1_MOVE_GRAVITY || descriptor==COD1_LAUNCH || descriptor==COD1_ROTATE_ROLL || descriptor==COD1_ROTATE_TO || descriptor==COD1_MOVE_TO)?yaw_motion_invoke(r,descriptor,&p->receiver,p->args,i->argc,i->line):
+                     (descriptor==501||descriptor==GSC_CONNECTPATHS_METHOD||descriptor==GSC_DISCONNECTPATHS_METHOD||descriptor==GSC_SOLID_METHOD||descriptor==GSC_GRENADE_TOUCH_METHOD||descriptor==GSC_GRENADE_BOUNCE_METHOD)?entity_collision_invoke(r,descriptor,&p->receiver,i->argc,i->line):
                      spatial_method_kind(descriptor)?spatial_native_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored):
                      entity_coordinate(descriptor)?entity_coordinate_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored):
                      entity_link_method(descriptor)?entity_link_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line):
+                     vehicle_method_kind(descriptor)?vehicle_method_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line):
                      entity_operation(descriptor)?entity_operation_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored):
                      player_method_kind(descriptor)?player_native_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored):
                      descriptor>=ENTITY_METHOD_ATTACH&&descriptor<=ENTITY_METHOD_STOPLOOPSOUND?
@@ -991,7 +1141,10 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
         if(status==2)continue;
         /* p still identifies the original caller even after a statement call
          * pushed a frame. Its completed statement is cleared exactly once. */
-        memset(p,0,sizeof(*p));
+        /* A completed assignment has cleared path. Only ancestors below
+         * key_index have been written. Keep them as roots through a yielding
+         * loop condition, then clear them with the rest of this statement. */
+        memset(p,0,offsetof(ResultsPending,ancestors)+(size_t)p->key_index*sizeof(p->ancestors[0]));
     }
     if(!task->depth)task->status=TASK_DEAD;
     return 1;

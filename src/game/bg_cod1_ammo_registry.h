@@ -54,9 +54,11 @@ static int CAR_Overlap(const void *a,size_t na,const void *b,size_t nb) {
 static int CAR_StorageProtected(const void *p,size_t n) {
     return CAR_Overlap(p,n,&carCurrentCache,sizeof(carCurrentCache));
 }
-/* MSVC x86's variable-size memcmp uses a byte loop here. The native build
- * already targets SSE2. Compare the same exact bytes in bounded 64-byte
- * blocks, with a portable fallback; never read beyond either object. */
+/* Use the shared bounded comparison for large x86 weapon definitions and receipts. */
+#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
+#include "../qcommon/cod1_exact_bytes_r242.h"
+#define CAR_BytesEqual R242ExactATRBytesEqual
+#else
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP>=2)
 #include <emmintrin.h>
 #endif
@@ -75,6 +77,7 @@ static int CAR_BytesEqual(const void *left,const void *right,size_t size) {
     return !memcmp(left,right,size);
 #endif
 }
+#endif
 static int CAR_Output(const void *out,size_t bytes,int count) {
     int i;const cwDef_t *d;
     if(!out||count<0||count>CW_MAX_DEFS||CAR_StorageProtected(out,bytes))return 0;
@@ -154,7 +157,7 @@ static int CAR_Metadata(int count,uint32_t *out) {
 /* Both compiled static type2 rows65/66 must have a real loaded target. The
  * original warns/falls back to weapon1 when unmatched; this selected lane
  * refuses that unsupported case and preserves output instead. */
-static int CAR_Build(cod1AmmoRegistryReceipt_t *out) {
+static int CAR_BuildFull(cod1AmmoRegistryReceipt_t *out) {
     cod1AmmoRegistryReceipt_t next;
     const cwDef_t *d;cod1ItemDescriptor_t item;
     uint32_t revision=CW_RegistryRevision(),fingerprint,metadata,again;
@@ -216,13 +219,24 @@ static int CAR_CacheMatches(void) {
     }
     return CW_RegistryRevision()==carCurrentCache.revision && CW_Count()==carCurrentCache.count;
 }
+/* Reuse the same fully validated projection as CAR_Current. Every live
+ * definition byte, token pointer, owner, family root, count and revision is
+ * compared before reuse. Compiled item descriptors are const. There are no
+ * callbacks between these reads and publication; output/private overlap
+ * checks remain mandatory. Any mismatch takes the complete original build. */
+static int CAR_Build(cod1AmmoRegistryReceipt_t *out) {
+    if(carCurrentCache.valid && CAR_Output(out,sizeof(*out),CW_Count()) && CAR_CacheMatches()) {
+        *out=carCurrentCache.receipt;return 1;
+    }
+    return CAR_BuildFull(out);
+}
 static int CAR_Current(const cod1AmmoRegistryReceipt_t *receipt) {
     cod1AmmoRegistryReceipt_t current;int i,count;const cwDef_t *d;
     if(!receipt||receipt->version!=COD1_AMMO_REGISTRY_VERSION||receipt->bytes!=sizeof(*receipt)||
        !receipt->registryRevision||receipt->registryRevision!=CW_RegistryRevision()||
        receipt->weaponCount!=CW_Count())return 0;
     if(carCurrentCache.valid && CAR_CacheMatches())
-        return !memcmp(receipt,&carCurrentCache.receipt,sizeof(*receipt));
+        return CAR_BytesEqual(receipt,&carCurrentCache.receipt,sizeof(*receipt));
     carCurrentCache.valid=0;count=CW_Count();
     if(count<1 || count>CW_MAX_DEFS)return 0;
     carCurrentCache.count=count;carCurrentCache.revision=CW_RegistryRevision();
@@ -233,7 +247,7 @@ static int CAR_Current(const cod1AmmoRegistryReceipt_t *receipt) {
     }
     if(!CAR_Build(&current) || !CAR_CacheMatches())return 0;
     carCurrentCache.receipt=current;carCurrentCache.valid=1;
-    return !memcmp(receipt,&current,sizeof(current));
+    return CAR_BytesEqual(receipt,&current,sizeof(current));
 }
 static int CAR_Binding(const cod1AmmoRegistryReceipt_t *receipt,int itemIndex,
     cod1AmmoRegistryBinding_t *out) {

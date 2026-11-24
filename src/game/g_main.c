@@ -87,6 +87,7 @@ vmCvar_t g_knockback;
 vmCvar_t g_quadfactor;
 vmCvar_t g_forcerespawn;
 vmCvar_t g_inactivity;
+static vmCvar_t g_useGear;
 vmCvar_t g_debugMove;
 vmCvar_t g_debugDamage;
 vmCvar_t g_debugAlloc;
@@ -216,6 +217,7 @@ cvarTable_t gameCvarTable[] = {
 	{ &g_forcerespawn, "g_forcerespawn", "20", 0, 0, qtrue },
 	{ &g_inactivity, "g_inactivity", "0", 0, 0, qtrue },
 	{ &g_debugMove, "g_debugMove", "0", 0, 0, qfalse },
+	{ &g_useGear, "g_useGear", "1", CVAR_ARCHIVE | CVAR_LATCH, 0, qfalse },
 	{ &g_debugDamage, "g_debugDamage", "0", 0, 0, qfalse },
 	{ &g_debugAlloc, "g_debugAlloc", "0", 0, 0, qfalse },
 	{ &g_debugBullets, "g_debugBullets", "0", CVAR_CHEAT, 0, qfalse}, //----(SA)	added
@@ -270,6 +272,12 @@ static int gameCvarTableSize = sizeof( gameCvarTable ) / sizeof( gameCvarTable[0
 
 void G_InitGame( int levelTime, int randomSeed, int restart );
 void G_RunFrame( int levelTime );
+static int G_RunFrameSlice(int levelTime,int budgetMs);
+static int g_frameSliceOpen,g_frameSliceTime;
+static unsigned g_frameSliceStart,g_frameSliceBudget;
+static int G_FrameSliceExpired(void){
+    return (unsigned)trap_Milliseconds()-g_frameSliceStart>=g_frameSliceBudget;
+}
 void G_ShutdownGame( int restart );
 void CheckExitRules( void );
 
@@ -342,6 +350,10 @@ int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int a
 	case GAME_RUN_FRAME:
 		G_RunFrame( arg0 );
 		return 0;
+	case GAME_FRAME_SLICE_API:
+		return COD1_FRAME_SLICE_API;
+	case GAME_RUN_FRAME_SLICE:
+		return G_RunFrameSlice(arg0,arg1);
 	case GAME_CONSOLE_COMMAND:
 		return ConsoleCommand();
 	case BOTAI_START_FRAME:
@@ -1281,6 +1293,7 @@ extern void trap_Cvar_Reset( const char *var_name );
 void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	int i;
 
+	g_frameSliceOpen = 0;
 	G_Cod1RngOwnerEnd();
 	G_Cod1GscTestShutdown();
 	G_Cod1EntityMapBegin();
@@ -1463,6 +1476,7 @@ G_ShutdownGame
 =================
 */
 void G_ShutdownGame( int restart ) {
+	g_frameSliceOpen = 0;
 	G_Cod1RngOwnerEnd();
 	G_Cod1GscTestShutdown();
 	if ( g_gametype.integer != GT_SINGLE_PLAYER ) {
@@ -2440,6 +2454,9 @@ void CheckReloadStatus( void ) {
 						trap_SendConsoleCommand( EXEC_APPEND, va( "spmap %s\n", level.nextMap ) );
 					}
 
+				} else if ( g_reloading.integer == RELOAD_SAVEGAME && G_Cod1DeadPlayer( &g_entities[0] ) ) {
+					trap_SendServerCommand( -1, "opendeadscreen" );
+
 				} else if ( g_reloading.integer == RELOAD_ENDGAME ) {
 					G_EndGame();    // kick out to the menu and start the "endgame" menu (credits, etc)
 
@@ -2524,35 +2541,43 @@ G_RunFrame
 Advances the non-player objects in the world
 ================
 */
-void G_RunFrame( int levelTime ) {
+static int G_RunFrameSlice(int levelTime,int budgetMs) {
 	int i;
 	gentity_t   *ent;
-	int msec;
 //int start, end;
 
-	// if we are waiting for the level to restart, do nothing
-	if ( level.restarted ) {
-		G_Cod1RngOwnerEnd();
-		G_Cod1GscTestShutdown();
-		return;
-	}
+    if(g_frameSliceOpen && g_frameSliceTime!=levelTime){
+        G_Error("GAME frame resumed with a different tick");
+        return 1;
+    }
+    g_frameSliceBudget=budgetMs>0?(unsigned)budgetMs:0;
+    if(g_frameSliceBudget)g_frameSliceStart=(unsigned)trap_Milliseconds();
+    if(!g_frameSliceOpen){
+		// if we are waiting for the level to restart, do nothing
+		if ( level.restarted ) {
+			G_Cod1RngOwnerEnd();
+			G_Cod1GscTestShutdown();
+			return 1;
+		}
 
-	level.framenum++;
-	level.previousTime = level.time;
-	level.time = levelTime;
-	msec = level.time - level.previousTime;
+		level.framenum++;
+		level.previousTime = level.time;
+		level.time = levelTime;
 
-	// Ridah, check for loading a save game
-	if ( g_gametype.integer == GT_SINGLE_PLAYER ) {
-		extern void AICast_CheckLoadGame( void );
-		AICast_CheckLoadGame();
-	}
-	// done.
+		// Ridah, check for loading a save game
+		if ( g_gametype.integer == GT_SINGLE_PLAYER ) {
+			extern void AICast_CheckLoadGame( void );
+			AICast_CheckLoadGame();
+		}
+		// done.
 
-	// get any cvar changes
-	G_UpdateCvars();
+		// get any cvar changes
+		G_UpdateCvars();
 
-	G_Cod1GscTestRunFrame( level.time );
+        g_frameSliceOpen=1;
+        g_frameSliceTime=levelTime;
+    }
+    if(!G_Cod1GscTestRunFrameSlice(levelTime,g_frameSliceBudget?G_FrameSliceExpired:NULL))return 0;
 	/* Retire delivered loop owners even after VM completion or destruction. */
 	G_Cod1GscLoopSoundFrame();
 
@@ -2670,6 +2695,7 @@ void G_RunFrame( int levelTime ) {
 		}
 
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
+        if(G_Cod1ScriptMotionFrame(ent)==2)continue;
         if(!G_Cod1EntityLinkRunEntity(ent)){G_Error("CoD structural link frame lost its current owner");continue;}
 #endif
 		G_RunThink( ent );
@@ -2718,4 +2744,11 @@ void G_RunFrame( int levelTime ) {
 	// Ridah, check if we are reloading, and times have expired
 	CheckReloadStatus();
 
+    g_frameSliceOpen=0;
+    return 1;
+}
+
+void G_RunFrame(int levelTime){
+    if(g_frameSliceOpen && g_frameSliceTime!=levelTime)G_RunFrameSlice(g_frameSliceTime,0);
+    G_RunFrameSlice(levelTime,0);
 }

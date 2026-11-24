@@ -150,3 +150,23 @@ static int ActorCriticalSessionInvoke(void*u,const GscEntityRef*e,uint32_t metho
  return ActorCriticalHostInvoke(u,e,method,q,out,error,cap);
 }
 const GscActorCriticalHost*G_Cod1ActorCriticalSessionHost(void){static const GscActorCriticalHost h={NULL,ActorCriticalSessionInvoke};return &h;}
+
+/* Native state8 think 200593E7..2005940E requests the CURRENT MAIN pair.
+ * The selected prospective stack is the canonical enter/leaveCriticalSection
+ * state; do not replace its owner during an unfinished pose transition.
+ * source0 means retain the actual owned task, never create a fallback task. */
+int G_Cod1ActorLocomotionSource(const GscEntityRef*input,uint64_t serial,int now,
+ int desired,int*out,int(*current)(void*),void*ctx){
+ GscEntityRef ref;cod1ActorLease_t lease,after;cod1ActorCriticalState_t before,again;int critical;
+ if(!input||!out||!current||(desired!=1&&desired!=2)||now!=level.time||
+    !ActorArguments(input,sizeof(*input),out,sizeof(*out),NULL,0))return 0;
+ ref=*input;
+ if(current(ctx)!=1||!ActorCriticalCapture(&ref,&lease)||lease.serial!=serial)return 0;
+ before=ActorStateQueueKernel(cod1Actors+lease.actorIndex);
+ critical=Cod1ActorCriticalContains(&before);if(critical<0)return 0;
+ if(current(ctx)!=1||now!=level.time||memcmp(input,&ref,sizeof(ref))||
+    !ActorCriticalCapture(&ref,&after)||memcmp(&lease,&after,sizeof(lease)))return 0;
+ again=ActorStateQueueKernel(cod1Actors+lease.actorIndex);
+ if(memcmp(&before,&again,sizeof(before)))return 0;
+ *out=critical?0:desired;return 1;
+}
