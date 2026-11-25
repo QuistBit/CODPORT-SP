@@ -29,6 +29,7 @@ If you have questions concerning this license or the applicable additional terms
 // cl_cgame.c  -- client system interaction with client game
 
 #include "client.h"
+#include "../qcommon/cod1_load_profile.h"
 #include "../qcommon/cod1_client_trace_r241.h"
 #include "../qcommon/vm_local.h"
 #include "cl_cod1_keybinding.inc"
@@ -1034,6 +1035,9 @@ void CL_InitCGame( void ) {
 	const char          *mapname;
 	int t1, t2;
 	vmInterpret_t interpret;
+	cod1LoadProfile_t loadProfile;
+
+	Cod1LoadProfileBegin( &loadProfile );
     CL_R241TraceMapReset();
     CL_Cod1KeyBindingStop();
     S_Cod1AmbientModuleReset();
@@ -1071,12 +1075,14 @@ void CL_InitCGame( void ) {
 		Com_Error(ERR_DROP, "CoD1 actor: rebuild and copy cgamex86.dll together with WolfSP.exe");
 	}
 	cls.state = CA_LOADING;
+	Cod1LoadProfileMark( &loadProfile, "reset_vm_create_abi" );
 
 	// init for this gamestate
 	// use the lastExecutedServerCommand instead of the serverCommandSequence
 	// otherwise server commands sent just before a gamestate are dropped
 	VM_Call( cgvm, CG_INIT, clc.serverMessageSequence, clc.lastExecutedServerCommand, clc.clientNum );
     CL_Cod1KeyBindingStart();
+	Cod1LoadProfileMark( &loadProfile, "cg_init_keybindings" );
 //	VM_Call( cgvm, CG_INIT, clc.serverMessageSequence, clc.serverCommandSequence );
 
 	// we will send a usercmd this frame, which
@@ -1090,6 +1096,7 @@ void CL_InitCGame( void ) {
 	// have the renderer touch all its images, so they are present
 	// on the card even if the driver does deferred loading
 	re.EndRegistration();
+	Cod1LoadProfileMark( &loadProfile, "renderer_end_registration" );
 
 	// make sure everything is paged in
 	if ( !Sys_LowPhysicalMemory() ) {
@@ -1101,6 +1108,8 @@ void CL_InitCGame( void ) {
 
 	// Ridah, update the memory usage file
 	CL_UpdateLevelHunkUsage();
+	Cod1LoadProfileMark( &loadProfile, "touch_memory_hunk_usage" );
+	Cod1LoadProfileReport( &loadProfile, "cgame_init", cl.mapname );
 }
 
 

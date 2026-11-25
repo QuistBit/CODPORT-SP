@@ -34,6 +34,7 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "server.h"
+#include "../qcommon/cod1_load_profile.h"
 #include <stdint.h>
 
 /*
@@ -668,6 +669,9 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	qboolean isBot;
 	char systemInfo[MAX_INFO_STRING];
 	const char  *p;
+	cod1LoadProfile_t loadProfile;
+
+	Cod1LoadProfileBegin( &loadProfile );
 
 	// Ridah, enforce maxclients in single player, so there is enough room for AI characters
 	{
@@ -704,6 +708,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 
 	// shut down the existing game if it is running
 	SV_ShutdownGameProgs();
+	Cod1LoadProfileMark( &loadProfile, "game_shutdown" );
 
 	Com_Printf( "------ Server Initialization ------\n" );
 	Com_Printf( "Server: %s\n",server );
@@ -711,12 +716,14 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	// if not running a dedicated server CL_MapLoading will connect the client to the server
 	// also print some status stuff
 	CL_MapLoading();
+	Cod1LoadProfileMark( &loadProfile, "client_map_loading" );
 
 	// make sure all the client stuff is unloaded
 	CL_ShutdownAll();
 
 	// clear the whole hunk because we're (re)loading the server
 	Hunk_Clear();
+	Cod1LoadProfileMark( &loadProfile, "client_shutdown_hunk_clear" );
 
 //	// clear collision map data		// (SA) NOTE: TODO: used in missionpack
 //	CM_ClearMap();
@@ -770,8 +777,10 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	srand( Sys_Milliseconds() );
 	sv.checksumFeed = ( ( (int) rand() << 16 ) ^ rand() ) ^ Sys_Milliseconds();
 	FS_Restart( sv.checksumFeed );
+	Cod1LoadProfileMark( &loadProfile, "server_setup_fs_restart" );
 
 	CM_LoadMap( va( "maps/%s.bsp", server ), qfalse, &checksum );
+	Cod1LoadProfileMark( &loadProfile, "collision_load" );
 
 	// set serverinfo visible name
 	Cvar_Set( "mapname", server );
@@ -793,6 +802,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 
 	// load and spawn all other entities
 	SV_InitGameProgs();
+	Cod1LoadProfileMark( &loadProfile, "world_setup_game_init" );
 
 	// don't allow a map_restart if game is modified
 	sv_gametype->modified = qfalse;
@@ -806,6 +816,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 
 	// create a baseline for more efficient communications
 	SV_CreateBaseline();
+	Cod1LoadProfileMark( &loadProfile, "settle_baseline" );
 
 	for ( i = 0 ; i < sv_maxclients->integer ; i++ ) {
 		// send the new gamestate to all connected clients
@@ -852,6 +863,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 		}
 	}
 
+	Cod1LoadProfileMark( &loadProfile, "client_reconnect" );
 	// run another frame to allow things to look at all the players
 	VM_Call( gvm, GAME_RUN_FRAME, svs.time );
 	SV_BotFrame( svs.time );
@@ -901,6 +913,8 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	SV_Heartbeat_f();
 
 	Hunk_SetMark();
+	Cod1LoadProfileMark( &loadProfile, "final_frame_serverinfo" );
+	Cod1LoadProfileReport( &loadProfile, "server_spawn", server );
 
 	Com_Printf( "-----------------------------------\n" );
 
