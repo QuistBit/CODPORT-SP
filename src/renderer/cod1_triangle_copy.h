@@ -6,8 +6,8 @@
 #include <emmintrin.h>
 #include <stddef.h>
 #include <string.h>
-_Static_assert(sizeof(drawVert_t)==44&&offsetof(drawVert_t,st)==12&&offsetof(drawVert_t,lightmap)==20&&offsetof(drawVert_t,normal)==28&&offsetof(drawVert_t,color)==40,"draw vertex layout");
-_Static_assert(sizeof(glIndex_t)==4,"tess index layout");
+typedef char C1T_DrawVertexLayoutCheck[(sizeof(drawVert_t)==44&&offsetof(drawVert_t,st)==12&&offsetof(drawVert_t,lightmap)==20&&offsetof(drawVert_t,normal)==28&&offsetof(drawVert_t,color)==40)?1:-1];
+typedef char C1T_IndexLayoutCheck[(sizeof(glIndex_t)==4)?1:-1];
 static void C1T_CopyIndexes(const int *source,glIndex_t *dest,int count,unsigned base){
  int i=0;const __m128i offset=_mm_set1_epi32((int)base);
  for(;i+4<=count;i+=4)_mm_storeu_si128((__m128i*)(dest+i),_mm_add_epi32(_mm_loadu_si128((const __m128i*)(source+i)),offset));

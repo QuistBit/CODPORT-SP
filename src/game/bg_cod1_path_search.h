@@ -37,7 +37,8 @@ static int C1PSSearch(const C1PSNode*nodes,unsigned count,const C1PSLink*links,
    if(l->target>=count||!isfinite(l->distance)||l->distance<0||l->distance>1000000)return 0;
   }
  }
- s=(C1PSScratch*)calloc(count,sizeof(*s));if(!s)return 0;
+ /* All failure paths precede this point; out is certified disjoint. */
+ s=out;memset(s,0,os);
  for(i=0;i<count;i++)s[i].next=s[i].previous=s[i].parent=-1;
  s[start].seen=1;s[start].previous=s[start].parent=-2;head=(int)start;
  while(head>=0){
@@ -63,6 +64,6 @@ static int C1PSSearch(const C1PSNode*nodes,unsigned count,const C1PSLink*links,
   }
   s[current].previous=-1;
  }
- memcpy(out,s,os);*result=r;free(s);return 1;
+ *result=r;return 1;
 }
 #endif

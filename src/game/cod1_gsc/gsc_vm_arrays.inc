@@ -110,13 +110,30 @@ static int array_field_read(GscRuntime *r,const Value *base,const char *name,int
  * A mutation to an existing handle must not make it reachable from its RHS. */
 static int array_reaches(GscRuntime *r,uint32_t start,uint32_t target,int line) {
     uint32_t stack[GSC_ARRAY_CONTAINER_CAPACITY];unsigned char seen[GSC_ARRAY_CONTAINER_CAPACITY];
-    int top=0,n;memset(seen,0,sizeof(seen));
+    int head[GSC_ARRAY_CONTAINER_CAPACITY],links[GSC_ARRAY_ENTRY_CAPACITY];
+    int top=0,n,indexed=0,walked=0;memset(seen,0,sizeof(seen));
     if(!array_value_valid(r,start))return rfail(r,line,"invalid array value handle");
     stack[top++]=start;seen[start-1]=1;
     while(top) {
         uint32_t current=stack[--top];
         if(current==target)return 1;
-        for(n=0;n<r->array_entry_count;n++)if(r->array_entries[n].owner==(int)current&&
+        /* The first container uses the original scan. Build an operation-local
+         * directory only if a second container actually needs expansion.
+         * No callback or mutation occurs on the successful traversal.
+         * Ignore unrelated invalid owners, just as the original scan did. */
+        if(!indexed&&walked&&r->array_count>=0&&r->array_count<=GSC_ARRAY_CONTAINER_CAPACITY&&
+           r->array_entry_count>=0&&r->array_entry_count<=GSC_ARRAY_ENTRY_CAPACITY) {
+            for(n=0;n<r->array_count;n++)head[n]=-1;
+            for(n=r->array_entry_count-1;n>=0;n--) {
+                int owner=r->array_entries[n].owner;
+                if(owner<1||owner>r->array_count||r->array_entries[n].value.kind!=V_ARRAY)continue;
+                links[n]=head[owner-1];head[owner-1]=n;
+            }
+            indexed=1;
+        }
+        walked=1;
+        for(n=indexed?head[current-1]:0;indexed?n>=0:n<r->array_entry_count;
+            n=indexed?links[n]:n+1)if(r->array_entries[n].owner==(int)current&&
            r->array_entries[n].value.kind==V_ARRAY) {
             uint32_t next=r->array_entries[n].value.array;
             if(!array_value_valid(r,next)){rfail(r,line,"invalid nested array handle");return -1;}

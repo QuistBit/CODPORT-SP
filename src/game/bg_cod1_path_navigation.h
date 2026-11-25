@@ -23,7 +23,7 @@ static int C1PNRouteInner(unsigned char*out,int*nativeResult,const unsigned char
  if(end.node<0){ok=1;goto done;}
  if(!C1NRNearest(g->records,g->count*116,g->tree,origin,192,0xfffffffeu,64,0,0,0,sight,ctx,&start))goto done;
  if(start.node<0){ok=1;goto done;}
- scratch=calloc(g->count,sizeof(*scratch));parents=malloc(g->count*sizeof(*parents));if(!scratch||!parents)goto done;
+ scratch=malloc(g->count*sizeof(*scratch));parents=malloc(g->count*sizeof(*parents));if(!scratch||!parents)goto done;
  if(!C1PSSearch(g->nodes,g->count,g->links,g->linkCount,start.node,end.node,team,goal,scratch,&search))goto done;
  if(!search.found){ok=1;goto done;}
  for(i=0;i<g->count;i++)parents[i]=scratch[i].parent;

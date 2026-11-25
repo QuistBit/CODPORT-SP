@@ -27,7 +27,7 @@ int gsc_runtime_select_configured_precache_interval(GscRuntime *r){
  r->configured_precache_interval_enabled=1;return 1;
 }
 static int configured_precache_member(const GscRuntime *r,const Task *task){
- int n;for(n=0;n<r->task_count;n++)if(task_at(r,n)==task)return 1;return 0;
+ return task_member(r,task);
 }
 static void configured_precache_node(ConfiguredPrecacheNode *node,Task *task){
  memset(node,0,sizeof(*node));node->task=task;node->serial=task->serial;

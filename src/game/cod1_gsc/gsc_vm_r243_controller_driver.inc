@@ -175,11 +175,9 @@ static int r243_main_owner_current(R243ControllerLease*l,const R243ControllerMai
 }
 
 static int r243_main_task_owned(const GscRuntime*r,const Task*t,uint64_t serial){
- int i;if(!r||!t||!serial)return 0;
+ if(!r||!t||!serial)return 0;
  /* Physical membership BEFORE dereferencing any supplied Task pointer. */
- for(i=0;i<r->task_count;i++)if(task_at(r,i)==t)
-  return t->serial==serial&&t->retained_owner_refs!=0;
- return 0;
+ return task_member(r,t)&&t->serial==serial&&t->retained_owner_refs!=0;
 }
 /* No certificate/resource/current or allocator callback in this transfer. */
 static int r243_controller_entry_retained(void*context,Task*t,const GscEntityScriptRun*run){
@@ -209,11 +207,11 @@ static void r243_main_capture_abort(R243MainCapture*c){
  if(!c||!c->lease||(r=c->lease->r)==NULL)return;
  t=c->claimed?c->claimed_task:c->pending;
  serial=c->claimed?c->claimed_serial:0;
- if(!c->claimed&&t){
-  for(i=0;i<r->task_count;i++)if(task_at(r,i)==t){serial=t->serial;break;}
- }
  if(t){
-  if(r243_main_task_owned(r,t,serial))--t->retained_owner_refs;
+  /* Pending capture has no saved serial: authenticate physical membership
+   * once, then use its current birth identity without another directory scan. */
+  if(!c->claimed ? (task_member(r,t)&&t->serial&&t->retained_owner_refs) : r243_main_task_owned(r,t,serial))
+   --t->retained_owner_refs;
   else if(!r->error[0])rfail(r,0,"retained MAIN storage release identity changed");
  }
  if(c->claimed){

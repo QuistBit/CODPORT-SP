@@ -5,7 +5,7 @@
 #include "v59_box_brush.h"
 static int brush_inside(const brush*b,const trace_work*t){int k,j;float p[3],d;const brush_plane*s;
  for(k=0;k<3;k++)if(t->bmins[k]>b->maxs[k]||t->bmaxs[k]<b->mins[k])return 0;
- for(j=6;j<b->n;j++){s=&b->planes[j];d=fa(s->d,t->radius);for(k=0;k<3;k++)p[k]=dp(s->n,t->offset,1,0,2)>0?fs(t->start[k],t->offset[k]):fa(t->start[k],t->offset[k]);
+ for(j=6;j<b->n;j++){int subtract;s=&b->planes[j];d=fa(s->d,t->radius);subtract=dp(s->n,t->offset,1,0,2)>0;for(k=0;k<3;k++)p[k]=subtract?fs(t->start[k],t->offset[k]):fa(t->start[k],t->offset[k]);
   if(fs(dp(p,s->n,0,2,1),d)>0)return 0;}return 1;
 }
 static void brush_sweep(const v59_world*w,const brush*b,trace_work*t){int j,k,end_inside=1;float enter=0,leave=t->fraction;const brush_plane*selected=NULL;

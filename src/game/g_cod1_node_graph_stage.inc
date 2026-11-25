@@ -43,7 +43,13 @@ static int Cod1GraphResourceCurrent(const cod1NavigationResource_t*r){
  q.incarnation=r->incarnation;q.length=r->length;q.operation=COD1_NAV_CURRENT;
  return trap_Cod1NavigationResource(&q,&value,NULL,0)&&!memcmp(&value,r,sizeof(value));
 }
-static int Cod1GraphAcquireCurrent(const C1GraphAcquire*a){
+static int Cod1OptPrepared(C1NPPrepared*p,GscSession*s,uint64_t id){
+ unsigned start;int result;
+ if(!cod1OptNav.active)return G_Cod1NodePreparedCurrent(p,s,id);
+ start=Cod1OptNavNow();cod1OptNav.preparedCalls++;
+ result=G_Cod1NodePreparedCurrent(p,s,id);Cod1OptNavAdd(&cod1OptNav.preparedMs,start);return result;
+}
+static int Cod1GraphAcquireCurrentImpl(const C1GraphAcquire*a){
  if(cod1GraphLatePin.active){
   return a&&cod1GraphBusy&&!cod1GraphCancelled&&a->session==cod1GraphLatePin.session&&a->id==cod1GraphLatePin.id&&a->receipt==cod1GraphLatePin.receipt&&
    a->prepared==cod1GraphLatePin.prepared&&a->world==cod1GraphLatePin.world&&!memcmp(&a->resource,&cod1GraphLatePin.resource,sizeof(a->resource))&&
@@ -52,8 +58,14 @@ static int Cod1GraphAcquireCurrent(const C1GraphAcquire*a){
  }
  return !cod1GraphCancelled&&gsc_session_node_graph_current(a->session,a->id,a->receipt)&&Cod1GraphResourceCurrent(&a->resource)&&
   !cod1GraphCancelled&&G_Cod1PathNodeWorldCurrent(a->world)&&
-  G_Cod1NodePreparedCurrent(a->prepared,a->session,a->id)&&
+  Cod1OptPrepared(a->prepared,a->session,a->id)&&
   Cod1GraphResourceCurrent(&a->resource)&&!cod1GraphCancelled&&G_Cod1PathNodeWorldCurrent(a->world);
+}
+static int Cod1GraphAcquireCurrent(const C1GraphAcquire*a){
+ unsigned start;int result;
+ if(!cod1OptNav.active)return Cod1GraphAcquireCurrentImpl(a);
+ start=Cod1OptNavNow();cod1OptNav.acquireCalls++;
+ result=Cod1GraphAcquireCurrentImpl(a);Cod1OptNavAdd(&cod1OptNav.acquireMs,start);return result;
 }
 static int Cod1NodePlaceTrace(const float*start,const float*mins,const float*maxs,const float*end,unsigned pass,unsigned mask,C1DPPlaceTrace*out){
  cod1SpatialTraceQuery_t q;trace_t tr;C1DPPlaceTrace value;
@@ -65,10 +77,16 @@ static int Cod1NodePlaceTrace(const float*start,const float*mins,const float*max
  memset(&value,0,sizeof(value));value.fraction=tr.fraction;memcpy(value.end,tr.endpos,12);
  value.allsolid=(uint8_t)tr.allsolid;value.startsolid=(uint8_t)tr.startsolid;*out=value;return 1;
 }
-static int Cod1GraphPlace(void*ctx,const float*start,const float*mins,const float*maxs,const float*end,unsigned pass,unsigned mask,C1DPPlaceTrace*out){
+static int Cod1GraphPlaceImpl(void*ctx,const float*start,const float*mins,const float*maxs,const float*end,unsigned pass,unsigned mask,C1DPPlaceTrace*out){
  C1GraphAcquire*a=(C1GraphAcquire*)ctx;C1DPPlaceTrace value;
  if(!Cod1GraphAcquireCurrent(a)||!Cod1NodePlaceTrace(start,mins,maxs,end,pass,mask,&value)||!Cod1GraphAcquireCurrent(a))return 0;
  *out=value;return 1;
+}
+static int Cod1GraphPlace(void*ctx,const float*start,const float*mins,const float*maxs,const float*end,unsigned pass,unsigned mask,C1DPPlaceTrace*out){
+ unsigned tick;int result;
+ if(!cod1OptNav.active)return Cod1GraphPlaceImpl(ctx,start,mins,maxs,end,pass,mask,out);
+ tick=Cod1OptNavNow();cod1OptNav.placeCalls++;
+ result=Cod1GraphPlaceImpl(ctx,start,mins,maxs,end,pass,mask,out);Cod1OptNavAdd(&cod1OptNav.placeMs,tick);return result;
 }
 typedef struct {C1GraphAcquire*acquire;const cod1PathNodeOwners_t*owners;} C1GraphInitial;
 static int Cod1GraphInitialTrace(void*ctx,unsigned from,unsigned to,const float*start,const float*end,
@@ -104,7 +122,7 @@ static int Cod1GraphInitialOwners(C1GraphAcquire*a,C1DPGraphCandidate*g){
  ok=1;
 done:free(active);free(owners);return ok;
 }
-static int Cod1GraphStageBuild(GscSession*s,uint64_t id,const void*lump,size_t bytes,const cod1NavigationResource_t*resource,uint64_t*out){
+static int Cod1GraphStageBuildImpl(GscSession*s,uint64_t id,const void*lump,size_t bytes,const cod1NavigationResource_t*resource,uint64_t*out){
  C1GraphAcquire a;C1DPGraphCandidate*g=NULL;C1DPGraphFailure failure;unsigned char*copy=NULL;int ok=0;
  memset(&a,0,sizeof(a));a.session=s;a.id=id;a.receipt=cod1GraphPending;if(resource)a.resource=*resource;
  a.prepared=G_Cod1NodePreparedBuild(s,id);if(!a.prepared||cod1GraphCancelled)goto done;
@@ -116,6 +134,20 @@ static int Cod1GraphStageBuild(GscSession*s,uint64_t id,const void*lump,size_t b
  cod1GraphPrepared=a.prepared;a.prepared=NULL;cod1GraphStaged=g;g=NULL;
  cod1GraphWorld=a.world;a.world=0;cod1GraphResource=a.resource;cod1GraphReceipt=cod1GraphPending;*out=cod1GraphReceipt;ok=1;
 done:free(copy);C1DP_GraphDestroy(g);G_Cod1NodePreparedFree(a.prepared);G_Cod1PathNodeWorldEnd(a.world);return ok;
+}
+/* One summary per stage, never per trace. Off by default. */
+static int Cod1GraphStageBuild(GscSession*s,uint64_t id,const void*lump,size_t bytes,const cod1NavigationResource_t*resource,uint64_t*out){
+ unsigned start,elapsed;int result;
+ if(!trap_Cvar_VariableIntegerValue("g_cod1OptNavProfile"))return Cod1GraphStageBuildImpl(s,id,lump,bytes,resource,out);
+ memset(&cod1OptNav,0,sizeof(cod1OptNav));cod1OptNav.active=1;start=Cod1OptNavNow();
+ result=Cod1GraphStageBuildImpl(s,id,lump,bytes,resource,out);
+ elapsed=Cod1OptNavNow()-start;cod1OptNav.active=0;
+ G_Printf("[OPT NAV] ok=%d total_ms=%u place=%u/%llu acquire=%u/%llu prepared=%u/%llu world=%u/%llu ready=%u/%llu trace=%u/%llu backend=%u/%llu (calls/ms inclusive)\n",
+ result,elapsed,cod1OptNav.placeCalls,(unsigned long long)cod1OptNav.placeMs,
+ cod1OptNav.acquireCalls,(unsigned long long)cod1OptNav.acquireMs,cod1OptNav.preparedCalls,(unsigned long long)cod1OptNav.preparedMs,
+ cod1OptNav.worldCalls,(unsigned long long)cod1OptNav.worldMs,cod1OptNav.readyCalls,(unsigned long long)cod1OptNav.readyMs,
+ cod1OptNav.traceCalls,(unsigned long long)cod1OptNav.traceMs,cod1OptNav.backendCalls,(unsigned long long)cod1OptNav.backendMs);
+ return result;
 }
 int G_Cod1NodeGraphStage(GscSession*s,uint64_t id,const void*lump,size_t bytes,uint64_t*out){
  int ok;

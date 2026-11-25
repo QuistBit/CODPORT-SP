@@ -497,6 +497,20 @@ static void CG_TouchTriggerPrediction( void ) {
 
 
 
+static void CG_ReadPredictionCommands( int cmdNum, usercmd_t *cmd, usercmd_t *oldcmd,
+		usercmd_t *previousRawCmd, qboolean *previousRawValid ) {
+	qboolean currentValid = trap_GetUserCmd( cmdNum, cmd );
+	if ( *previousRawValid ) {
+		*oldcmd = *previousRawCmd;
+	} else {
+		trap_GetUserCmd( cmdNum - 1, oldcmd );
+	}
+	*previousRawValid = currentValid;
+	if ( currentValid ) {
+		*previousRawCmd = *cmd;
+	}
+}
+
 /*
 =================
 CG_PredictPlayerState
@@ -531,6 +545,8 @@ void CG_PredictPlayerState( void ) {
 	usercmd_t oldestCmd;
 	usercmd_t latestCmd;
 	vec3_t deltaAngles;
+	usercmd_t previousRawCmd;
+	qboolean previousRawValid = qfalse;
 
 	cg.hyperspace = qfalse; // will be set if touching a trigger_teleport
 
@@ -643,10 +659,11 @@ void CG_PredictPlayerState( void ) {
 	// run cmds
 	moved = qfalse;
 	for ( cmdNum = current - CMD_BACKUP + 1 ; cmdNum <= current ; cmdNum++ ) {
-		// get the command
-		trap_GetUserCmd( cmdNum, &cg_pmove.cmd );
-		// get the previous command
-		trap_GetUserCmd( cmdNum - 1, &cg_pmove.oldcmd );
+		// The client command ring is immutable during synchronous prediction.
+		// Reuse the previous raw command, not the command modified by Pmove.
+		// Keep the original failed-read behavior (destination unchanged).
+		CG_ReadPredictionCommands( cmdNum, &cg_pmove.cmd, &cg_pmove.oldcmd,
+			&previousRawCmd, &previousRawValid );
 
 		if ( cg_pmove.pmove_fixed ) {
 			PM_UpdateViewAngles( cg_pmove.ps, &cg_pmove.cmd, CG_Trace );

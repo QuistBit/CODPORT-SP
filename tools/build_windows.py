@@ -47,7 +47,7 @@ def main():
     # The released modules inherited objects built against different header revisions.
     # Resolve relative includes in an isolated tree and keep the checkout untouched.
     inputs = build / "obj/inputs"
-    shutil.copytree(ROOT / "src", inputs / "src")
+    shutil.copytree(ROOT / "src", inputs / "src", ignore=shutil.ignore_patterns(".vs"))
     menu_header = Path("main/ui/menudef.h")
     (inputs / menu_header).parent.mkdir(parents=True)
     shutil.copyfile(ROOT / menu_header, inputs / menu_header)

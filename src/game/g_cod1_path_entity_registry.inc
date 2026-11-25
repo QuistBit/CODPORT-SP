@@ -290,12 +290,28 @@ typedef struct {
 } C1SpawnTraceRow;
 static C1SpawnTraceRow cod1SpawnTraceRows[MAX_GENTITIES];
 static int cod1SpawnTraceBusy;
-static int Cod1PathQueryTrace(const cod1SpatialTraceQuery_t*input,trace_t*out,uint32_t mask,int noDynamic){
+/* Only active during synchronous graph staging. Timings are inclusive. */
+static struct {
+ int active;
+ unsigned worldCalls,readyCalls,traceCalls,acquireCalls,placeCalls,preparedCalls;
+ uint64_t worldMs,readyMs,traceMs,acquireMs,placeMs,preparedMs,backendMs;
+ unsigned backendCalls;
+} cod1OptNav;
+static unsigned Cod1OptNavNow(void){return (unsigned)trap_Milliseconds();}
+static void Cod1OptNavAdd(uint64_t *total,unsigned start){*total+=(unsigned)(Cod1OptNavNow()-start);}
+
+static int Cod1OptReady(uint32_t mask,int noDynamic){
+ unsigned start;int result;
+ if(!cod1OptNav.active)return Cod1PathQueryWorldReady(mask,noDynamic);
+ start=Cod1OptNavNow();cod1OptNav.readyCalls++;
+ result=Cod1PathQueryWorldReady(mask,noDynamic);Cod1OptNavAdd(&cod1OptNav.readyMs,start);return result;
+}
+static int Cod1PathQueryTraceImpl(const cod1SpatialTraceQuery_t*input,trace_t*out,uint32_t mask,int noDynamic){
  cod1SpatialTraceQuery_t q,before;trace_t result;uint64_t epoch;
- int i,count,ok=0,status;uint32_t flags;cod1ActorPathView_t actor;
- if(!input||!out||input->contentsMask!=mask||cod1SpawnTraceBusy||!Cod1PathQueryWorldReady(mask,noDynamic))return 0;
+ int i,count,ok=0,status;unsigned backendStart=0;uint32_t flags;cod1ActorPathView_t actor;
+ if(!input||!out||input->contentsMask!=mask||cod1SpawnTraceBusy||!Cod1OptReady(mask,noDynamic))return 0;
  cod1SpawnTraceBusy=1;epoch=G_Cod1EntityMapEpoch();count=level.num_entities;
- memset(cod1SpawnTraceRows,0,sizeof(cod1SpawnTraceRows));
+ /* Static zero initialization and cleanup below keep the scratch array clean. */
  for(i=0;i<count;i++){
   C1SpawnTraceRow*r=cod1SpawnTraceRows+i;gentity_t*e=g_entities+i;
   if(!(r->active=!!e->inuse))continue;
@@ -306,9 +322,11 @@ static int Cod1PathQueryTrace(const cod1SpatialTraceQuery_t*input,trace_t*out,ui
   if(!r->isReserve&&!r->isHelper&&!r->isTurret&&!r->isSpawner&&!G_Cod1PathEntityRead(&r->ref,&r->flags))goto done;
   r->shared=e->r;r->state=e->s;r->isActor=G_Cod1ActorPathRead(&r->ref,&r->actor);
  }
- q=*input;before=q;memset(&result,0,sizeof(result));status=trap_Cod1SpatialCapsuleTrace(&q,&result);
+ q=*input;before=q;memset(&result,0,sizeof(result));if(cod1OptNav.active){backendStart=Cod1OptNavNow();cod1OptNav.backendCalls++;}
+ status=trap_Cod1SpatialCapsuleTrace(&q,&result);
+ if(cod1OptNav.active)Cod1OptNavAdd(&cod1OptNav.backendMs,backendStart);
  if(status!=COD1_SPATIAL_OK||memcmp(&q,&before,sizeof(q))||epoch!=G_Cod1EntityMapEpoch()||
-    count!=level.num_entities||!Cod1PathQueryWorldReady(mask,noDynamic))goto done;
+    count!=level.num_entities||!Cod1OptReady(mask,noDynamic))goto done;
  for(i=0;i<count;i++){
   C1SpawnTraceRow*r=cod1SpawnTraceRows+i;gentity_t*e=g_entities+i;
   if(r->active!=!!e->inuse)goto done;if(!r->active)continue;
@@ -324,7 +342,13 @@ static int Cod1PathQueryTrace(const cod1SpatialTraceQuery_t*input,trace_t*out,ui
  }
  *out=result;ok=1;
 done:
- memset(cod1SpawnTraceRows,0,sizeof(cod1SpawnTraceRows));cod1SpawnTraceBusy=0;return ok;
+ memset(cod1SpawnTraceRows,0,(size_t)count*sizeof(cod1SpawnTraceRows[0]));cod1SpawnTraceBusy=0;return ok;
+}
+static int Cod1PathQueryTrace(const cod1SpatialTraceQuery_t*input,trace_t*out,uint32_t mask,int noDynamic){
+ unsigned start;int result;
+ if(!cod1OptNav.active)return Cod1PathQueryTraceImpl(input,out,mask,noDynamic);
+ start=Cod1OptNavNow();cod1OptNav.traceCalls++;
+ result=Cod1PathQueryTraceImpl(input,out,mask,noDynamic);Cod1OptNavAdd(&cod1OptNav.traceMs,start);return result;
 }
 int G_Cod1PathSpawnTrace(const cod1SpatialTraceQuery_t*input,trace_t*out){
  return Cod1PathQueryTrace(input,out,0x0281c011u,0);
@@ -355,11 +379,11 @@ static void Cod1PathNodeWorldReset(void){
 void G_Cod1PathNodeWorldEnd(uint64_t receipt){
  if(receipt&&receipt==cod1NodeWorldReceipt)Cod1PathNodeWorldReset();
 }
-int G_Cod1PathNodeWorldCurrent(uint64_t receipt){
+static int Cod1PathNodeWorldCurrentImpl(uint64_t receipt){
  int i;uint32_t flags;cod1ActorPathView_t actor;
  if(!receipt||receipt!=cod1NodeWorldReceipt)return 0;
  if(cod1NodeWorldEpoch!=G_Cod1EntityMapEpoch()||cod1NodeWorldCount!=level.num_entities||
-    cod1NodeWorldTime!=level.time||!Cod1PathQueryWorldReady(0x00820011u,1))goto stale;
+    cod1NodeWorldTime!=level.time||!Cod1OptReady(0x00820011u,1))goto stale;
  for(i=0;i<cod1NodeWorldCount;i++){
   C1SpawnTraceRow*r=cod1NodeWorldRows+i;gentity_t*e=g_entities+i;
   if(r->active!=!!e->inuse)goto stale;if(!r->active)continue;
@@ -374,10 +398,16 @@ int G_Cod1PathNodeWorldCurrent(uint64_t receipt){
  return 1;
 stale:Cod1PathNodeWorldReset();return 0;
 }
+int G_Cod1PathNodeWorldCurrent(uint64_t receipt){
+ unsigned start;int result;
+ if(!cod1OptNav.active)return Cod1PathNodeWorldCurrentImpl(receipt);
+ start=Cod1OptNavNow();cod1OptNav.worldCalls++;
+ result=Cod1PathNodeWorldCurrentImpl(receipt);Cod1OptNavAdd(&cod1OptNav.worldMs,start);return result;
+}
 int G_Cod1PathNodeWorldBegin(uint64_t*out){
  int i;
  if(!out||cod1NodeWorldReceipt||cod1SpawnTraceBusy||cod1NodeWorldSerial==UINT64_MAX||
-    !Cod1PathQueryWorldReady(0x00820011u,1))return 0;
+    !Cod1OptReady(0x00820011u,1))return 0;
  cod1NodeWorldEpoch=G_Cod1EntityMapEpoch();cod1NodeWorldCount=level.num_entities;cod1NodeWorldTime=level.time;
  memset(cod1NodeWorldRows,0,sizeof(cod1NodeWorldRows));
  for(i=0;i<cod1NodeWorldCount;i++){

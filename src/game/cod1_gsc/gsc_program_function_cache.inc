@@ -12,3 +12,22 @@ uint32_t gsc_program_script_function_handle(const GscProgram*g,const char*module
  m=find_module(g,module);if(m<0||(f=find_func(g,m,function))<0||g->funcs[f].module!=m)return 0;
  return (uint32_t)f+1;
 }
+
+/* Resolve several functions of one module without repeating module lookup.
+ * Output is caller-owned storage; each result has scalar handle semantics. */
+void gsc_program_script_function_handles(const GscProgram*g,const char*module,
+ const char*const*functions,uint32_t*handles,unsigned count){
+ unsigned k;size_t n;int m=-1,f;
+ if(gsc_program_identity(g)&&module&&functions){
+  for(n=0;n<128&&module[n];n++){}
+  if(n&&n<128)m=find_module(g,module);
+ }
+ for(k=0;k<count;k++){
+  handles[k]=0;
+  if(m<0||!functions[k])continue;
+  for(n=0;n<64&&functions[k][n];n++){}
+  if(!n||n==64)continue;
+  f=find_func(g,m,functions[k]);
+  if(f>=0&&g->funcs[f].module==m)handles[k]=(uint32_t)f+1;
+ }
+}

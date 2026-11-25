@@ -181,8 +181,9 @@ static qboolean R_LoadCod1NativeAnimated(model_t *mod, const char *resourceName)
               definitionName, runtime->definition.bones, fixed->numSurfaces);
     ok = qtrue;
 done:
+    /* Clips are acquired in ascending order and copied before cleanup. */
+    for (i = COD1_NATIVE_LEAVES - 1; i >= 1; i--) if (clip[i]) ri.FS_FreeFile(clip[i]);
     if (defData) ri.FS_FreeFile(defData);
-    for (i = 1; i < COD1_NATIVE_LEAVES; i++) if (clip[i]) ri.FS_FreeFile(clip[i]);
     if (temp) { CN_SourceFree(&temp->part[0]); CN_SourceFree(&temp->part[1]); }
     free(temp); free(def); free(first); free(models);
     if (!ok) {

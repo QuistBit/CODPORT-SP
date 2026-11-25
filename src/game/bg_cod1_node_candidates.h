@@ -16,20 +16,21 @@ static unsigned C1NQU16(const unsigned char*p){uint16_t v;memcpy(&v,p,2);return 
 static float C1NQFloat(const unsigned char*p){float v;memcpy(&v,p,4);return v;}
 static void C1NQVisit(C1NQWalk*q,unsigned id){
  const C1NTreeNode*n=q->tree->nodes+id;unsigned i;
+ /* No later leaf can append once the ordered output is full. */
+ if(q->count==q->capacity)return;
  if(n->axis>=0){
   double delta=(double)q->origin[n->axis]-n->split;float saved=(float)delta;
   if(delta<=q->radius)C1NQVisit(q,n->a);
-  if(-(double)q->radius<=saved)C1NQVisit(q,n->b);
+  if(q->count<q->capacity&&-(double)q->radius<=saved)C1NQVisit(q,n->b);
   return;
  }
- for(i=0;i<n->b;i++){
+ for(i=0;i<n->b&&q->count<q->capacity;i++){
   unsigned index=q->tree->order[n->a+i];const unsigned char*r=q->records+116*index;
   double dx=(double)C1NQFloat(r+0x38)-q->origin[0],dy=(double)C1NQFloat(r+0x3c)-q->origin[1],dz;
   float distance=(float)(dy*dy+dx*dx);
   if(distance>q->radiusSquared||!(q->mask&(1u<<C1NQU32(r+0x24))))continue;
   if((C1NQU16(r+0x2a)&1)&&!(q->mask&1))continue;
   dz=(double)C1NQFloat(r+0x40)-q->origin[2];if(dz*dz>q->heightSquared)continue;
-  if(q->count==q->capacity)return;
   q->output[q->count].node=index;q->output[q->count].distanceSquared=distance;++q->count;
  }
 }

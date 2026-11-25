@@ -2737,6 +2737,7 @@ int gsc_runtime_node_script_current(const GscRuntime*,GscNodeScriptRef);
  * authority; scope is the exact immutable linked program identity. */
 uint64_t gsc_program_identity(const GscProgram *);
 uint32_t gsc_program_script_function_handle(const GscProgram *,const char *,const char *);
+void gsc_program_script_function_handles(const GscProgram *,const char *,const char *const *,uint32_t *,unsigned);
 
 #endif
 

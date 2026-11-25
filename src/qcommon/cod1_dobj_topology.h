@@ -96,6 +96,42 @@ static int C1DT_FindBone(const c1dtTopology_t *topology, const char *name) {
     return -1;
 }
 
+/* Build-local index of already validated names. The insertion order is
+ * earliest model first, last local bone first; existing matches never change.
+ * At most 127 bones occupy 256 slots. No borrowed name survives this build. */
+#define C1DT_NAME_SLOTS 256
+typedef struct {
+    const char *name;
+    int target;
+} c1dtNameSlot_t;
+
+static unsigned int C1DT_NameHash(const char *name) {
+    unsigned int h = 2166136261u;
+    while (*name) { h ^= (unsigned char)*name++; h *= 16777619u; }
+    return h & (C1DT_NAME_SLOTS - 1);
+}
+static c1dtNameSlot_t *C1DT_NameSlot(c1dtNameSlot_t *slots, const char *name) {
+    unsigned int at = C1DT_NameHash(name);
+    while (slots[at].name && strcmp(slots[at].name, name))
+        at = (at + 1) & (C1DT_NAME_SLOTS - 1);
+    return &slots[at];
+}
+static void C1DT_IndexNames(const c1dtTopology_t *topology, c1dtNameSlot_t *slots) {
+    unsigned int i, j;
+    memset(slots, 0, C1DT_NAME_SLOTS * sizeof(*slots));
+    for (i = 0; i < topology->modelCount; ++i) {
+        const c1dtModel_t *m = &topology->models[i];
+        for (j = m->boneCount; j > 0; --j) {
+            const char *name = m->resource->skeleton.boneName[j - 1];
+            c1dtNameSlot_t *slot = C1DT_NameSlot(slots, name);
+            if (!slot->name) {
+                slot->name = name;
+                slot->target = (int)(m->firstBone + j - 1);
+            }
+        }
+    }
+}
+
 /* Native 0x476e00 model ordering/tag acceptance and 0x4761f0 named melding.
  * Input zero is the base model: its tag is ignored. A nonempty secondary tag
  * searches only previously accepted models; missing tags warn and skip that
@@ -113,6 +149,8 @@ static int C1DT_Build(const c1dtModelInput_t *inputs, unsigned int inputCount,
     const char *tag;
     unsigned int i, j, global, at;
     int anchor, target;
+    c1dtNameSlot_t names[C1DT_NAME_SLOTS];
+    int indexed = 0;
     if (!out || (inputCount && !inputs)) return C1DT_INVALID;
     if (inputCount > C1DT_MAX_MODELS) return C1DT_CAPACITY;
     for (i = 0; i < inputCount; ++i)
@@ -165,9 +203,13 @@ static int C1DT_Build(const c1dtModelInput_t *inputs, unsigned int inputCount,
         model = &result.models[i];
         if (model->anchorBone >= 0) continue;
         s = &model->resource->skeleton;
+        if (!indexed) { C1DT_IndexNames(&result, names); indexed = 1; }
         for (j = 0; j < model->boneCount; ++j) {
             global = model->firstBone + j;
-            target = C1DT_FindBone(&result, s->boneName[j]);
+            {
+                c1dtNameSlot_t *slot = C1DT_NameSlot(names, s->boneName[j]);
+                target = slot->name ? slot->target : -1;
+            }
             if (target < 0) return C1DT_INVALID;
             if ((unsigned int)target == global) continue;
             result.bones[global].duplicateBone = target;

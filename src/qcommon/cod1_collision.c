@@ -251,8 +251,9 @@ void COD1_CollisionTrace( const cod1CollisionTri_t *triangles, int triangleCount
 	}
     blocks=C1CB583_Select(triangles,triangleCount,sweepMins,sweepMaxs);
 	for ( i = 0; triangles && i < triangleCount; i++ ) {
-        if(blocks && !(i%C1CB583_SIZE) && C1CB583_Outside(blocks,i,sweepMins,sweepMaxs)){
-            i+=(triangleCount-i<C1CB583_SIZE?triangleCount-i:C1CB583_SIZE)-1;continue;
+        if(blocks && !(i%C1CB583_SIZE)){
+            int skip=C1CB583_Skip(blocks,i,triangleCount,sweepMins,sweepMaxs);
+            if(skip){i+=skip-1;continue;}
         }
 		const cod1CollisionTri_t *tri = &triangles[i];
 		cod1Sweep_t sweep;

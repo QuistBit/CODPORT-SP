@@ -50,6 +50,16 @@ static void CV14_ReadQ(xm14Reader *r,float *q,int simple,int negative) {
     if(length<1){r->ok=0;return;}
     for(k=0;k<4;k++)q[k]=(float)(q[k]/length)*(negative?-1:1);
 }
+/* Unselected rotation keys still participate in stream validation. Their
+ * normalized values cannot affect the sampled pose. For signed shorts the
+ * reconstructed length is always >= 1: a nonzero component suffices, and
+ * an all-zero vector reconstructs w=32767. Keep the same read order and
+ * sum bound as CV14_ReadQ, without sqrt/floor/normalization. */
+static void CV14_ValidateQ(xm14Reader *r,int simple) {
+    double sum=0;int k,value;
+    for(k=simple?2:0;k<3;k++){value=CV14_S16(r);sum+=(double)value*value;}
+    if(sum>32767.0*32767.0*1.001)r->ok=0;
+}
 static int CV14_Parts(const void *data,size_t size,cv14Skeleton *s) {
     xm14Reader r;int n,roots,i,k;memset(s,0,sizeof(*s));r.p=(const unsigned char*)data;r.n=size;r.at=0;r.ok=1;
     if(XM14_U16(&r)!=14)return 0;n=XM14_U16(&r);roots=XM14_U16(&r);
@@ -103,6 +113,7 @@ static int CV14_SamplePose(const void *data,size_t size,float at,cv14Pose *p) {
         CV14_Identity(&p->t[i]);count=XM14_U16(&r);if(!CV14_Indices(&r,count,frames,ids))return 0;
         low=0;for(j=0;j<count;j++)if(ids[j]<=at)low=j;
         for(j=0;j<count;j++){
+            if(j!=low && j!=low+1){CV14_ValidateQ(&r,simple[i/8]&(1<<(i%8)));continue;}
             CV14_ReadQ(&r,values,simple[i/8]&(1<<(i%8)),!j && (sign[i/8]&(1<<(i%8))));
             if(j==low){memcpy(previous,values,sizeof(values));memcpy(p->t[i].q,values,sizeof(values));}
             else if(j==low+1){
