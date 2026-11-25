@@ -16,8 +16,13 @@ int G_Cod1EntityByNumber(int32_t slot,GscEntityRef *out,int *found,
     }
     memset(&ref,0,sizeof(ref));
     if((uint32_t)slot<2048 && (uint32_t)slot<MAX_GENTITIES && g_entities[slot].inuse) {
-        if(!G_Cod1EntityCapture(&g_entities[slot],&ref) || ref.slot!=(uint32_t)slot ||
-           !EntityValidate(NULL,&ref)) {
+        /* No host callback occurs here. The slot is already bounded; the
+         * ready-map validator checks the full allocation, including s.number.
+         * Construct the copied identity directly instead of validating twice. */
+        ref.epoch=epoch;
+        ref.slot=(uint32_t)slot;
+        ref.generation=cod1EntityGeneration[slot];
+        if(!EntityValidate(NULL,&ref)) {
             EntityError(error,size,"getentbynum active allocation has inconsistent identity");return 0;
         }
         result=1;

@@ -2340,9 +2340,21 @@ static int parse_stmt(Parser *p,GscProgram *g,int depth) {
     return emit(p,g,i)>=0;
 }
 static int find_module(const GscProgram *g,const char *path) {
-    int n;for(n=0;n<g->module_count;n++)
-        if(g->module_loader_mode?gsc_module_identity_equal(g->modules[n],path):
-           !strcmp(g->modules[n],path))return n;
+    int n;char canonical[MAX_MODULE_PATH];
+    /* Loader mode is selected at construction, and module_compile stores
+     * only canonical paths. Normalize the query once, not for every slot.
+     * Retain the original comparison for tiny tables (including NULL). */
+    if(g->module_loader_mode) {
+        if(g->module_count<=2) {
+            for(n=0;n<g->module_count;n++)
+                if(gsc_module_identity_equal(g->modules[n],path))return n;
+            return -1;
+        }
+        if(!gsc_module_identity_canonical(path,canonical,sizeof(canonical)))return -1;
+        path=canonical;
+    }
+    for(n=0;n<g->module_count;n++)
+        if(!strcmp(g->modules[n],path))return n;
     return -1;
 }
 static int developer_func_hidden(const GscProgram *,int);
@@ -4638,6 +4650,7 @@ static int rfail(GscRuntime *r,int line,const char *fmt,...) {
     return 0;
 }
 static Task*task_at(const GscRuntime*,int);
+static int task_member(const GscRuntime*,const Task*);
 static int task_directory_limit(const GscRuntime *r){
     return r->lifetime_enabled?GSC_LIFETIME_TASK_CAPACITY+r->extra_capacity:MAX_THREADS;
 }

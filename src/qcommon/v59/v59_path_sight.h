@@ -11,6 +11,8 @@ typedef struct {
  unsigned char *brushseen,*surfaceseen;
  C1VSSurface surfaceQuery;void*context;int failure;
  unsigned leaves,brushes,surfaces;
+ /* Per-query lazy bounds, rounded exactly as the original axis tests. */
+ float boundsLo[3],boundsHi[3];unsigned boundsReady;
 } C1VSQuery;
 static int C1VSBrush(const C1PathSight*t,const brush*b){
  float enter,leave;int j;
@@ -18,11 +20,15 @@ static int C1VSBrush(const C1PathSight*t,const brush*b){
  for(j=6;j<b->n;j++)if(!C1PS_Plane(t,b->planes[j].n,b->planes[j].d,&enter,&leave))return 0;
  return 1;
 }
-static int C1VSBounds(const C1PathSight*t,const float*b){
- int k;for(k=0;k<3;k++){
-  float lo=C1PS_Store((double)(t->start[k]<t->end[k]?t->start[k]:t->end[k])-t->extents[k]);
-  float hi=C1PS_Store((double)(t->start[k]>t->end[k]?t->start[k]:t->end[k])+t->extents[k]);
-  if(lo>b[k+3]||hi<b[k])return 0;
+static int C1VSBounds(C1VSQuery*q,const float*b){
+ const C1PathSight*t=&q->shape;int k;for(k=0;k<3;k++){
+  unsigned bit=1u<<k;
+  if(!(q->boundsReady&bit)){
+   q->boundsLo[k]=C1PS_Store((double)(t->start[k]<t->end[k]?t->start[k]:t->end[k])-t->extents[k]);
+   q->boundsHi[k]=C1PS_Store((double)(t->start[k]>t->end[k]?t->start[k]:t->end[k])+t->extents[k]);
+   q->boundsReady|=bit;
+  }
+  if(q->boundsLo[k]>b[k+3]||q->boundsHi[k]<b[k])return 0;
  }return 1;
 }
 static int C1VSVisit(C1VSQuery*q,const uint32_t*br,int nb,const uint32_t*sr,int ns){
@@ -35,7 +41,7 @@ static int C1VSVisit(C1VSQuery*q,const uint32_t*br,int nb,const uint32_t*sr,int 
  for(k=0;k<ns;k++){
   i=sr[k];if(i<0||i>=q->w->ns){q->failure=1;return 0;}
   if(q->surfaceseen[i])continue;q->surfaceseen[i]=1;
-  if(!(q->w->surfaces[i].contents&q->mask)||!C1VSBounds(&q->shape,q->w->surfaces[i].bounds))continue;
+  if(!(q->w->surfaces[i].contents&q->mask)||!C1VSBounds(q,q->w->surfaces[i].bounds))continue;
   q->surfaces++;blocked=-1;
   if(!q->surfaceQuery||q->surfaceQuery(q->context,&q->shape,q->w->surfaces+i,&blocked)!=1||(blocked!=0&&blocked!=1)){
    q->failure=1;return 0;
@@ -78,7 +84,7 @@ static int C1VSWorld(C1VSQuery*q,const float*s,const float*e,const float*mins,co
  if(!q||!q->w||!q->brushseen||!q->surfaceseen||!s||!e||!mins||!maxs||!out||q->w->nn<1)return 0;
  for(k=0;k<3;k++)if(!isfinite(s[k])||!isfinite(e[k])||!isfinite(mins[k])||!isfinite(maxs[k])||mins[k]>=maxs[k])return 0;
  if(maxs[0]-mins[0]!=maxs[1]-mins[1])return 0;
- C1PS_Prepare(&q->shape,s,e,mins,maxs,zero);q->failure=0;q->leaves=q->brushes=q->surfaces=0;
+ C1PS_Prepare(&q->shape,s,e,mins,maxs,zero);q->failure=0;q->leaves=q->brushes=q->surfaces=0;q->boundsReady=0;
  memset(q->brushseen,0,q->w->nb);memset(q->surfaceseen,0,q->w->ns);
  result=C1VSWalk(q,0,0,1,q->shape.start,q->shape.end,0);
  if(q->failure)return 0;*out=result;return 1;

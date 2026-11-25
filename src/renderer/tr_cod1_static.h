@@ -92,7 +92,8 @@ static int R_Cod1StaticMesh(const char *name,xm14Model *model,xm14Mesh *mesh,int
     for(i=0;i<mesh->ns;i++)if(!R_Cod1StaticPath(path,"skins/",model->skin[0][i]))goto done;
     ok=1;
 done:
-    if(data)ri.FS_FreeFile(data);if(parts)ri.FS_FreeFile(parts);if(surfs)ri.FS_FreeFile(surfs);free(sk);
+    /* Release file buffers in reverse acquisition order (temporary hunk stack). */
+    if(surfs)ri.FS_FreeFile(surfs);if(parts)ri.FS_FreeFile(parts);if(data)ri.FS_FreeFile(data);free(sk);
     if(!ok)XM14_Free(mesh);return ok;
 }
 

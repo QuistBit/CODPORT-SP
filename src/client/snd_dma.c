@@ -404,19 +404,13 @@ static sfx_t *S_FindName( const char *name ) {
 		sfx = sfx->next;
 	}
 
-	// find a free sfx
-	for ( i = 0 ; i < snd.s_numSfx ; i++ ) {
-		if ( !s_knownSfx[i].soundName[0] ) {
-			break;
-		}
+	/* OPT R25: registered names remain live until the registry is reset.
+	 * S_FreeOldestSound only evicts PCM data, never the name or handle.
+	 * Consequently the first unused slot is always s_numSfx. */
+	if ( snd.s_numSfx == MAX_SFX ) {
+		Com_Error( ERR_FATAL, "S_FindName: out of sfx_t" );
 	}
-
-	if ( i == snd.s_numSfx ) {
-		if ( snd.s_numSfx == MAX_SFX ) {
-			Com_Error( ERR_FATAL, "S_FindName: out of sfx_t" );
-		}
-		snd.s_numSfx++;
-	}
+	i = snd.s_numSfx++;
 
 	sfx = &s_knownSfx[i];
 	Com_Memset( sfx, 0, sizeof( *sfx ) );

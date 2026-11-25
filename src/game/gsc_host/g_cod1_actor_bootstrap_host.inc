@@ -39,7 +39,7 @@ typedef struct {C1BSP592_ALIGN uint32_t ordinal;int pairs,bytes;unsigned short k
 static struct {uint32_t records,seen,actors;int complete;Cod1ActorPrepassRecord rows[COD1_ACTOR_RECORD_CAPACITY];} cod1ActorPrepassRecords;
 
 static unsigned char cod1PrepassFieldSealed[COD1_ACTOR_RECORD_CAPACITY];
-_Static_assert(sizeof(Cod1ActorPrepassRecord)%4096==0,"isolated prepass BSP pages");
+typedef char Cod1ActorPrepassPageLayoutCheck[(sizeof(Cod1ActorPrepassRecord)%4096==0)?1:-1];
 int G_Cod1Bsp592SealPrivate(const void*p,size_t n){return Cod1AiOverlap(p,n,cod1PrepassFieldSealed,sizeof(cod1PrepassFieldSealed));}
 static void Cod1ClearCohortPlan(void);
 static int Cod1CohortPlanPrivate(const void *,size_t);

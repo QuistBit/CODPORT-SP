@@ -131,32 +131,37 @@ Cvar_VariableIntegerValue
 ============
 */
 /* Repeated game syscalls commonly use a literal name. Cache its resolved
- * record, never its integer value. The caller's name may be mutable or
+ * record, never its value. The caller's name may be mutable or
  * reused at the same address, so confirm its current spelling on every hit. */
 typedef struct {
     size_t queryAddress;
     cvar_t *record;
-} cvarIntegerLookup_t;
+} cvarReadLookup_t;
 /* Four independent literal addresses may share a bucket. In particular
  * developer_script and g_cod1GscMoveDelta collide in the actor game DLL.
- * Cache only the record lookup; validate spelling and read the live integer
+ * Cache only the record lookup; validate spelling and read the live value
  * every time. Existing creation/restart invalidation clears whole buckets. */
-typedef struct { cvarIntegerLookup_t ways[4]; unsigned next; } cvarIntegerBucket_t;
-static cvarIntegerBucket_t cvarIntegerLookups[256];
+typedef struct { cvarReadLookup_t ways[4]; unsigned next; } cvarReadBucket_t;
+static cvarReadBucket_t cvarReadLookups[256];
 
-int Cvar_VariableIntegerValue( const char *var_name ) {
+static cvar_t *Cvar_FindReadVar( const char *var_name ) {
  cvar_t *var;unsigned i;size_t address=(size_t)var_name;
- cvarIntegerBucket_t *bucket=&cvarIntegerLookups[((address>>2)^(address>>10))&255];
- cvarIntegerLookup_t *entry;
+ cvarReadBucket_t *bucket=&cvarReadLookups[((address>>2)^(address>>10))&255];
+ cvarReadLookup_t *entry;
  for(i=0;i<4;i++){
   entry=bucket->ways+i;
   if(entry->record && entry->queryAddress==address && !strcmp(var_name,entry->record->name))
-   return entry->record->integer;
+   return entry->record;
  }
  var=Cvar_FindVar(var_name);
  entry=bucket->ways+(bucket->next++&3);
  entry->queryAddress=address;entry->record=var;
- return var?var->integer:0;
+ return var;
+}
+
+int Cvar_VariableIntegerValue( const char *var_name ) {
+ cvar_t *var = Cvar_FindReadVar( var_name );
+ return var ? var->integer : 0;
 }
 
 /*
@@ -183,7 +188,7 @@ Cvar_VariableStringBuffer
 void Cvar_VariableStringBuffer( const char *var_name, char *buffer, int bufsize ) {
 	cvar_t *var;
 
-	var = Cvar_FindVar( var_name );
+	var = Cvar_FindReadVar( var_name );
 	if ( !var ) {
 		*buffer = 0;
 	} else {
@@ -304,7 +309,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	hash = generateHashValue( var_name );
 	var->hashNext = hashTable[hash];
 	hashTable[hash] = var;
-	memset( cvarIntegerLookups, 0, sizeof(cvarIntegerLookups) );
+	memset( cvarReadLookups, 0, sizeof(cvarReadLookups) );
 
 	return var;
 }
@@ -782,7 +787,14 @@ void Cvar_Restart_f( void ) {
 
 		// throw out any variables the user created
 		if ( var->flags & CVAR_USER_CREATED ) {
-			memset( cvarIntegerLookups, 0, sizeof(cvarIntegerLookups) );
+			cvar_t **link = &hashTable[generateHashValue( var->name )];
+			while ( *link && *link != var ) {
+				link = &(*link)->hashNext;
+			}
+			if ( *link == var ) {
+				*link = var->hashNext;
+			}
+			memset( cvarReadLookups, 0, sizeof(cvarReadLookups) );
 			*prev = var->next;
 			if ( var->name ) {
 				Z_Free( var->name );
@@ -798,7 +810,7 @@ void Cvar_Restart_f( void ) {
 			}
 			// clear the var completely, since we
 			// can't remove the index from the list
-			memset( var, 0, sizeof( var ) );
+			memset( var, 0, sizeof( *var ) );
 			continue;
 		}
 

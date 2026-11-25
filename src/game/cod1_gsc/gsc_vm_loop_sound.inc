@@ -19,14 +19,14 @@ typedef struct {
 } GscLoopSoundCall;
 static GscLoopSoundCall *loopSoundActive;static uintptr_t loopSoundToken;
 static int loop_sound_scope(GscLoopSoundCall *c){
- int i,found=0;Task *t;
+ int found=0;Task *t;
  if(!(c&&c==loopSoundActive&&c->active&&!c->cancelled&&c->r&&!c->r->error[0]&&
   c->r->entity_method_busy&&c->r->loop_sound_enabled&&
   c->r->program==c->program&&c->r->array_token==c->instance&&c->r->now_ms==c->now&&
   c->program->function_program_token==c->programToken&&c->r->executing_task==c->task&&
   !memcmp(&c->request,&c->sealed,sizeof(c->sealed))&&
   c->r->loop_sound.user==c->host.user&&c->r->loop_sound.invoke==c->host.invoke&&c->r->loop_sound.finish==c->host.finish))return 0;
- t=c->task;for(i=0;i<c->r->task_count;i++)if(task_at(c->r,i)==t){found=1;break;}
+ t=c->task;found=task_member(c->r,t);
  return found&&t->serial==c->serial&&t->status==TASK_READY&&!t->context_retired&&
   t->depth==c->depth&&t->depth>0&&t->depth<=MAX_FRAMES&&
   &t->frames[t->depth-1]==c->frame&&c->frame->fn==c->fn&&c->frame->pc==c->pc;

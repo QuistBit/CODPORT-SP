@@ -39,6 +39,24 @@ static void C1NS_AddNeighbor(unsigned char*r,unsigned index,C1NSResult*out){
  else if(C1NS_Get16(r+0x4e)==0xffff)C1NS_Put16(r+0x4e,index);
  else out->excess++;
 }
+/* Broadphase only: preserve physical i/j order and the original float tests.
+ * A rounded float difference in [-31,31] implies exact |dx| < 32.
+ * The conservative double window therefore cannot discard a native match. */
+typedef struct {float x;unsigned index;} C1NSXEntry;
+static int C1NS_XCompare(const void*a,const void*b){
+ const C1NSXEntry*x=(const C1NSXEntry*)a,*y=(const C1NSXEntry*)b;
+ if(x->x<y->x)return -1;if(x->x>y->x)return 1;
+ return x->index<y->index?-1:x->index!=y->index;
+}
+static void C1NS_TestPair(unsigned char*x,unsigned char*y,const float*p,const float*q,
+ unsigned i,unsigned j,C1NSResult*result){
+ float dx,dy,dz;volatile double xx,yy,sum;
+ dx=(float)((double)p[0]-q[0]);dy=(float)((double)p[1]-q[1]);dz=(float)((double)p[2]-q[2]);
+ if(dx< -31||dx>31||dy< -31||dy>31||dz< -73||dz>73)return;
+ xx=(double)dx*dx;yy=(double)dy*dy;
+ sum=xx+yy;if(sum<1.0&&!((x[0x2a]|y[0x2a])&1))result->duplicate++;
+ C1NS_AddNeighbor(x,j,result);C1NS_AddNeighbor(y,i,result);
+}
 /* Valid DATA transformation can report duplicate/excess diagnostics. Caller
  * must inspect both counters; full graph constructors reject either. All
  * precondition refusals preserve records and output, including alias cases.
@@ -46,17 +64,28 @@ static void C1NS_AddNeighbor(unsigned char*r,unsigned index,C1NSResult*out){
  * xy squared distance at PC53; bounded float inputs permit exact double math.
  * Nonfinite/out-of-profile coordinates and non-nearest rounding are refused. */
 static int C1NS_NodeNeighbors(unsigned char*records,size_t bytes,unsigned count,C1NSResult*out){
- unsigned i,j,k;size_t need=(size_t)count*116;uintptr_t a=(uintptr_t)records,b=(uintptr_t)out;C1NSResult result={0,0};
+ float xyz[C1NS_POOL_COUNT][3];C1NSXEntry sorted[C1NS_POOL_COUNT];
+ uint32_t candidates[C1NS_POOL_COUNT/32];unsigned i,j,k,lo,hi,m,bucket,bit,pairs=0;size_t need=(size_t)count*116;uintptr_t a=(uintptr_t)records,b=(uintptr_t)out;C1NSResult result={0,0};
  if(!records||!out||count>2048||bytes<need||fegetround()!=FE_TONEAREST||
     (need&&(a<=b?b-a<need:a-b<sizeof(*out))))return 0;
 #if defined(_MSC_VER) && defined(_M_IX86)
  /* Match the original oracle profile without changing the process FP state. */
  if((_controlfp(0,0)&(_MCW_PC|_MCW_RC|_EM_AMBIGUOUS))!=(_PC_53|_RC_NEAR))return 0;
 #endif
- for(i=0;i<count;i++){float p[3];memcpy(p,records+(size_t)i*116+0x38,12);
-  for(k=0;k<3;k++)if(!isfinite(p[k])||fabsf(p[k])>1e7f)return 0;
+ for(i=0;i<count;i++){
+  memcpy(xyz[i],records+(size_t)i*116+0x38,12);
+  for(k=0;k<3;k++)if(!isfinite(xyz[i][k])||fabsf(xyz[i][k])>1e7f)return 0;
+  sorted[i].x=xyz[i][0];sorted[i].index=i;
+ }
+ qsort(sorted,count,sizeof(sorted[0]),C1NS_XCompare);
+ /* Dense X distributions do not benefit from the broadphase. Estimate its
+  * candidate count in linear time, then retain the ordered all-pairs path. */
+ for(i=0,lo=0;i<count;i++){
+  while((double)sorted[lo].x<(double)sorted[i].x-32.0)lo++;
+  pairs+=i-lo;
  }
  for(i=0;i<count;i++){C1NS_Put16(records+(size_t)i*116+0x4c,0xffff);C1NS_Put16(records+(size_t)i*116+0x4e,0xffff);}
+ if(count<32||pairs>count*(count-1)/16){
  for(i=0;i<count;i++)for(j=0;j<i;j++){
   unsigned char*x=records+(size_t)i*116,*y=records+(size_t)j*116;float p[3],q[3],dx,dy,dz;volatile double xx,yy,sum;
   memcpy(p,x+0x38,12);memcpy(q,y+0x38,12);
@@ -65,6 +94,27 @@ static int C1NS_NodeNeighbors(unsigned char*records,size_t bytes,unsigned count,
   xx=(double)dx*dx;yy=(double)dy*dy;
   sum=xx+yy;if(sum<1.0&&!((x[0x2a]|y[0x2a])&1))result.duplicate++;
   C1NS_AddNeighbor(x,j,&result);C1NS_AddNeighbor(y,i,&result);
+ }
+  *out=result;return 1;
+ }
+ for(i=0;i<count;i++){
+  const float*p=xyz[i];double left=(double)p[0]-32.0,right=(double)p[0]+32.0;
+  unsigned char*x=records+(size_t)i*116;
+  memset(candidates,0,sizeof(candidates));
+  lo=0;hi=count;
+  while(lo<hi){m=lo+(hi-lo)/2;if((double)sorted[m].x<left)lo=m+1;else hi=m;}
+  for(m=lo;m<count&&(double)sorted[m].x<=right;m++){
+   j=sorted[m].index;if(j<i)candidates[j/32]|=(uint32_t)1u<<(j%32);
+  }
+  /* Ascending physical indices are essential for first-two neighbors and diagnostics. */
+  for(bucket=0;bucket<(i+31)/32;bucket++){
+   uint32_t bits=candidates[bucket];
+   for(bit=0;bits;bit++,bits>>=1){
+    if(!(bits&1u))continue;
+    j=bucket*32+bit;
+    C1NS_TestPair(x,records+(size_t)j*116,p,xyz[j],i,j,&result);
+   }
+  }
  }
  *out=result;return 1;
 }

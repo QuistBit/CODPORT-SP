@@ -33,9 +33,9 @@ static int r237_queue_available(GscRuntime *r,int count,int line){
  return 1;
 }
 static int r237_queue_offer(GscRuntime *r,Task *t,int key,int line){
- uint64_t stamp=r237_owner_stamp(r),insertion;int i,member=!r243_time_root_required(r);
+ uint64_t stamp=r237_owner_stamp(r),insertion;int member=!r243_time_root_required(r);
  if(!r237_owner_current(r,stamp))return rfail(r,line,"R237 queue time-root retired");
- if(!member)for(i=0;i<r->task_count;i++)if(task_at(r,i)==t){member=1;break;}
+ if(!member)member=task_member(r,t);
  if(!member)return rfail(r,line,"R237 queue Task belongs to another namespace");
  if(key<r237_bucket(r)||key>INT32_C(0xffffff))return rfail(r,line,"R237 queue key outside nonwrapping cursor domain");
  if(t->r237_enqueued){
@@ -123,29 +123,30 @@ static int r237_dispatch_task(GscRuntime *r,Task *chosen,int *budget,uint64_t st
   if(chosen->status==TASK_DEAD&&chosen->results){GSC_RUNTIME_FREE(chosen->results);chosen->results=NULL;}
  return 1;
 }
-static int r237_drain_bucket_slice(GscRuntime *r,int *budget,int (*expired)(void)){
- Task *chosen;int n,ok;uint64_t stamp=r237_owner_stamp(r);
+static int r237_drain_bucket_slice(GscRuntime *r,int *budget,int (*expired)(void),int *next_pending){
+ Task *chosen;int n,bucket,next;uint64_t stamp=r237_owner_stamp(r);
  while(!r->error[0]){
   if(!r237_owner_current(r,stamp))return rfail(r,0,"R237 drain time-root retired");
-  chosen=NULL;
+  /* No callbacks during this scan: cursor and task directory are stable. */
+  bucket=r237_bucket(r);next=INT32_MAX;chosen=NULL;
   for(n=0;n<r->task_count;n++){
    Task *t=task_at(r,n);
    if(t->status!=TASK_READY&&t->status!=TASK_SLEEP)continue;
-   if(t->r243_time_root_incarnation!=stamp||!t->r237_enqueued||!t->r237_insertion||t->wake_ms<r237_bucket(r)||t->wake_ms>INT32_C(0xffffff))
+   if(t->r243_time_root_incarnation!=stamp||!t->r237_enqueued||!t->r237_insertion||t->wake_ms<bucket||t->wake_ms>INT32_C(0xffffff))
     return rfail(r,0,"R237 pending task has invalid queue ownership");
-   if(t->wake_ms==r237_bucket(r)){
+   if(t->wake_ms==bucket){
     if(chosen&&t->r237_insertion==chosen->r237_insertion)return rfail(r,0,"R237 duplicate queue insertion identity");
     if(!chosen||t->r237_insertion>chosen->r237_insertion)chosen=t;
-   }
+   }else if(t->wake_ms<next)next=t->wake_ms;
   }
-  if(!chosen)return 1;
+  if(!chosen){if(next_pending)*next_pending=next;return 1;}
   if(!r237_dispatch_task(r,chosen,budget,stamp))return 0;
   if(expired && expired())return 2;
  }
  return 0;
 }
 static int r237_drain_bucket(GscRuntime *r,int *budget){
- return r237_drain_bucket_slice(r,budget,NULL);
+ return r237_drain_bucket_slice(r,budget,NULL,NULL);
 }
 static int r237_finish_operation(GscRuntime *r,int ok){
  /* A genuine bootstrap operation may finish before the configured root is
@@ -197,12 +198,12 @@ static int r237_frame_valid(GscRuntime *r,uint64_t generation){
  r->r237_frame_target_ms==r->now_ms&&r->r237_frame_target_ms<=INT32_C(0xffffff);
 }
 int gsc_r237_frame_phase_slice(GscRuntime *r,uint64_t generation,int exclusive,int (*expired)(void)){
- int ok=1;
+ int ok=1,next;
  if(r&&r237_busy(r))return rfail(r,0,"reentrant R237 frame scheduler call");
  if((exclusive!=0 && exclusive!=1) || !r237_frame_valid(r,generation))return 0;
  r->advancing=1;r->execution_budget=&r->r237_frame_budget;
  while(!exclusive || r237_bucket(r)<r->r237_frame_target_ms){
-  ok=r237_drain_bucket_slice(r,&r->r237_frame_budget,expired);
+  ok=r237_drain_bucket_slice(r,&r->r237_frame_budget,expired,&next);
   if(ok==2){
    /* The selected Task has already suspended or retired. There is no active
     * stack, borrowed receiver, or array root to retain across the host call.
@@ -211,7 +212,10 @@ int gsc_r237_frame_phase_slice(GscRuntime *r,uint64_t generation,int exclusive,i
    return 2;
   }
   if(!ok || !exclusive)break;
-  if(!r237_bucket_set(r,r237_bucket(r)+1,r->r237_frame_time_root)){ok=0;break;}
+  /* Empty buckets have no callbacks, dispatch or collection. Stop at the
+   * next pending deadline, or at the exclusive target (never drain it). */
+  if(next>r->r237_frame_target_ms)next=r->r237_frame_target_ms;
+  if(!r237_bucket_set(r,next,r->r237_frame_time_root)){ok=0;break;}
  }
  if(ok && exclusive)r->r237_frame_open=0;
  return r237_finish_operation(r,ok);

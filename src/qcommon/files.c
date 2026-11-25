@@ -368,7 +368,7 @@ int FS_LoadStack() {
 return a hash value for the filename
 ================
 */
-static long FS_HashFileName( const char *fname, int hashSize ) {
+static long FS_HashFileNameRaw( const char *fname ) {
 	int i;
 	long hash;
 	char letter;
@@ -390,8 +390,11 @@ static long FS_HashFileName( const char *fname, int hashSize ) {
 		i++;
 	}
 	hash = ( hash ^ ( hash >> 10 ) ^ ( hash >> 20 ) );
-	hash &= ( hashSize - 1 );
 	return hash;
+}
+
+static long FS_HashFileName( const char *fname, int hashSize ) {
+	return FS_HashFileNameRaw( fname ) & ( hashSize - 1 );
 }
 
 static fileHandle_t FS_HandleForFile( void ) {
@@ -1136,7 +1139,8 @@ int FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean uniqueF
 	pack_t          *pak;
 	fileInPack_t    *pakFile;
 	directory_t     *dir;
-	long hash;
+	long hash, rawHash = 0;
+	qboolean haveRawHash = qfalse;
 	unz_s           *zfi;
 	FILE            *temp;
 	int l;
@@ -1153,7 +1157,11 @@ int FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean uniqueF
 		for ( search = fs_searchpaths ; search ; search = search->next ) {
 			//
 			if ( search->pack ) {
-				hash = FS_HashFileName( filename, search->pack->hashSize );
+				if ( !haveRawHash ) {
+					rawHash = FS_HashFileNameRaw( filename );
+					haveRawHash = qtrue;
+				}
+				hash = rawHash & ( search->pack->hashSize - 1 );
 			}
 			// is the element a pak file?
 			if ( search->pack && search->pack->hashTable[hash] ) {
@@ -1218,7 +1226,11 @@ int FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean uniqueF
 	for ( search = fs_searchpaths ; search ; search = search->next ) {
 		//
 		if ( search->pack ) {
-			hash = FS_HashFileName( filename, search->pack->hashSize );
+			if ( !haveRawHash ) {
+				rawHash = FS_HashFileNameRaw( filename );
+				haveRawHash = qtrue;
+			}
+			hash = rawHash & ( search->pack->hashSize - 1 );
 		}
 		// is the element a pak file?
 		if ( search->pack && search->pack->hashTable[hash] ) {
@@ -1601,7 +1613,8 @@ int FS_FileIsInPAK( const char *filename, int *pChecksum ) {
 	searchpath_t    *search;
 	pack_t          *pak;
 	fileInPack_t    *pakFile;
-	long hash = 0;
+	long hash = 0, rawHash = 0;
+	qboolean haveRawHash = qfalse;
 
 	if ( !fs_searchpaths ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization\n" );
@@ -1630,7 +1643,11 @@ int FS_FileIsInPAK( const char *filename, int *pChecksum ) {
 	for ( search = fs_searchpaths ; search ; search = search->next ) {
 		//
 		if ( search->pack ) {
-			hash = FS_HashFileName( filename, search->pack->hashSize );
+			if ( !haveRawHash ) {
+				rawHash = FS_HashFileNameRaw( filename );
+				haveRawHash = qtrue;
+			}
+			hash = rawHash & ( search->pack->hashSize - 1 );
 		}
 		// is the element a pak file?
 		if ( search->pack && search->pack->hashTable[hash] ) {

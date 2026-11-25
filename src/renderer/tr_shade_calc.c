@@ -739,9 +739,7 @@ void RB_CalcColorFromEntity( unsigned char *dstColors ) {
 */
 void RB_CalcColorFromOneMinusEntity( unsigned char *dstColors ) {
 	int i;
-	int *pColors = ( int * ) dstColors;
-	unsigned char invModulate[3];
-	int c;
+	unsigned char invModulate[4];
 
 	if ( !backEnd.currentEntity ) {
 		return;
@@ -752,14 +750,11 @@ void RB_CalcColorFromOneMinusEntity( unsigned char *dstColors ) {
 	invModulate[2] = 255 - backEnd.currentEntity->e.shaderRGBA[2];
 	invModulate[3] = 255 - backEnd.currentEntity->e.shaderRGBA[3];  // this trashes alpha, but the AGEN block fixes it
 
-	c = *( int * ) invModulate;
-
-	for ( i = 0; i < tess.numVertexes; i++, pColors++ )
+	for ( i = 0; i < tess.numVertexes; i++, dstColors += 4 )
 	{
-		*pColors = *( int * ) invModulate;
+		memcpy( dstColors, invModulate, sizeof( invModulate ) );
 	}
 }
-
 /*
 ** RB_CalcAlphaFromEntity
 */

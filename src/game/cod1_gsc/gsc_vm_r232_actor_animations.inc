@@ -99,13 +99,13 @@ static int r243_command_vm_private(const void*p,size_t n){
  (r243CommandActive&&Cod1ModelStringOverlap(p,n,r243CommandActive,sizeof(*r243CommandActive)));
 }
 static int r243_command_scope(R243CommandCall*c){
- GscRuntime*r;Task*t;int i,found=0;
+ GscRuntime*r;Task*t;int found=0;
  if(!c||c!=r243CommandActive||c->cancelled||c->lease.flagged_all!=2||
  c->expected.method!=GSC_ACTOR_ANIMATION_FLAGGED_ALL||!c->request||memcmp(c->request,&c->expected,sizeof(c->expected)))return 0;
  r=c->lease.runtime;t=c->lease.task;
  if(!actor_animation_scope(&c->lease)||!r->program->flagged_all_selected||r->program!=c->program||
  r->program->function_program_token!=c->programToken||!r237_owner_current(r,c->timeRoot))return 0;
- for(i=0;i<r->task_count;i++)if(task_at(r,i)==t){found=1;break;}
+ found=task_member(r,t);
  return found&&t->status==TASK_READY&&!t->context_retired&&t->depth==c->depth&&t->depth>0&&t->depth<=MAX_FRAMES&&
  &t->frames[t->depth-1]==c->frame&&c->frame->fn==c->fn&&c->frame->pc==c->pc;
 }

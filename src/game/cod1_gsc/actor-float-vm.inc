@@ -30,7 +30,7 @@ int R243RuntimeSelectActorFloat(GscRuntime*r,const R243ActorFloatHost*input){
  r->actor_float_host=h;r->actor_float_mask=mask;r->actor_float_enabled=1;return 1;
 }
 static int r243_actor_float_scope(R243ActorFloatCall*c){
- const R243ActorFloatIdentity*i;GscRuntime*r;Task*t;int n,found=0;
+ const R243ActorFloatIdentity*i;GscRuntime*r;Task*t;int found=0;
  if(!c||c!=r243ActorFloatActive||c->cancelled||memcmp(&c->id,&c->seal,sizeof(c->id))||memcmp(&c->q,&c->expected,sizeof(c->q)))return 0;
  i=&c->seal;r=i->r;t=i->t;
  if(!r||!r->started||!r->advancing||r->error[0]||!r->actor_float_enabled||!r->actor_float_busy||!r->entity_method_busy||
@@ -38,7 +38,7 @@ static int r243_actor_float_scope(R243ActorFloatCall*c){
     r->array_token!=i->runtime||r->now_ms!=i->now||r->executing_task!=t||!animation_namespace_scope(r)||
     r->animation_namespace.identity!=i->catalog||!r237_owner_current(r,i->timeRoot)||
     memcmp(&r->actor_float_host,&i->host,sizeof(i->host))||memcmp(&r->anim_data,&i->map,sizeof(i->map)))return 0;
- for(n=0;n<r->task_count;n++)if(task_at(r,n)==t){found=1;break;}
+ found=task_member(r,t);
  return found&&t&&t->serial==i->serial&&t->status==TASK_READY&&!t->context_retired&&t->depth==i->depth&&
   t->depth>0&&t->depth<=MAX_FRAMES&& &t->frames[t->depth-1]==i->f&&i->f->fn==i->fn&&i->f->pc==i->pc;
 }

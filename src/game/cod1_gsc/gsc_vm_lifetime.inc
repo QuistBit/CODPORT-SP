@@ -8,6 +8,19 @@ static Task *task_at(const GscRuntime *r,int n) {
     if(n<GSC_LIFETIME_TASK_CAPACITY)return r->lifetime_tasks[n];
     return r->extra_tasks[n-GSC_LIFETIME_TASK_CAPACITY];
 }
+/* Compare pointer values only: never dereference a borrowed Task until
+ * membership is established. Stable directories, no persistent index. */
+static int task_member(const GscRuntime *r,const Task *task) {
+    int n, count=r->task_count;
+    if(!r->lifetime_enabled) {
+        for(n=0;n<count;n++)if(&r->tasks[n]==task)return 1;
+    } else {
+        int embedded=count<GSC_LIFETIME_TASK_CAPACITY?count:GSC_LIFETIME_TASK_CAPACITY;
+        for(n=0;n<embedded;n++)if(r->lifetime_tasks[n]==task)return 1;
+        for(n=0;n<count-embedded;n++)if(r->extra_tasks[n]==task)return 1;
+    }
+    return 0;
+}
 static void task_results_clear(Task *task) {
     if(task->results)GSC_RUNTIME_FREE(task->results);
     task->results=NULL;
@@ -37,10 +50,22 @@ static Task *task_acquire(GscRuntime *r,int line) {
         /* Reserve serial UINT64_MAX as the deterministic exhaustion sentinel.
          * Never wrap to an earlier birth order, including after a slot dies. */
         if(r->next_serial==UINT64_MAX) {rfail(r,line,"task serial exhausted");return NULL;}
-        for(n=0;n<r->task_count;n++) {
-            Task *candidate=task_at(r,n);
-            if(candidate->status==TASK_DEAD&&candidate!=r->executing_task&&!candidate->host_entry_pins&&!candidate->retained_owner_refs) {
-                task=candidate;break;
+        /* Both directories contain stable task pointers. Scan each contiguous
+         * range directly, retaining the lowest eligible physical slot. No
+         * persistent free list: callbacks may change pins and owner refs. */
+        {
+            int embedded_count=r->task_count<GSC_LIFETIME_TASK_CAPACITY?r->task_count:GSC_LIFETIME_TASK_CAPACITY;
+            for(n=0;n<embedded_count;n++) {
+                Task *candidate=r->lifetime_tasks[n];
+                if(candidate->status==TASK_DEAD&&candidate!=r->executing_task&&!candidate->host_entry_pins&&!candidate->retained_owner_refs) {
+                    task=candidate;break;
+                }
+            }
+            if(!task)for(n=0;n<r->task_count-embedded_count;n++) {
+                Task *candidate=r->extra_tasks[n];
+                if(candidate->status==TASK_DEAD&&candidate!=r->executing_task&&!candidate->host_entry_pins&&!candidate->retained_owner_refs) {
+                    task=candidate;break;
+                }
             }
         }
         if(!task) {

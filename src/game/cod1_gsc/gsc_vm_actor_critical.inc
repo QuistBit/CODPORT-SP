@@ -28,12 +28,12 @@ static int r243_critical_vm_private(const void*p,size_t n){
  (r243CriticalVMActive&&Cod1ModelStringOverlap(p,n,r243CriticalVMActive,sizeof(*r243CriticalVMActive)));
 }
 static int r243_critical_vm_scope(R243CriticalVMCall*c){
- GscRuntime*r;Task*t;int i,found=0;
+ GscRuntime*r;Task*t;int found=0;
  if(!c||c!=r243CriticalVMActive||c->cancelled)return 0;r=c->r;t=c->task;
  if(!r||r->error[0]||!r->actor_critical_enabled||!r->entity_method_busy||r->program!=c->program||!r->program->actor_critical_selected||
  r->program->function_program_token!=c->programToken||r->array_token!=c->instance||r->now_ms!=c->now||r->executing_task!=t||
  memcmp(&r->actor_critical,&c->host,sizeof(c->host))||memcmp(&c->borrowed,&c->owner,sizeof(c->owner))||memcmp(&c->call,&c->expected,sizeof(c->call)))return 0;
- for(i=0;i<r->task_count;i++)if(task_at(r,i)==t){found=1;break;}
+ found=task_member(r,t);
  return found&&t->serial==c->serial&&t->status==TASK_READY&&!t->context_retired&&t->depth==c->depth&&t->depth>0&&t->depth<=MAX_FRAMES&&
  &t->frames[t->depth-1]==c->frame&&c->frame->fn==c->fn&&c->frame->pc==c->pc;
 }

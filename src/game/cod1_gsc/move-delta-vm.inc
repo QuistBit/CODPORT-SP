@@ -33,7 +33,7 @@ int R243RuntimeSelectMoveDelta(GscRuntime*r,const R243MoveDeltaHost*input){
  r->move_delta=host;r->move_delta_enabled=1;return 1;
 }
 static int move_delta_scope(MoveDeltaCall*c){
- const MoveDeltaIdentity*i;GscRuntime*r;Task*t;int n,member=0;
+ const MoveDeltaIdentity*i;GscRuntime*r;Task*t;int member=0;
  if(!c||move_delta_active!=c||c->cancelled||memcmp(&c->id,&c->seal,sizeof(c->id))||
     memcmp(&c->request,&c->expected,sizeof(c->request)))return 0;
  i=&c->seal;r=i->r;t=i->t;
@@ -43,7 +43,7 @@ static int move_delta_scope(MoveDeltaCall*c){
     !animation_namespace_scope(r)||r->animation_namespace.identity!=i->catalog||
     r->executing_task!=t||!r237_owner_current(r,i->timeRoot)||memcmp(&r->move_delta,&i->host,sizeof(i->host))||
     memcmp(&r->anim_data,&i->map,sizeof(i->map)))return 0;
- for(n=0;n<r->task_count;n++)if(task_at(r,n)==t){member=1;break;}
+ member=task_member(r,t);
  if(!member||!t||t->serial!=i->serial||t->status!=TASK_READY||t->context_retired||
     t->depth!=i->depth||t->depth<1||t->depth>MAX_FRAMES||&t->frames[t->depth-1]!=i->f||
     i->f->fn!=i->fn||i->f->pc!=i->pc)return 0;

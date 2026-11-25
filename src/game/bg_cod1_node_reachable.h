@@ -5,33 +5,37 @@
  * Preserve original74920 ordering; a platform qsort changes equal candidates.
  * Sorting loop is the retained, qualified node-sort implementation specialized
  * to8-byte candidates and this native comparator. */
-static int C1NRCompare(const C1NQCandidate*p,int a,int b,const unsigned char*records){
- unsigned aa=C1NQU16(records+p[a].node*116+0x20),bb=C1NQU16(records+p[b].node*116+0x20);
+static int C1NRCompare(const C1NQCandidate*p,int a,int b,const unsigned char*flags){
+ unsigned aa=flags[p[a].node],bb=flags[p[b].node];
  if(!aa&&bb)return 1;if(aa&&!bb)return -1;
  return p[a].distanceSquared<p[b].distanceSquared?-1:1;
 }
 static void C1NRSwap(C1NQCandidate*p,int a,int b){C1NQCandidate v=p[a];p[a]=p[b];p[b]=v;}
 static void C1NRSort(C1NQCandidate*p,unsigned count,const unsigned char*records){
+ unsigned char flags[2048];unsigned k;
  int lo=0,hi,mid,l,r,max,i,n=0,los[32],his[32];if(count<2)return;hi=(int)count-1;
+ /* Candidate IDs are validated by C1NQQuery before sorting. Only the
+  * zero/nonzero class is used by the native comparator. */
+ for(k=0;k<count;k++)flags[p[k].node]=(unsigned char)(C1NQU16(records+p[k].node*116+0x20)!=0);
  for(;;){
   if(hi-lo+1<=8){
-   while(hi>lo){max=lo;for(i=lo+1;i<=hi;i++)if(C1NRCompare(p,i,max,records)>0)max=i;C1NRSwap(p,max,hi);hi--;}
+   while(hi>lo){max=lo;for(i=lo+1;i<=hi;i++)if(C1NRCompare(p,i,max,flags)>0)max=i;C1NRSwap(p,max,hi);hi--;}
   }else{
    mid=lo+(hi-lo+1)/2;
-   if(C1NRCompare(p,lo,mid,records)>0)C1NRSwap(p,lo,mid);
-   if(C1NRCompare(p,lo,hi,records)>0)C1NRSwap(p,lo,hi);
-   if(C1NRCompare(p,mid,hi,records)>0)C1NRSwap(p,mid,hi);
+   if(C1NRCompare(p,lo,mid,flags)>0)C1NRSwap(p,lo,mid);
+   if(C1NRCompare(p,lo,hi,flags)>0)C1NRSwap(p,lo,hi);
+   if(C1NRCompare(p,mid,hi,flags)>0)C1NRSwap(p,mid,hi);
    l=lo;r=hi;
    for(;;){
-    if(mid>l){do{l++;}while(l<mid&&C1NRCompare(p,l,mid,records)<=0);}
-    if(mid<=l){do{l++;}while(l<=hi&&C1NRCompare(p,l,mid,records)<=0);}
-    do{r--;}while(r>mid&&C1NRCompare(p,r,mid,records)>0);
+    if(mid>l){do{l++;}while(l<mid&&C1NRCompare(p,l,mid,flags)<=0);}
+    if(mid<=l){do{l++;}while(l<=hi&&C1NRCompare(p,l,mid,flags)<=0);}
+    do{r--;}while(r>mid&&C1NRCompare(p,r,mid,flags)>0);
     if(l>r)break;
     C1NRSwap(p,l,r);if(mid==r)mid=l;
    }
    r++;
-   if(mid<r){do{r--;}while(r>mid&&C1NRCompare(p,r,mid,records)==0);}
-   if(mid>=r){do{r--;}while(r>lo&&C1NRCompare(p,r,mid,records)==0);}
+   if(mid<r){do{r--;}while(r>mid&&C1NRCompare(p,r,mid,flags)==0);}
+   if(mid>=r){do{r--;}while(r>lo&&C1NRCompare(p,r,mid,flags)==0);}
    if(r-lo>=hi-l){if(lo<r){los[n]=lo;his[n++]=r;}if(l<hi){lo=l;continue;}}
    else{if(l<hi){los[n]=l;his[n++]=hi;}if(lo<r){hi=r;continue;}}
   }

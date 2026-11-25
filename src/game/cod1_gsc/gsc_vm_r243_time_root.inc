@@ -37,76 +37,74 @@ static R243TimeRoot *r243_time_root_find(const GscRuntime *r){
 }
 /* A registered object or nonempty root/teardown state NEVER downgrades to
  * legacy inline storage merely because controller_enabled was changed. */
-static int r243_time_root_required(const GscRuntime *r){
- if(!r)return 0;
- if(r243_time_root_find(r))return 1;
- return r243_controller_lane_selected(r)||r->r243_time_root!=NULL||r->r243_time_root_teardown;
+/* A lookup result is reusable only inside a callback-free operation.
+ * Never infer legacy mode from a failed physical binding of a registered root. */
+static int r243_time_root_required_found(const GscRuntime *r,const R243TimeRoot *a){
+ return a||r243_controller_lane_selected(r)||r->r243_time_root!=NULL||r->r243_time_root_teardown;
 }
-/* Pure physical Runtime/program/allocation binding. No callbacks, errors,
- * controller selection, map/actor certificate, Task status/count or array
- * token. Closing object still physically exists. Runtime must be valid. */
-static R243TimeRoot *r243_time_root_physical(const GscRuntime *r){
- R243TimeRoot *a=r243_time_root_find(r);
- if(!a)return NULL;
- /* Membership found before reading even the candidate pointer value. */
- if(r->r243_time_root!=a||a->runtime!=r||!a->program||a->program!=r->program||
-    !a->incarnation||a->incarnation==UINT64_MAX)return NULL;
- return a;
+static int r243_time_root_required(const GscRuntime *r){
+ return r&&r243_time_root_required_found(r,r243_time_root_find(r));
+}
+static int r243_time_root_physical_found(const GscRuntime *r,const R243TimeRoot *a){
+ return a&&r->r243_time_root==a&&a->runtime==r&&a->program&&a->program==r->program&&
+    a->incarnation&&a->incarnation!=UINT64_MAX;
+}
+static int r243_time_root_active_found(const GscRuntime *r,const R243TimeRoot *a){
+ return r243_time_root_physical_found(r,a)&&r243_controller_lane_selected(r)&&
+    !r->r243_time_root_teardown&&!a->closing;
 }
 static uint64_t r237_owner_stamp(const GscRuntime *r){
- R243TimeRoot *a;
- if(!r||!r243_time_root_required(r))return 0; /* actual legacy stamp0 */
- a=r243_time_root_physical(r);return a?a->incarnation:0;
+ R243TimeRoot *a=r243_time_root_find(r);
+ return r243_time_root_physical_found(r,a)?a->incarnation:0;
 }
-/* Active storage binding only, NOT complete gameplay authority. In
- * particular no error[] gate: genuine private phase6 abort can restoreH into
- * the SAME owned root while error is sticky. Public queue/entry/drain must
- * retain their own current/error/one-use-dispatch preconditions. */
+/* Active storage binding only, not complete gameplay authority. Sticky
+ * errors do not prevent private phase6 restoration into the same root. */
 static int r237_owner_current(const GscRuntime *r,uint64_t seal){
  R243TimeRoot *a;
  if(!r)return 0;
- if(!r243_time_root_required(r))return seal==0;
- a=r243_time_root_physical(r);
- return a&&r243_controller_lane_selected(r)&&!r->r243_time_root_teardown&&!a->closing&&
-  seal!=0&&a->incarnation==seal;
+ a=r243_time_root_find(r);
+ if(!r243_time_root_required_found(r,a))return seal==0;
+ return r243_time_root_active_found(r,a)&&seal!=0&&a->incarnation==seal;
 }
 static int r237_bucket(const GscRuntime *r){
- uint64_t seal;R243TimeRoot *a;
+ R243TimeRoot *a;
  if(!r)return -1;
- if(!r243_time_root_required(r))return r->r237_vm_bucket_ms;
- a=r243_time_root_physical(r);seal=a?a->incarnation:0;
- return r237_owner_current(r,seal)?a->bucket:-1;
+ a=r243_time_root_find(r);
+ if(!r243_time_root_required_found(r,a))return r->r237_vm_bucket_ms;
+ return r243_time_root_active_found(r,a)?a->bucket:-1;
 }
 static uint64_t r237_insertion_next(const GscRuntime *r){
- uint64_t seal;R243TimeRoot *a;
+ R243TimeRoot *a;
  if(!r)return 0;
- if(!r243_time_root_required(r))return r->r237_next_insertion;
- a=r243_time_root_physical(r);seal=a?a->incarnation:0;
- return r237_owner_current(r,seal)?a->next_insertion:0;
+ a=r243_time_root_find(r);
+ if(!r243_time_root_required_found(r,a))return r->r237_next_insertion;
+ return r243_time_root_active_found(r,a)?a->next_insertion:0;
 }
-/* Private trusted cursor transition only; no public clock-rewind API. Caller
- * supplies its captured stamp, and independently validates exact native
- * P/H transition and request/callback stage. No native busy grant is added. */
+/* Private trusted cursor transition; caller retains native phase authority. */
 static int r237_bucket_set(GscRuntime *r,int value,uint64_t expected){
  R243TimeRoot *a;
- if(!r||value<0||value>INT32_C(0xffffff)||!r237_owner_current(r,expected))return 0;
- if(!r243_time_root_required(r)){r->r237_vm_bucket_ms=value;return 1;}
- a=r243_time_root_physical(r);if(!a)return 0;
+ if(!r||value<0||value>INT32_C(0xffffff))return 0;
+ a=r243_time_root_find(r);
+ if(!r243_time_root_required_found(r,a)){
+  if(expected)return 0;
+  r->r237_vm_bucket_ms=value;return 1;
+ }
+ if(!r243_time_root_active_found(r,a)||!expected||a->incarnation!=expected)return 0;
  a->bucket=value;return 1;
 }
-/* Queue caller has already established full gameplay/native-stage authority
- * and availability. Claim exactly ONE insertion, no task/queue fabrication. */
+/* Claim exactly one insertion; no task/queue fabrication. No callbacks on
+ * the successful path, so the validated lookup remains current until write. */
 static uint64_t r237_insertion_claim(GscRuntime *r,int line){
- R243TimeRoot *a;uint64_t next,seal;
+ R243TimeRoot *a;uint64_t next;int required;
  if(!r)return 0;
- seal=r237_owner_stamp(r);
- if(!r237_owner_current(r,seal)){rfail(r,line,"R243 time-root allocation is missing or retired");return 0;}
- next=r237_insertion_next(r);
+ a=r243_time_root_find(r);required=r243_time_root_required_found(r,a);
+ if(required&&!r243_time_root_active_found(r,a)){
+  rfail(r,line,"R243 time-root allocation is missing or retired");return 0;
+ }
+ next=required?a->next_insertion:r->r237_next_insertion;
  if(!next||next==UINT64_MAX){rfail(r,line,"R237 bucket insertion identity exhausted");return 0;}
- if(r243_time_root_required(r)){
-  a=r243_time_root_physical(r);if(!a)return 0;
-  a->next_insertion=next+1;
- }else r->r237_next_insertion=next+1;
+ if(required)a->next_insertion=next+1;
+ else r->r237_next_insertion=next+1;
  return next;
 }
 
@@ -161,7 +159,7 @@ static int r243_time_root_free_begin(GscRuntime *r){
  * Same Task may have multiple true owners: release exactly one ref per row.
  * Quiescent free must already have excluded any transient MainCapture. */
 static void r243_time_root_release_mains(GscRuntime *r){
- unsigned i;int n,limit,found;R243ControllerMainOwner *o;Task *t;
+ unsigned i;int limit,found;R243ControllerMainOwner *o;Task *t;
  if(!r||!r->r243_time_root_teardown)return;
  if(r->r243_controller_capture){rfail(r,0,"R243 MAIN transfer still owns transient storage at teardown");return;}
  limit=task_directory_limit(r);
@@ -170,7 +168,7 @@ static void r243_time_root_release_mains(GscRuntime *r){
   o=r->r243_controller_main+i;if(!o->used)continue;
   t=o->task;found=0;
   /* Pointer-value membership is established BEFORE supplied Task dereference. */
-  if(t)for(n=0;n<r->task_count;n++)if(task_at(r,n)==t){found=1;break;}
+  if(t)found=task_member(r,t);
   if(found&&o->task_serial&&t->serial==o->task_serial&&t->retained_owner_refs)
    --t->retained_owner_refs;
   else rfail(r,0,"R243 MAIN teardown retained-reference identity changed");

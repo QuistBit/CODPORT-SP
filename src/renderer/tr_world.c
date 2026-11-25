@@ -653,7 +653,11 @@ static void R_MarkLeaves( void ) {
 
 	vis = R_ClusterPVS( tr.viewCluster );
 
-	for ( i = 0,leaf = tr.world->nodes ; i < tr.world->numnodes ; i++, leaf++ ) {
+	/* BSP59 decision nodes have cluster == -1 (R_LoadCod1SpatialWorld).
+	 * Only leaves can seed PVS marking; their parent walk still marks nodes.
+	 * Keep the legacy RTCW scan: its loader does not assign node clusters. */
+	i = tr.world->isCod1 ? tr.world->numDecisionNodes : 0;
+	for ( leaf = tr.world->nodes + i ; i < tr.world->numnodes ; i++, leaf++ ) {
 		cluster = leaf->cluster;
 		if ( cluster < 0 || cluster >= tr.world->numClusters ) {
 			continue;

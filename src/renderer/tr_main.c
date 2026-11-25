@@ -367,7 +367,7 @@ int R_CullLocalBox( vec3_t bounds[2] ) {
 	int i, j;
 	vec3_t transformed[8];
 	float dists[8];
-	vec3_t v;
+	vec3_t xPrefix[2];
 	cplane_t    *frust;
 	int anyBack;
 	int front, back;
@@ -376,16 +376,17 @@ int R_CullLocalBox( vec3_t bounds[2] ) {
 		return CULL_CLIP;
 	}
 
-	// transform into world space
-	for ( i = 0 ; i < 8 ; i++ ) {
-		v[0] = bounds[i & 1][0];
-		v[1] = bounds[( i >> 1 ) & 1][1];
-		v[2] = bounds[( i >> 2 ) & 1][2];
-
-		VectorCopy( tr.or.origin, transformed[i] );
-		VectorMA( transformed[i], v[0], tr.or.axis[0], transformed[i] );
-		VectorMA( transformed[i], v[1], tr.or.axis[1], transformed[i] );
-		VectorMA( transformed[i], v[2], tr.or.axis[2], transformed[i] );
+	// The eight corners share two X and four XY prefixes. Keep each
+	// VectorMA stage (and its float assignment) in the original order.
+	for ( i = 0; i < 2; i++ ) {
+		VectorMA( tr.or.origin, bounds[i][0], tr.or.axis[0], xPrefix[i] );
+	}
+	for ( i = 0; i < 4; i++ ) {
+		VectorMA( xPrefix[i & 1], bounds[( i >> 1 ) & 1][1], tr.or.axis[1], transformed[i] );
+	}
+	// Fill the upper four corners before overwriting the shared XY values.
+	for ( i = 7; i >= 0; i-- ) {
+		VectorMA( transformed[i & 3], bounds[( i >> 2 ) & 1][2], tr.or.axis[2], transformed[i] );
 	}
 
 	// check against frustum planes
