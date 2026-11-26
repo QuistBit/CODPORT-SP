@@ -29,6 +29,7 @@
 #include "../g_cod1_grenade_player.h"
 
 static uint64_t cod1EntityEpoch;
+#include "g_cod1_anim_profile31.inc"
 static uint32_t cod1EntityGeneration[MAX_GENTITIES];
 static unsigned char cod1EntityRetired[MAX_GENTITIES];
 static int cod1EntityReady, cod1EntityActive;

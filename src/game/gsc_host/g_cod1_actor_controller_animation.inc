@@ -76,10 +76,12 @@ static int ActorControllerAnimationDeliver(void*context,const cod1ActorFaceNote_
 static int ActorControllerAnimationStep(void*u,const GscActorControllerRequest*input,
  const GscActorControllerAnimationServices*services,char*error,size_t cap,int(*current)(void*),void*context){
  C1ControllerAnimationOperation*o=&cod1ControllerAnimation;GscEntityRef owner;int resume,iterations=0,ok=0;(void)u;
+ uint64_t profileStart=0,profileEpoch=0;unsigned profileOwner=0;int profileNow=0;
  if(o->busy){o->cancelled=1;return 0;}
  if(cod1ControllerOperation.busy){cod1ControllerOperation.cancelled=1;return 0;}
  if(!input||!services||!current||!ActorGoalBuffers(input,sizeof(*input),NULL,0,error,cap)||
     !ActorGoalBuffers(services,sizeof(*services),NULL,0,error,cap))return 0;
+ profileEpoch=cod1EntityEpoch;profileOwner=input->entity.slot;profileNow=input->now_ms;profileStart=ActorProfileStart31();
  memset(o,0,sizeof(*o));o->q=*input;o->input=input;o->api=*services;o->borrowed=services;
  if(!o->api.current||!o->api.run_current||!o->api.notify||input->now_ms!=level.time||
     !ActorGoalLease(&input->entity,&o->lease))goto done;
@@ -103,7 +105,9 @@ static int ActorControllerAnimationStep(void*u,const GscActorControllerRequest*i
   }
  }while(resume);
  ok=ActorControllerAnimationCurrent(o);
-done:memset(o,0,sizeof(*o));return ok;
+done:memset(o,0,sizeof(*o));
+ if(profileStart)ActorProfileFinish31(0,profileStart,profileEpoch,profileNow,profileOwner,ok,(unsigned)iterations,0,0,0);
+ return ok;
 }
 
 #include "g_cod1_actor_source_dispatch.inc"

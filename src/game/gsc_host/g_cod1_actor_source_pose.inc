@@ -1,8 +1,10 @@
 #include "../../qcommon/cod1_actor_source_pose14.h"
 static int ActorSourcePoseSample(const GscEntityRef*input,int now,c1asp14Packet_t*out,int(*current)(void*),void*ctx){
  C1FaceFrameCall*c=NULL;c1asp14Packet_t packet;c1asp14Decoded_t decoded;unsigned i;int ok=0,jumper=0;uint64_t jumpRevision=0;
+ uint64_t profileStart=0,profileEpoch=0;unsigned profileOwner=0,profileLadder=0;
  if(!input||!out||!current||!ActorGoalBuffers(input,sizeof(*input),out,sizeof(*out),NULL,0)||ActorGenericPrivate(out,sizeof(*out)))return 0;
- c=ActorFaceFrameAcquire(input,now,current,ctx,0);if(!c)return 0;
+ profileEpoch=cod1EntityEpoch;profileOwner=input->slot;profileStart=ActorProfileStart31();
+ c=ActorFaceFrameAcquire(input,now,current,ctx,0);if(!c){if(profileStart)ActorProfileFinish31(1,profileStart,profileEpoch,now,profileOwner,0,0,0,0,0);return 0;}
  jumper=TrainingJumperAllocation(input);if(jumper)jumpRevision=cod1JumperResources.revision;
  if(!c->frame.scripted||c->saved.tick!=now||
     !(jumper?ActorFaceFrameClosure(&c->baseline):ActorLocomotionClosure(&c->baseline)))goto done;
@@ -17,7 +19,12 @@ static int ActorSourcePoseSample(const GscEntityRef*input,int now,c1asp14Packet_
  if(current(ctx)!=1||!ActorFaceFrameFence(c)||
     (jumper&&(!TrainingJumperAllocation(input)||!ActorJumperReady(c->epoch)||cod1JumperResources.revision!=jumpRevision)))goto done;
  *out=packet;ok=1;
-done:ActorFaceFrameLeave(c);return ok;
+done:ActorFaceFrameLeave(c);
+ if(profileStart){
+  if(ok)for(i=0;i<decoded.count;i++)profileLadder|=C1AP31_Ladder(decoded.node[i].ordinal);
+  ActorProfileFinish31(1,profileStart,profileEpoch,now,profileOwner,ok,0,ok?decoded.count:0,ok?decoded.leaves:0,profileLadder);
+ }
+ return ok;
 }
 
 /* Extend the verified run profile only when the actual body subtree has a
