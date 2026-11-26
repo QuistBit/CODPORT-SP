@@ -55,9 +55,24 @@ def ordered(row, names):
     return values[0] >= 0 and all(a <= b for a, b in zip(values, values[1:]))
 
 
-def analyze(engine_path, cg_path):
+LADDER = ('pred_pm_flags', 'snap_pm_flags', 'predict_mask',
+          'predict_begin', 'predict_end')
+PMF_LADDER = 4  # src/game/bg_public.h, not eFlags
+
+
+def ladder_state(row):
+    if row['pred_pm_flags'] < 0 or row['snap_pm_flags'] < 0:
+        return None
+    pred = bool(row['pred_pm_flags'] & PMF_LADDER)
+    snap = bool(row['snap_pm_flags'] & PMF_LADDER)
+    return ('on' if pred else 'off') if pred == snap else 'mixed'
+
+
+def analyze(engine_path, cg_path, ladder=None):
     em, er = read_trace(engine_path, ENGINE, True)
-    cm, cr = read_trace(cg_path, CG)
+    if ladder not in (None, 'on', 'off', 'mixed'):
+        raise ValueError('unknown ladder group')
+    cm, cr = read_trace(cg_path, CG + LADDER if ladder else CG)
     if any(int(em[k]) != int(cm[k]) for k in IDENTITY):
         raise ValueError('capture identity mismatch')
     hz = int(em['frequency'])
@@ -81,6 +96,18 @@ def analyze(engine_path, cg_path):
                 r['keycatchers'] or not ordered(r, seq)):
             prev = None
             continue
+        lo = bisect.bisect_left(starts, r['cg0_begin'])
+        hi = bisect.bisect_right(starts, r['cg0_end'])
+        matches = [c for c in cg_rows[lo:hi] if c['mask'] & 31 == 31 and
+                   c['end'] <= r['cg0_end'] and c['stereo'] == r['cg0_stereo'] and
+                   c['input_time'] == r['cg0_time'] and
+                   ordered(c, ('begin', 'view', 'world', 'hud_begin', 'hud_end', 'end'))]
+        if ladder:
+            if (len(matches) != 1 or ladder_state(matches[0]) != ladder or
+                    matches[0]['predict_mask'] != 3 or not ordered(matches[0],
+                    ('begin', 'predict_begin', 'predict_end', 'view'))):
+                prev = None
+                continue
         eligible += 1
         for name, a, b in (
             ('frame_envelope', 'begin', 'end'),
@@ -97,16 +124,12 @@ def analyze(engine_path, cg_path):
                 r['begin'] >= prev['end']):
             add('swap_cadence', prev['swap_exit'], r['swap_exit'])
         prev = r
-        lo = bisect.bisect_left(starts, r['cg0_begin'])
-        hi = bisect.bisect_right(starts, r['cg0_end'])
-        matches = [c for c in cg_rows[lo:hi] if c['mask'] & 31 == 31 and
-                   c['end'] <= r['cg0_end'] and c['stereo'] == r['cg0_stereo'] and
-                   c['input_time'] == r['cg0_time'] and
-                   ordered(c, ('begin', 'view', 'world', 'hud_begin', 'hud_end', 'end'))]
         if len(matches) != 1:
             continue
         paired += 1
         c = matches[0]
+        if ladder:
+            add('cg_prediction', c['predict_begin'], c['predict_end'])
         for name, a, b in (
             ('cg_to_view', 'begin', 'view'),
             ('cg_view_to_world', 'view', 'world'),
@@ -124,11 +147,15 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('engine_csv')
     p.add_argument('cgame_csv')
+    p.add_argument('--ladder', choices=('on', 'off', 'mixed'),
+                   help='R29: select matched frames by predicted/snapshot pm_flags')
     args = p.parse_args()
     try:
-        total, eligible, paired, metrics = analyze(args.engine_csv, args.cgame_csv)
+        total, eligible, paired, metrics = analyze(args.engine_csv, args.cgame_csv, args.ladder)
     except (OSError, ValueError, KeyError) as exc:
         p.exit(2, 'R241 capture rejected: ' + str(exc) + '\n')
+    if args.ladder:
+        print('ladder group=' + args.ladder + ' (matched frames only)')
     print(f'engine rows={total}, eligible={eligible}, paired={paired}')
     print('wall ms; inclusive intervals overlap; do not sum columns')
     print(f'{"interval":24} {"n":>6} {"median":>10} {"p95":>10} {"max":>10}')

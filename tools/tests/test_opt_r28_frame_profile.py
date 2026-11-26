@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from opt_r28_frame_profile import CG, ENGINE, analyze
+from opt_r28_frame_profile import CG, ENGINE, LADDER, analyze
 
 
 class FrameProfileTest(unittest.TestCase):
@@ -83,6 +83,40 @@ class FrameProfileTest(unittest.TestCase):
             self.pair([self.frame(1)], [self.draw(1), self.draw(2, input_time=10)])
         with self.assertRaises(ValueError):
             self.pair([self.frame(1, swap_exit=16)], [self.draw(1)])
+
+    def ladder_pair(self, changes):
+        frames = [self.frame(i + 1, i * 30) for i in range(len(changes))]
+        rows = []
+        for i, change in enumerate(changes):
+            row = self.draw(i + 1, i * 30)
+            row.update(pred_pm_flags=4, snap_pm_flags=4, predict_mask=3,
+                       predict_begin=8 + i * 30, predict_end=9 + i * 30)
+            row.update(change)
+            rows.append(row)
+        self.write(self.engine, ENGINE, frames)
+        self.write(self.cg, CG + LADDER, rows)
+
+    def test_ladder_groups_and_cadence(self):
+        self.ladder_pair([{}, {}, {'pred_pm_flags': 1, 'snap_pm_flags': 2},
+                          {}, {'snap_pm_flags': 0}])
+        total, eligible, paired, metrics = analyze(self.engine, self.cg, 'on')
+        self.assertEqual((total, eligible, paired), (5, 3, 3))
+        self.assertEqual(metrics['cg_prediction'], [1, 1, 1])
+        self.assertEqual(metrics['swap_cadence'], [30])
+        for group in ('off', 'mixed'):
+            self.assertEqual(analyze(self.engine, self.cg, group)[:3], (5, 1, 1))
+        self.assertEqual(analyze(self.engine, self.cg)[:3], (5, 5, 5))
+        self.assertNotIn('cg_prediction', analyze(self.engine, self.cg)[3])
+
+    def test_ladder_requires_valid_state_and_timing(self):
+        self.ladder_pair([{'snap_pm_flags': -1}, {'predict_mask': 1},
+                          {'predict_end': 1000}, {}])
+        self.assertEqual(analyze(self.engine, self.cg, 'on')[:3], (4, 1, 1))
+        with self.assertRaises(ValueError):
+            analyze(self.engine, self.cg, 'off')
+        self.pair([self.frame(1)], [self.draw(1)])
+        with self.assertRaises(ValueError):
+            analyze(self.engine, self.cg, 'on')
 
     def test_reject_truncation_and_bad_columns(self):
         self.write(self.engine, ENGINE, [self.frame(1)])
