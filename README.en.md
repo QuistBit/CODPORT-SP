@@ -38,6 +38,18 @@ python tools\run_training.py --game "C:\Games\Call of Duty"
 
 For another build directory, pass `--output` when building and `--build` when launching.
 
+### Comparing execution modes — R30
+
+The R30 source adds `--thread-mode single` and `--thread-mode multi` (the default). The build script also copies **Play-Training-Single.cmd** and **Play-Training-Multi.cmd** into the build directory. Choose the mode before starting the game.
+
+```bat
+python tools\build_windows.py --output build_opt_r30
+python tools\run_training.py --build build_opt_r30 --game "C:\Games\Call of Duty" --thread-mode single
+python tools\run_training.py --build build_opt_r30 --game "C:\Games\Call of Duty" --thread-mode multi
+```
+
+`single` executes game/render computation on the main thread; `multi` enables the renderer thread and one shared pool for independent model, lighting and collision-loading work. Logging policy is identical; audio and log service threads can still exist in `single`. R30 still needs a native MSVC build and gameplay validation; the published 724A archive does not contain these changes. See [OPT R30](docs/optimization/OPT_R30_MULTITHREADING.md) for scope, checks and the comparison procedure.
+
 The [game module](src/game) contains actor movement, weapon handling and the [GSC runtime](src/game/cod1_gsc). The [client game module](src/cgame) handles poses, mission audio, the HUD and the compass. The port uses the original game's `maps/training.gsc` mission script and the [Training configuration](main/training_player.cfg).
 
 Based on [id Software's RTCW-SP source release](https://github.com/id-Software/RTCW-SP). The engine license and third-party notices are in [COPYING.txt](COPYING.txt) and [README.txt](README.txt).

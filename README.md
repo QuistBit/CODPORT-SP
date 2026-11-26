@@ -44,6 +44,18 @@ python tools\run_training.py --game "C:\Games\Call of Duty"
 
 Для другого каталога сборки передайте `--output` при сборке и `--build` при запуске. Порт использует оригинальный сценарий `maps/training.gsc` из установленной игры и [конфигурацию Training](main/training_player.cfg).
 
+### Сравнение режимов обработки — R30
+
+В исходники R30 добавлены два режима одной сборки: `--thread-mode single` и `--thread-mode multi` (по умолчанию). Сборщик также копирует в каталог сборки **Play-Training-Single.cmd** и **Play-Training-Multi.cmd** для запуска двойным щелчком. Режим выбирается до запуска игры.
+
+```bat
+python tools\build_windows.py --output build_opt_r30
+python tools\run_training.py --build build_opt_r30 --game "C:\Games\Call of Duty" --thread-mode single
+python tools\run_training.py --build build_opt_r30 --game "C:\Games\Call of Duty" --thread-mode multi
+```
+
+`single` выполняет игровые и графические расчёты на главном потоке; `multi` включает поток рендера и общий пул для независимых расчётов моделей, освещения и части загрузки столкновений. Логирование одинаково в обоих режимах; вспомогательные потоки звука и журнала могут работать и в `single`. Изменения R30 ещё требуют сборки MSVC и проверки в игре; опубликованный архив 724A их не содержит. Область изменений, проверки и порядок сравнения описаны в [OPT R30](docs/optimization/OPT_R30_MULTITHREADING.md).
+
 [Серверная игровая логика](src/game) отвечает за движение, оружие и [исполнение GSC](src/game/cod1_gsc). [Клиентская игровая логика](src/cgame) отвечает за позы, звук миссии и интерфейс. [Клиент движка](src/client), [сервер](src/server) и [рендерер](src/renderer) загружают и воспроизводят уровень.
 
 Проект основан на [исходном релизе RTCW-SP от id Software](https://github.com/id-Software/RTCW-SP). Условия распространения движка и уведомления сторонних авторов сохранены в [COPYING.txt](COPYING.txt) и [README.txt](README.txt).

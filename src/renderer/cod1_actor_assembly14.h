@@ -78,25 +78,56 @@ static int C1AA14_Bone(const c1aa14Resource_t *r,unsigned index,cv14Transform *w
 
 #ifdef C1AA14_PARALLEL
 #include "../qcommon/cod1_jobs.h"
-typedef struct {const cnSourceSurface_t *source;const cnSkinPose_t *pose;c1aa14Surface_t *dest;unsigned surfaces;} c1aa14SkinJob;
+typedef struct {const c1aa14Resource_t *source;const cnSkinPose_t *pose;c1aa14Surface_t *dest;unsigned surfaces;} c1aa14SkinJob;
 static int C1AA14_SkinJob(void *context,unsigned first,unsigned end){
  c1aa14SkinJob *job=(c1aa14SkinJob*)context;unsigned j,s,base=0;int k;float norm;
  for(s=0;s<job->surfaces && base<end;s++){
+ const c1aa14Surface_t *surface=job->dest+s;
+ const cnSourceSurface_t *source=job->source->part[surface->part].mesh.surfaces+surface->localSurface;
  unsigned n=(unsigned)job->dest[s].vertices,lo=first>base?first-base:0,hi=end-base<n?end-base:n;
  for(j=lo;j<hi;j++){
   c1aa14Vertex_t *v=job->dest[s].vertex+j;
-  if(!CN_SourceSkinPrepared(job->source[s].verts+j,job->pose,v->xyz,v->normal))return 0;
+  if(!CN_SourceSkinPrepared(source->verts+j,job->pose+surface->part,v->xyz,v->normal))return 0;
   norm=0;for(k=0;k<3;k++)norm+=v->normal[k]*v->normal[k];if(!(norm>1e-15f&&norm<1e15f))return 0;norm=sqrtf(norm);
   for(k=0;k<3;k++)v->normal[k]/=norm;
-  memcpy(v->uv,job->source[s].verts[j].uv,8);
+  memcpy(v->uv,source->verts[j].uv,8);
  }base+=n;
  }return 1;
+}
+/* All parts of one object now share a join. Up to eight bounded skeletons
+ * and prepared poses live on the capture caller's stack, never a worker's.
+ * This is about 265 KiB on x86/SSE builds; the executable reserves an 8 MiB main
+ * stack. No allocation or mutable source data is exposed to the workers. */
+static int C1AA14_TrySkin(const c1aa14Resource_t *r,const c1dtTopology_t *topology,
+                        const cv14Transform *world,c1aa14Frame_t *frame,
+                        unsigned char *cursor,unsigned vertices){
+ cv14Skeleton posed[C1AA14_PARTS];cnSkinPose_t pose[C1AA14_PARTS];
+ c1aa14SkinJob job;c1jFp before;unsigned p,s,i,at=0;
+ C1J_FpGet(&before);
+ if((before.control&63)!=63||(before.mxcsr&0x1f80)!=0x1f80)return 0;
+ for(p=0;p<r->partCount;p++){
+  const c1aa14Part_t *part=&r->part[p];unsigned first=topology->models[p].firstBone;
+  posed[p]=part->mesh.bind;frame->firstBone[p]=first;frame->partBones[p]=topology->models[p].boneCount;
+  strcpy(frame->modelName[p],part->source.modelName);
+  for(i=0;i<(unsigned)posed[p].n;i++){posed[p].world[i]=world[first+i];strcpy(frame->boneName[first+i],posed[p].name[i]);}
+  if(!CN_SourcePrepareSkinPose(posed+p,pose+p))goto fallback;
+  for(s=0;s<(unsigned)part->mesh.numSurfaces;s++,at++){
+   const cnSourceSurface_t *source=&part->mesh.surfaces[s];c1aa14Surface_t *dest=frame->surface+at;
+   dest->part=p;dest->localSurface=s;strcpy(dest->material,part->model.skin[0][s]);dest->vertices=source->numVerts;dest->indexes=source->numIndexes;
+   dest->vertex=(c1aa14Vertex_t*)cursor;cursor+=C1AA14_Align((size_t)dest->vertices*sizeof(*dest->vertex));
+   dest->index=(unsigned short*)cursor;cursor+=C1AA14_Align((size_t)dest->indexes*sizeof(*dest->index));
+   memcpy(dest->index,source->indexes,(size_t)dest->indexes*sizeof(*dest->index));
+  }
+ }
+ job.source=r;job.pose=pose;job.dest=frame->surface;job.surfaces=at;
+ if(C1J_ParallelFor(vertices,512,C1AA14_SkinJob,&job))return 1;
+fallback:C1J_FpRestore(&before,0,0);return 0;
 }
 #endif
 
 static c1aa14Frame_t *C1AA14_CaptureCheckedMode(const c1aa14Resource_t *r,const cv14Transform *currentBodyWorld,unsigned bodyBones,cnsArena_t *arena,int full,int sealed,const unsigned char (*weightProof)[XM14_SURFS]){
  c1dtModelInput_t inputs[C1AA14_PARTS];c1dtTopology_t topology;cv14Transform world[C1DT_MAX_BONES];unsigned char state[C1DT_MAX_BONES];
- c1aa14Frame_t *frame;unsigned char *cursor;size_t bytes,before;unsigned p,s,i,ns=0,at=0;int j,k,w;float norm;cv14Skeleton posed;cnSkinPose_t skinPose;
+ c1aa14Frame_t *frame;unsigned char *cursor;size_t bytes,before;unsigned p,s,i,ns=0,at=0,totalVertices=0;int j,k,w,parallelDone=0;float norm;cv14Skeleton posed;cnSkinPose_t skinPose;
  unsigned proofBit=0;
 #if defined(_MSC_VER) && defined(_M_IX86)
  if(weightProof){unsigned short cw;__asm fnstcw cw
@@ -123,6 +154,7 @@ static c1aa14Frame_t *C1AA14_CaptureCheckedMode(const c1aa14Resource_t *r,const 
       !memchr(part->model.skin[0][s],0,XM14_NAME)||!part->model.skin[0][s][0]||C1AA14_Overlap(arena->data,arena->capacity,surface->verts,surface->numVerts*sizeof(*surface->verts))||
       C1AA14_Overlap(arena->data,arena->capacity,surface->indexes,surface->numIndexes*sizeof(*surface->indexes))||
       !C1AA14_Add(&bytes,C1AA14_Align((size_t)surface->numVerts*sizeof(c1aa14Vertex_t)))||!C1AA14_Add(&bytes,C1AA14_Align((size_t)surface->numIndexes*sizeof(unsigned short))))return NULL;
+   totalVertices+=(unsigned)surface->numVerts;
    if(!sealed)for(j=0;j<surface->numIndexes;j++)if(surface->indexes[j]>=surface->numVerts)return NULL;
    if(!weightProof||!(weightProof[p][s]&proofBit))for(j=0;j<surface->numVerts;j++){
     const cnSourceVertex_t *vertex=&surface->verts[j];double sum=0;
@@ -136,23 +168,20 @@ static c1aa14Frame_t *C1AA14_CaptureCheckedMode(const c1aa14Resource_t *r,const 
  before=arena->used;frame=(c1aa14Frame_t*)CNS_Alloc(arena,bytes,16);if(!frame)return NULL;memset(frame,0,bytes);frame->partCount=r->partCount;frame->boneCount=topology.boneCount;frame->surfaceCount=ns;
  memcpy(frame->world,world,topology.boneCount*sizeof(*world));frame->surface=(c1aa14Surface_t*)((unsigned char*)frame+C1AA14_Align(sizeof(*frame)));cursor=(unsigned char*)frame+C1AA14_Align(sizeof(*frame))+C1AA14_Align((size_t)ns*sizeof(*frame->surface));
  for(k=0;k<3;k++){frame->bounds[0][k]=FLT_MAX;frame->bounds[1][k]=-FLT_MAX;}
+#ifdef C1AA14_PARALLEL
+ if(totalVertices>512&&C1J_Enabled())parallelDone=C1AA14_TrySkin(r,&topology,world,frame,cursor,totalVertices);
+#endif
  for(p=0;p<r->partCount;p++){
-  const c1aa14Part_t *part=&r->part[p];unsigned first=topology.models[p].firstBone,firstSurface=at,totalVertices=0;int parallelDone=0;posed=part->mesh.bind;
+  const c1aa14Part_t *part=&r->part[p];unsigned first=topology.models[p].firstBone,firstSurface=at;
+  if(!parallelDone){posed=part->mesh.bind;
   frame->firstBone[p]=first;frame->partBones[p]=topology.models[p].boneCount;strcpy(frame->modelName[p],part->source.modelName);
   for(i=0;i<(unsigned)posed.n;i++){posed.world[i]=world[first+i];strcpy(frame->boneName[first+i],posed.name[i]);}
   if(!CN_SourcePrepareSkinPose(&posed,&skinPose))goto bad;
   for(s=0;s<(unsigned)part->mesh.numSurfaces;s++,at++){
    const cnSourceSurface_t *source=&part->mesh.surfaces[s];c1aa14Surface_t *dest=frame->surface+at;dest->part=p;dest->localSurface=s;strcpy(dest->material,part->model.skin[0][s]);dest->vertices=source->numVerts;dest->indexes=source->numIndexes;
    dest->vertex=(c1aa14Vertex_t*)cursor;cursor+=C1AA14_Align((size_t)dest->vertices*sizeof(*dest->vertex));dest->index=(unsigned short*)cursor;cursor+=C1AA14_Align((size_t)dest->indexes*sizeof(*dest->index));memcpy(dest->index,source->indexes,(size_t)dest->indexes*sizeof(*dest->index));
-   totalVertices+=(unsigned)dest->vertices;
   }
-#ifdef C1AA14_PARALLEL
-   if(totalVertices>=512 && C1J_Enabled()){
-    c1aa14SkinJob job;c1jFp before;job.source=part->mesh.surfaces;job.pose=&skinPose;job.dest=frame->surface+firstSurface;job.surfaces=(unsigned)part->mesh.numSurfaces;C1J_FpGet(&before);
-    parallelDone=C1J_ParallelFor(totalVertices,512,C1AA14_SkinJob,&job);
-    if(!parallelDone)C1J_FpRestore(&before,0,0);
-   }
-#endif
+  }else at+=(unsigned)part->mesh.numSurfaces;
    /* Immutable source/pose and disjoint vertex slots until join. Bounds retain
     * the original vertex order, including the tie behaviour of signed zero. */
   for(s=0;s<(unsigned)part->mesh.numSurfaces;s++){

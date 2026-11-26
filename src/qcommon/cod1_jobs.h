@@ -2,13 +2,23 @@
 #define COD1_JOBS_H
 #include <stddef.h>
 #include <stdio.h>
-/* Main-thread configuration and synchronous fork/join. Callbacks own disjoint
+/* Configuration, shutdown, status and log lifecycle belong to the main thread.
+ * ParallelFor accepts synchronous submissions from the main or render thread.
+ * One shared pool serves at most one batch; a contending or nested submission
+ * executes serially without waiting for admission. Callbacks own disjoint
  * outputs and may only read immutable inputs: no engine/GL/FS/GSC callbacks.
  * Contexts remain owned by the caller until ParallelFor returns. */
 typedef int (*c1jJobFn)(void *context,unsigned first,unsigned end);
 /* available is the effective CPU budget: it may be a conservative lower
  * bound when WOW64 cannot distinguish a folded legacy affinity mask. */
-typedef struct {unsigned logical,available,budget,created;unsigned long long batches,workerChunks,callerChunks;} c1jStatus;
+typedef struct {
+ unsigned logical,available,budget,created;
+ unsigned long long batches,workerChunks,callerChunks;
+ /* Cumulative counters. Non-owner batches include render-thread submissions;
+  * contentionSerial includes nested worker submissions. nestedSerial counts
+  * recursion by the submitter already holding the admission lock. */
+ unsigned long long nonOwnerBatches,contentionSerial,nestedSerial;
+} c1jStatus;
 typedef struct {unsigned short control,status;unsigned mxcsr;} c1jFp;
 void C1J_Configure(int enabled,int requestedWorkers);
 void C1J_Shutdown(void);

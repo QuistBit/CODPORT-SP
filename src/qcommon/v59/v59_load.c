@@ -57,6 +57,63 @@ static void build_mesh(loader*l,surface*s,const float(*v)[3],int nv,const uint16
  for(k=0;k<3;k++){s->bounds[k]=262144;s->bounds[k+3]=-262144;for(i=0;i<nv;i++){if(v[i][k]<s->bounds[k])s->bounds[k]=v[i][k];if(v[i][k]>s->bounds[k+3])s->bounds[k+3]=v[i][k];}}
  if(ne>l->w->maxedges)l->w->maxedges=ne;if(m->nv>l->w->maxvertices)l->w->maxvertices=m->nv;
 }
+/* Each job owns its failure boundary and CRT allocation list. In particular it
+ * never links allocations into the shared world and never calls the legacy
+ * curve builder. Keep build_mesh itself unchanged: topology, edge ordering and
+ * original floating-point operation order are identical in both modes. */
+#define V59_MESH_BATCH 64
+typedef struct {
+ loader load;v59_world owned;surface *out;const unsigned char *record;
+ const float (*vertices)[3];const uint16_t *indices;const material *materials;
+ int nv,ni,nm,done,failed;char error[128];
+} mesh_job;
+static void build_mesh_job(mesh_job *job){
+ loader *l=&job->load;surface *s=job->out;const unsigned char *p=job->record;
+ int a,b;uint32_t d,e;
+ if(setjmp(l->fail)){job->failed=1;job->done=1;return;}
+ a=u16(p+4);b=u16(p+6);d=u32(p+8);e=u32(p+12);
+ s->material=u16(p);s->type=p[2];
+ if(s->material>=job->nm)bad(l,"surface material outside lump");
+ s->contents=job->materials[s->material].contents;
+ range(l,d,a,job->nv);range(l,e,b,job->ni);
+ build_mesh(l,s,job->vertices+d,a,job->indices+e,b);
+ job->done=1;
+}
+static int build_mesh_jobs(void *context,unsigned first,unsigned end){
+ mesh_job *jobs=(mesh_job*)context;unsigned i;
+ for(i=first;i<end;i++)if(!jobs[i].done)build_mesh_job(jobs+i);
+ /* A malformed mesh is recorded in its own slot. Let every dispatched mesh
+  * finish so the loading thread can select the first error in source order. */
+ return 1;
+}
+static void build_mesh_batch(loader *l,const unsigned char *records,int first,int count,
+ const float (*vertices)[3],int nv,const uint16_t *indices,int ni,v59_parallel_fn dispatch){
+ mesh_job jobs[V59_MESH_BATCH];int i;allocation *tail;
+ memset(jobs,0,sizeof(jobs));
+ for(i=0;i<count;i++){
+  mesh_job *j=jobs+i;j->load.w=&j->owned;j->load.err=j->error;j->load.errsize=sizeof(j->error);
+  j->out=l->w->surfaces+first+i;j->record=records+(first+i)*16;
+  j->vertices=vertices;j->indices=indices;j->materials=l->w->materials;
+  j->nv=nv;j->ni=ni;j->nm=l->w->nm;
+ }
+ (void)dispatch((unsigned)count,1,build_mesh_jobs,jobs);
+ /* Synchronous dispatch may decline or finish only part of the batch. Retain
+  * completed work and finish missing slots exactly once; never replay an
+  * owned allocation list or a partially constructed mesh. */
+ build_mesh_jobs(jobs,0,(unsigned)count);
+ for(i=0;i<count;i++){
+  v59_world *owned=&jobs[i].owned;
+  if(owned->allocs){
+   for(tail=owned->allocs;tail->next;tail=tail->next);
+   tail->next=l->w->allocs;l->w->allocs=owned->allocs;owned->allocs=NULL;
+  }
+  if(owned->maxedges>l->w->maxedges)l->w->maxedges=owned->maxedges;
+  if(owned->maxvertices>l->w->maxvertices)l->w->maxvertices=owned->maxvertices;
+ }
+ /* Ownership has already moved to l->w, including partially built failures,
+  * before its normal longjmp cleanup can free the complete world. */
+ for(i=0;i<count;i++)if(jobs[i].failed)bad(l,jobs[i].error);
+}
 static int depth_check(loader*l,int i,unsigned char*color,int *depth){int j,d=0;if(i<0)return 0;
  if(color[i]==1)bad(l,"cyclic BSP tree");if(color[i]==2)return depth[i];color[i]=1;
  /* Limit recursion before descending: cycles and pathological chains rejected. */
@@ -67,7 +124,7 @@ static int depth_check(loader*l,int i,unsigned char*color,int *depth){int j,d=0;
 V59_API void v59_free(v59_world*w){allocation*a;int i;if(!w)return;
  if(w->surfaces)for(i=0;i<w->ns;i++){free(w->surfaces[i].c.planes);free(w->surfaces[i].c.facets);}
  while(w->allocs){a=w->allocs;w->allocs=a->next;free(a->ptr);free(a);}free(w);}
-static v59_world *v59_load_native(const void *data,size_t size,char *error,size_t error_size){
+static v59_world *v59_load_native(const void *data,size_t size,char *error,size_t error_size,v59_parallel_fn dispatch){
  loader*l=calloc(1,sizeof(*l));v59_world*w;const unsigned char *p,*bsides,*bbrushes;int i,j,k,count,nside,nv,ni;uint32_t first=0;float(*verts)[3];uint16_t*indices;
  if(error&&error_size)error[0]=0;
  if(!l)return NULL;l->data=data;l->size=size;l->err=error;l->errsize=error?error_size:0;
@@ -97,6 +154,14 @@ static v59_world *v59_load_native(const void *data,size_t size,char *error,size_
  p=lump(l,26,2,&ni);indices=take(l,ni,sizeof(*indices));for(i=0;i<ni;i++)indices[i]=u16(p+i*2);
  p=lump(l,24,16,&w->ns);w->surfaces=take(l,w->ns,sizeof(*w->surfaces));
  for(i=0;i<w->ns;i++){
+  if(dispatch && p[i*16+2]==1){
+   int end=i+1;
+   while(end<w->ns && end-i<V59_MESH_BATCH && p[end*16+2]==1)end++;
+   if(end-i>1){
+    build_mesh_batch(l,p,i,end-i,(const float(*)[3])verts,nv,indices,ni,dispatch);
+    i=end-1;continue;
+   }
+  }
   surface*s=&w->surfaces[i];int a=u16(p+i*16+4),b=u16(p+i*16+6);uint32_t d=u32(p+i*16+8),e=u32(p+i*16+12);s->material=u16(p+i*16);s->type=p[i*16+2];
   if(s->material>=w->nm)bad(l,"surface material outside lump");s->contents=w->materials[s->material].contents;
   if(s->type==1){range(l,d,a,nv);range(l,e,b,ni);build_mesh(l,s,(const float(*)[3])(verts+d),a,indices+e,b);}
@@ -123,7 +188,7 @@ static v59_world *v59_load_native(const void *data,size_t size,char *error,size_
 /* Construction is original engine PC53, round-to-nearest. The caller may
  * be a renderer with PC24/FTZ or retain live x87 values. Preserve its complete
  * x87 state and MXCSR on success and on every checked loader failure. */
-V59_API v59_world *v59_load(const void *data,size_t size,char *error,size_t error_size){
+V59_API v59_world *v59_load_parallel(const void *data,size_t size,char *error,size_t error_size,v59_parallel_fn dispatch){
  v59_world *result;
 #if defined(_MSC_VER) && defined(_M_IX86)
  unsigned char saved[108],discard[108];unsigned mx,nearMx=0x1f80;unsigned short cw=0x027f;
@@ -131,14 +196,17 @@ V59_API v59_world *v59_load(const void *data,size_t size,char *error,size_t erro
  __asm stmxcsr mx
  __asm fldcw cw
  __asm ldmxcsr nearMx
- result=v59_load_native(data,size,error,error_size);
+ result=v59_load_native(data,size,error,error_size,dispatch);
  __asm fnsave discard
  __asm ldmxcsr mx
  __asm frstor saved
 #else
- result=v59_load_native(data,size,error,error_size);
+ result=v59_load_native(data,size,error,error_size,dispatch);
 #endif
  return result;
+}
+V59_API v59_world *v59_load(const void *data,size_t size,char *error,size_t error_size){
+ return v59_load_parallel(data,size,error,error_size,NULL);
 }
 V59_API int v59_model_count(const v59_world*w){return w?w->nmodels:0;}
 

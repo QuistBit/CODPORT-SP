@@ -4,6 +4,7 @@
  */
 #include "cm_local.h"
 #include "cm_patch.h"
+#include "cod1_jobs.h"
 #include "../game/bg_cod1_impact.h"
 
 static void CM_LoadV59InlineCurves(void);
@@ -68,7 +69,8 @@ qboolean CM_HasV59(void) {
 
 qboolean CM_LoadV59(const void *bytes, int length, char *error, int capacity) {
     CM_ClearV59();
-    codWorld = v59_load(bytes, (size_t)length, error, (size_t)capacity);
+    codWorld = v59_load_parallel(bytes, (size_t)length, error, (size_t)capacity,
+        C1J_Enabled() ? C1J_ParallelFor : NULL);
     if (!codWorld) return qfalse;
     codContext = v59_context_create(codWorld);
     if (!codContext) {

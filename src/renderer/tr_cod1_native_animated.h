@@ -7,6 +7,7 @@
 
 #include "cod1_native_anim_eval.h"
 #include "cod1_native_source14.h"
+#include "tr_cod1_skin_batch.h"
 
 #define COD1_NATIVE_ANIM_LIMIT (64u * 1024u * 1024u)
 #define COD1_NATIVE_ANIM_ALIGN 16u
@@ -194,6 +195,46 @@ done:
     return ok;
 }
 
+/* Hands and weapon share one synchronous batch. These two caller-owned
+ * skeletons outlive every worker; no model/global skeleton is modified. */
+static int R_Cod1TryAnimatedSkin(const cod1NativeAnimated_t *animated,
+                                const cv14Transform *final,
+                                cod1NativeSubmission_t *out) {
+    cv14Skeleton posed[2];
+    c1DrawSkinSpan span[COD1_NATIVE_MAX_SURFACES];
+    unsigned vertices = 0, surfaces = 0;
+    int part, i;
+    if (!C1J_Enabled()) return 0;
+    for (part = 0; part < 2; part++) {
+        posed[part] = animated->part[part].bind;
+        if (posed[part].n < 1 || posed[part].n > CV14_BONES ||
+            animated->base[part] < 0 ||
+            animated->base[part] > out->numBones - posed[part].n ||
+            animated->part[part].numSurfaces < 1 ||
+            animated->part[part].numSurfaces > XM14_SURFS) return 0;
+        for (i = 0; i < posed[part].n; i++)
+            posed[part].world[i] = final[animated->base[part] + i];
+        for (i = 0; i < animated->part[part].numSurfaces; i++) {
+            const cnSourceSurface_t *src = &animated->part[part].surfaces[i];
+            srfTriangles_t *tri;
+            if (surfaces >= (unsigned)out->numSurfaces || surfaces >= COD1_NATIVE_MAX_SURFACES)
+                return 0;
+            tri = out->surfaces + surfaces;
+            if (!src->verts || !tri->verts || src->numVerts < 1 ||
+                src->numVerts > CV14_VERTS || src->numVerts != tri->numVerts) return 0;
+            span[surfaces].source = src->verts;
+            span[surfaces].pose = posed + part;
+            span[surfaces].vertices = tri->verts;
+            span[surfaces].count = (unsigned)src->numVerts;
+            span[surfaces].white = 0;
+            vertices += (unsigned)src->numVerts;
+            surfaces++;
+        }
+    }
+    if (surfaces != (unsigned)out->numSurfaces) return 0;
+    return R_Cod1TryDrawSkin(span, surfaces, vertices);
+}
+
 cod1NativeSubmission_t *R_Cod1NativeCaptureAnimated(model_t *model,
                                                cnsArena_t *arena,
                                                const cod1NativeAnimState_t *state) {
@@ -202,7 +243,7 @@ cod1NativeSubmission_t *R_Cod1NativeCaptureAnimated(model_t *model,
     cod1NativeSubmission_t *out;
     cv14Transform final[CV14_BONES];
     cv14Skeleton posed;
-    int part, i, j, k, surface = 0, tags;
+    int part, i, j, k, surface = 0, tags, parallelDone;
     size_t arenaStart;
     if (!animated || !arena || animated->definition.bones != fixed->numBones ||
         !CN_Evaluate(&animated->definition, state, final)) return NULL;
@@ -210,6 +251,7 @@ cod1NativeSubmission_t *R_Cod1NativeCaptureAnimated(model_t *model,
     out = R_Cod1NativeCapture(model, arena);
     if (!out) return NULL;
     memcpy(out->boneWorld, final, (size_t)out->numBones * sizeof(*final));
+    parallelDone = C1J_Enabled() ? R_Cod1TryAnimatedSkin(animated, final, out) : 0;
     ClearBounds(out->bounds[0], out->bounds[1]);
     for (part = 0; part < 2; part++) {
         posed = animated->part[part].bind;
@@ -221,9 +263,11 @@ cod1NativeSubmission_t *R_Cod1NativeCaptureAnimated(model_t *model,
             ClearBounds(tri->bounds[0], tri->bounds[1]);
             for (j = 0; j < src->numVerts; j++) {
                 drawVert_t *v = &tri->verts[j];
-                if (!CN_SourceSkinVertex(&src->verts[j], &posed, v->xyz, v->normal)) goto failed;
-                VectorNormalize(v->normal);
-                for (k = 0; k < 2; k++) v->st[k] = src->verts[j].uv[k];
+                if (!parallelDone) {
+                    if (!CN_SourceSkinVertex(&src->verts[j], &posed, v->xyz, v->normal)) goto failed;
+                    VectorNormalize(v->normal);
+                    for (k = 0; k < 2; k++) v->st[k] = src->verts[j].uv[k];
+                }
                 AddPointToBounds(v->xyz, tri->bounds[0], tri->bounds[1]);
                 AddPointToBounds(v->xyz, out->bounds[0], out->bounds[1]);
             }

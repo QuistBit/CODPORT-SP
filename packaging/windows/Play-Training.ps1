@@ -1,4 +1,7 @@
-param([string]$GameDirectory)
+param(
+    [string]$GameDirectory,
+    [ValidateSet('single', 'multi')][string]$ThreadMode = 'multi'
+)
 $ErrorActionPreference = 'Stop'
 
 if (-not $GameDirectory) {
@@ -22,6 +25,9 @@ foreach ($required in @('CoDSP.exe', 'main\pak0.pk3')) {
 }
 $runtime = Join-Path $PSScriptRoot 'bin'
 $profile = Join-Path $PSScriptRoot 'profile'
+$smp = if ($ThreadMode -eq 'single') { '0' } else { '1' }
+$workers = if ($ThreadMode -eq 'single') { '0' } else { '-1' }
+$compute = if ($ThreadMode -eq 'single') { '0' } else { '1' }
 $engineArgs = @(
     '+set', 'fs_basepath', $profile, '+set', 'fs_homepath', $profile,
     '+set', 'fs_cdpath', $game, '+set', 'fs_game', 'main',
@@ -30,8 +36,12 @@ $engineArgs = @(
     '+set', 'r_ignorehwgamma', '1', '+set', 'sys_cpuMHz', '3000',
     '+set', 'vm_game', '0', '+set', 'vm_cgame', '0', '+set', 'vm_ui', '0',
     '+set', 'com_introplayed', '1', '+set', 'com_maxfps', '60',
+    '+set', 'r_smp', $smp, '+set', 'r_swapInterval', '0',
+    '+set', 'com_multithreading', $compute, '+set', 'com_workerThreads', $workers,
+    '+set', 'com_asyncLog', '1',
     '+set', 'developer', '0', '+set', 'logfile', '2', '+exec', 'training_player.cfg'
 )
+Write-Host "Threading mode: $ThreadMode"
 Push-Location -LiteralPath $runtime
 try {
     & (Join-Path $runtime 'WolfSP.exe') @engineArgs | Out-Null

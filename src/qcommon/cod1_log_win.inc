@@ -45,7 +45,9 @@ static unsigned __stdcall C1L_Worker(void *unused){
 static void C1L_Init(void){if(!c1log.initialized){InitializeCriticalSection(&c1log.lock);InitializeCriticalSection(&c1log.producer);c1log.initialized=1;}}
 int C1L_Matches(FILE *file){return c1log.active&&file==c1log.file;}
 int C1L_Attach(FILE *file){
- if(!file||!C1J_Enabled())return 0;
+ /* Logging is independent of the compute pool, including its single-thread
+  * mode. The owner controls attachment through com_asyncLog and joins here. */
+ if(!file)return 0;
  if(C1L_Matches(file))return 1;
  if(c1log.active)return 0;
  if(C1L_FLUSH(file)!=0)return 0;

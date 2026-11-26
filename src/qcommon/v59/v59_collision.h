@@ -12,10 +12,19 @@
 #endif
 typedef struct v59_world v59_world;
 typedef struct v59_context v59_context;
-/* Map construction is serialized (the legacy facet builder has scratch globals).
+/* The legacy facet builder has scratch globals: callers serialize complete map
+ * loads. An optional synchronous dispatcher may build independent triangle
+ * meshes concurrently; curves and publication remain on the loading thread.
  * The loaded world is immutable. Independent contexts can query it concurrently.
  * Contexts must be destroyed before the world. No query-time allocations. */
 V59_API v59_world *v59_load(const void *bsp,size_t size,char *error,size_t error_size);
+typedef int (*v59_job_fn)(void *context,unsigned first,unsigned end);
+/* Dispatchers finish all started callbacks before returning and never assign
+ * an index twice. Unprocessed indexes (including a declined dispatch) are
+ * completed by the loading thread; callback errors are reported in map order. */
+typedef int (*v59_parallel_fn)(unsigned count,unsigned grain,v59_job_fn,void *context);
+V59_API v59_world *v59_load_parallel(const void *bsp,size_t size,char *error,
+    size_t error_size,v59_parallel_fn dispatch);
 V59_API void v59_free(v59_world *);
 V59_API v59_context *v59_context_create(const v59_world *);
 V59_API void v59_context_free(v59_context *);
