@@ -270,3 +270,35 @@ These tests validate build orchestration and argument/file handling. They do
 not execute Windows `cmd.exe`, Visual Studio discovery/initialization, Windows
 PowerShell 5.1, or MSVC. The Windows entry point and its 5.1-compatible API usage
 were also reviewed statically; an actual Windows build remains pending.
+
+### DroidDeck startup logging fix — 2026-11-26
+
+The supplied device log reaches a working 800x600 OpenGL context with Mesa Zink
+on Turnip and ends immediately after `GL_VERSION`. The next renderer diagnostic
+prints `GL_EXTENSIONS`. Its stored string can contain 4,095 bytes, while the
+renderer-to-client and common print buffers each hold 4,096 bytes. Adding the
+label and newline exceeded those buffers because both used unbounded formatting.
+This is a concrete code defect consistent with the observed log boundary; the
+device log does not contain an exception backtrace or the extension-list length.
+
+The renderer now prints that stored list in bounded pieces. `CL_RefPrintf`,
+`Com_Printf`, and `Com_DPrintf` also bound their formatting, including the extra
+color prefixes on warning/developer messages. The extension data used for
+capability detection and material selection is unchanged.
+
+`tools/tests/test_startup_logging.py` extracts the actual production functions
+and the startup diagnostic sequence, compiles them with in-memory console/log
+sinks, and checks complete output and continued execution after long extension
+lists. All 15 checks passed normally and with ASan/UBSan, including the maximum
+stored extension length, warning/developer forwarding, and literal percent
+characters. LeakSanitizer was disabled for the ptrace limitation described above.
+
+```sh
+python tools/tests/test_startup_logging.py
+ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 python tools/tests/test_startup_logging.py --sanitize
+```
+
+This validates the corrected print path, not a complete DroidDeck game launch.
+Rebuild from these sources and repeat the same device launch. The expected next
+log entries include `GL_EXTENSIONS` and `GL_MAX_TEXTURE_SIZE`; further startup
+failures must be investigated from the new log rather than assumed fixed here.

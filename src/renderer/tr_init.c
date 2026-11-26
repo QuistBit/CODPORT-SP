@@ -939,6 +939,28 @@ void GL_SetDefaultState( void ) {
 }
 
 
+/* Modern drivers can fill the entire extension-string buffer. Adding a
+ * label to that string exceeds the engine's print buffer, so preserve the
+ * complete diagnostic by emitting bounded pieces. Capability data stays
+ * unchanged; this only controls how it is printed. */
+static void R_PrintLongString( const char *text ) {
+	char chunk[1024];
+	size_t remaining = strlen( text );
+	size_t length;
+
+	while ( remaining ) {
+		length = remaining;
+		if ( length >= sizeof( chunk ) ) {
+			length = sizeof( chunk ) - 1;
+		}
+		memcpy( chunk, text, length );
+		chunk[length] = '\0';
+		ri.Printf( PRINT_ALL, "%s", chunk );
+		text += length;
+		remaining -= length;
+	}
+}
+
 /*
 ================
 GfxInfo_f
@@ -960,7 +982,9 @@ void GfxInfo_f( void ) {
 	ri.Printf( PRINT_ALL, "\nGL_VENDOR: %s\n", glConfig.vendor_string );
 	ri.Printf( PRINT_ALL, "GL_RENDERER: %s\n", glConfig.renderer_string );
 	ri.Printf( PRINT_ALL, "GL_VERSION: %s\n", glConfig.version_string );
-	ri.Printf( PRINT_ALL, "GL_EXTENSIONS: %s\n", glConfig.extensions_string );
+	ri.Printf( PRINT_ALL, "GL_EXTENSIONS: " );
+	R_PrintLongString( glConfig.extensions_string );
+	ri.Printf( PRINT_ALL, "\n" );
 	ri.Printf( PRINT_ALL, "GL_MAX_TEXTURE_SIZE: %d\n", glConfig.maxTextureSize );
 	ri.Printf( PRINT_ALL, "GL_MAX_ACTIVE_TEXTURES_ARB: %d\n", glConfig.maxActiveTextures );
 	ri.Printf( PRINT_ALL, "\nPIXELFORMAT: color(%d-bits) Z(%d-bit) stencil(%d-bits)\n", glConfig.colorBits, glConfig.depthBits, glConfig.stencilBits );
