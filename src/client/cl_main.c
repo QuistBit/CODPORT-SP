@@ -29,6 +29,7 @@ If you have questions concerning this license or the applicable additional terms
 // cl_main.c  -- client main loop
 
 #include "client.h"
+#include "../qcommon/cod1_load_profile.h"
 #include <limits.h>
 #include "cl_r241_frame_trace.inc"
 
@@ -1310,6 +1311,7 @@ Called when all downloading has been completed
 =================
 */
 void CL_DownloadsComplete( void ) {
+	cod1LoadProfile_t loadProfile;
 
 	// if we downloaded files we need to restart the file system
 	if ( clc.downloadRestart ) {
@@ -1324,6 +1326,8 @@ void CL_DownloadsComplete( void ) {
 		// so we don't want to load stuff yet
 		return;
 	}
+
+	Cod1LoadProfileBegin( &loadProfile );
 
 	// let the client game init and load data
 	cls.state = CA_LOADING;
@@ -1345,10 +1349,12 @@ void CL_DownloadsComplete( void ) {
 	// if this is a local client then only the client part of the hunk
 	// will be cleared, note that this is done after the hunk mark has been set
 	CL_FlushMemory();
+	Cod1LoadProfileMark( &loadProfile, "events_client_flush" );
 
 	// initialize the CGame
 	cls.cgameStarted = qtrue;
 	CL_InitCGame();
+	Cod1LoadProfileMark( &loadProfile, "cgame_init_inclusive" );
 
 	// set pure checksums
 	CL_SendPureChecksums();
@@ -1356,6 +1362,8 @@ void CL_DownloadsComplete( void ) {
 	CL_WritePacket();
 	CL_WritePacket();
 	CL_WritePacket();
+	Cod1LoadProfileMark( &loadProfile, "pure_checksums_packets" );
+	Cod1LoadProfileReport( &loadProfile, "client_load", cl.mapname );
 }
 
 /*
@@ -2225,7 +2233,9 @@ void QDECL CL_RefPrintf( int print_level, const char *fmt, ... ) {
 	char msg[MAXPRINTMSG];
 
 	va_start( argptr,fmt );
-	vsprintf( msg,fmt,argptr );
+	/* Driver diagnostics must never overrun the engine's print buffer. */
+	vsnprintf( msg, sizeof( msg ), fmt, argptr );
+	msg[sizeof( msg ) - 1] = '\0';
 	va_end( argptr );
 
 	if ( print_level == PRINT_ALL ) {

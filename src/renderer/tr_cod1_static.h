@@ -5,6 +5,7 @@
 #include "tr_cod1_lighting.h"
 #include <limits.h>
 #include "cod1_precalc.h"
+#include "cod1_static_bake_jobs.h"
 
 typedef struct {
     vec3_t origin, angles, scale, light;
@@ -188,7 +189,7 @@ static void R_Cod1StaticBake(const cod1StaticEntity *e,const xm14Mesh *mesh,shad
             source?source->candidates.remainingSky:0,fallback[2]);
     }
     for(i=0;i<mesh->ns;i++,out++){
-        const xm14Surface *src=&mesh->s[i];srfTriangles_t *tri;
+        const xm14Surface *src=&mesh->s[i];srfTriangles_t *tri;int parallelDone=0;
         memset(out,0,sizeof(*out));out->shader=skins[i];
         tri=ri.Hunk_Alloc(sizeof(*tri)+src->nv*sizeof(drawVert_t)+src->nt*3*sizeof(int),h_low);
         memset(tri,0,sizeof(*tri));tri->surfaceType=SF_TRIANGLES;tri->numVerts=src->nv;tri->numIndexes=src->nt*3;
@@ -198,22 +199,48 @@ static void R_Cod1StaticBake(const cod1StaticEntity *e,const xm14Mesh *mesh,shad
         if(source)tri->cod1ModelLightColors=R_Cod1ModelColorCacheAlloc(src->nv);
         tri->verts=(drawVert_t*)(tri+1);tri->indexes=(int*)(tri->verts+src->nv);out->data=(surfaceType_t*)tri;
         ClearBounds(tri->bounds[0],tri->bounds[1]);
+        /* Only fully prepared, independent vertex work enters the pool. An
+         * unsupported vertex replays the original ordered scalar path, where
+         * visibility fallback may call the engine and update its cache. */
+        if(src->nv>=512 && frame.valid && c1ModelContext.valid && C1J_Enabled()) {
+            c1StaticBakeJob job;c1jFp before;
+            job.source=src->v;job.vertices=tri->verts;
+            memcpy(job.origin,e->origin,sizeof(job.origin));
+            memcpy(job.scale,e->scale,sizeof(job.scale));
+            memcpy(job.precalc,e->light,sizeof(job.precalc));
+            memcpy(job.axis,axis,sizeof(job.axis));
+            job.light.frame=&frame;job.light.sine=c1ModelContext.sine;
+            job.light.fullbright=c1ModelContext.fullbright && c1ModelContext.fullbright->integer;
+            job.light.identity=(byte)tr.identityLightByte;
+            job.light.roundMode=job.light.fullbright?0:R_Cod1ModelRoundMode();
+            job.debugWhite=c1StaticLightDebug;
+            C1J_FpGet(&before);
+            /* Preserve original trap order across shading and visibility. */
+            if((before.control&63)==63 && (before.mxcsr&0x1f80)==0x1f80)
+                parallelDone=C1J_ParallelFor((unsigned)src->nv,256,C1StaticBake_Range,&job);
+            if(parallelDone)c1LitVerts+=src->nv;
+            else C1J_FpRestore(&before,0,0);
+        }
         for(j=0;j<src->nv;j++){
-            drawVert_t *v=&tri->verts[j];memset(v,0,sizeof(*v));
-            for(k=0;k<3;k++){
-                v->xyz[k]=e->origin[k];v->normal[k]=0;
-                for(q=0;q<3;q++){
-                    v->xyz[k]+=src->v[j].xyz[q]*e->scale[q]*axis[q][k];
-                    v->normal[k]+=src->v[j].normal[q]/e->scale[q]*axis[q][k];
+            if(!parallelDone) {
+                drawVert_t *v=&tri->verts[j];memset(v,0,sizeof(*v));
+                for(k=0;k<3;k++){
+                    v->xyz[k]=e->origin[k];v->normal[k]=0;
+                    for(q=0;q<3;q++){
+                        v->xyz[k]+=src->v[j].xyz[q]*e->scale[q]*axis[q][k];
+                        v->normal[k]+=src->v[j].normal[q]/e->scale[q]*axis[q][k];
+                    }
+                    v->color[k]=(byte)(255*(e->light[k]>1?1:e->light[k]));
                 }
-                v->color[k]=(byte)(255*(e->light[k]>1?1:e->light[k]));
+                VectorNormalize(v->normal);v->color[3]=255;
+                if(frame.valid && R_Cod1ShadePreparedVertex(&frame,v->xyz,v->normal,v->color))c1LitVerts++;
+                else {tri->cod1ModelLightBakedValid=qfalse;c1UncachedVerts++;R_Cod1LightVertex(v,e->light,fallback);}
+                if(c1StaticLightDebug)for(k=0;k<3;k++)v->color[k]=255;
+                v->st[0]=src->v[j].uv[0];v->st[1]=src->v[j].uv[1];
             }
-            VectorNormalize(v->normal);v->color[3]=255;
-            if(frame.valid && R_Cod1ShadePreparedVertex(&frame,v->xyz,v->normal,v->color))c1LitVerts++;
-            else {tri->cod1ModelLightBakedValid=qfalse;c1UncachedVerts++;R_Cod1LightVertex(v,e->light,fallback);}
-            if(c1StaticLightDebug)for(k=0;k<3;k++)v->color[k]=255;
-            v->st[0]=src->v[j].uv[0];v->st[1]=src->v[j].uv[1];
-            AddPointToBounds(v->xyz,tri->bounds[0],tri->bounds[1]);AddPointToBounds(v->xyz,bounds[0],bounds[1]);
+            /* Bounds remain in source order, including signed-zero ties. */
+            AddPointToBounds(tri->verts[j].xyz,tri->bounds[0],tri->bounds[1]);
+            AddPointToBounds(tri->verts[j].xyz,bounds[0],bounds[1]);
         }
         for(j=0;j<tri->numIndexes;j++)tri->indexes[j]=src->idx[j];
     }

@@ -42,6 +42,7 @@ cod1ActorDraw_t *R_Cod1ActorSkinLOD(
         const int selected[COD1_ACTOR_PARTS]);
 
 #ifdef COD1_ACTOR_CAPTURE_IMPLEMENTATION
+#include "tr_cod1_skin_batch.h"
 
 static int R_Cod1ActorBone(const cv14Skeleton *sk, const char *name) {
     int i;
@@ -172,6 +173,31 @@ static size_t R_Cod1ActorAlign(size_t n) {
 /* A single checked reservation owns the header, every surface, and all
  * skinned vertices. Index buffers and shader pointers remain immutable on
  * the model. On a bad source/pose, rollback happens before anything is drawn. */
+static int R_Cod1TryPilotSkin(const cod1ActorModel_t *resource,
+                             const cod1ActorSubmission_t *snapshot,
+                             const int selected[COD1_ACTOR_PARTS],
+                             unsigned char *cursor) {
+    c1DrawSkinSpan span[COD1_ACTOR_PARTS * XM14_SURFS];
+    unsigned surfaces = 0, vertices = 0;
+    int part, i;
+    if (!C1J_Enabled()) return 0;
+    for (part = 0; part < COD1_ACTOR_PARTS; part++) {
+        const cod1ActorLod_t *lod = &resource->part[part].lod[selected[part]];
+        for (i = 0; i < lod->numSurfaces; i++) {
+            const cod1ActorSurface_t *src = &lod->surface[i];
+            span[surfaces].source = src->verts;
+            span[surfaces].pose = &snapshot->part[part];
+            span[surfaces].vertices = (drawVert_t *)cursor;
+            span[surfaces].count = (unsigned)src->numVerts;
+            span[surfaces].white = 1;
+            cursor += (size_t)src->numVerts * sizeof(drawVert_t);
+            vertices += (unsigned)src->numVerts;
+            surfaces++;
+        }
+    }
+    return R_Cod1TryDrawSkin(span, surfaces, vertices);
+}
+
 cod1ActorDraw_t *R_Cod1ActorSkinLOD(
         const cod1ActorModel_t *resource,
         const cod1ActorSubmission_t *snapshot, cnsArena_t *arena,
@@ -179,7 +205,7 @@ cod1ActorDraw_t *R_Cod1ActorSkinLOD(
     cod1ActorDraw_t *draw;
     unsigned char *cursor;
     size_t bytes, vertices, before;
-    int part, i, j, k, count = 0, surface = 0;
+    int part, i, j, k, count = 0, surface = 0, parallelDone;
     if (!resource || !snapshot || !arena || !selected) return NULL;
     bytes = R_Cod1ActorAlign(sizeof(*draw));
     vertices = 0;
@@ -216,6 +242,7 @@ cod1ActorDraw_t *R_Cod1ActorSkinLOD(
     cursor = (unsigned char *)draw + R_Cod1ActorAlign(
         R_Cod1ActorAlign(sizeof(*draw)) +
         (size_t)count * sizeof(cod1ActorDrawSurface_t));
+    parallelDone = C1J_Enabled() ? R_Cod1TryPilotSkin(resource, snapshot, selected, cursor) : 0;
     ClearBounds(draw->bounds[0], draw->bounds[1]);
     for (part = 0; part < COD1_ACTOR_PARTS; part++) {
         const cod1ActorLod_t *lod = &resource->part[part].lod[selected[part]];
@@ -234,11 +261,13 @@ cod1ActorDraw_t *R_Cod1ActorSkinLOD(
             ClearBounds(tri->bounds[0], tri->bounds[1]);
             for (j = 0; j < src->numVerts; j++) {
                 drawVert_t *v = &tri->verts[j];
-                if (!CN_SourceSkinVertex(&src->verts[j], sk, v->xyz, v->normal))
-                    goto bad;
-                VectorNormalize(v->normal);
-                for (k = 0; k < 2; k++) v->st[k] = src->verts[j].uv[k];
-                v->color[0] = v->color[1] = v->color[2] = v->color[3] = 255;
+                if (!parallelDone) {
+                    if (!CN_SourceSkinVertex(&src->verts[j], sk, v->xyz, v->normal))
+                        goto bad;
+                    VectorNormalize(v->normal);
+                    for (k = 0; k < 2; k++) v->st[k] = src->verts[j].uv[k];
+                    v->color[0] = v->color[1] = v->color[2] = v->color[3] = 255;
+                }
                 AddPointToBounds(v->xyz, tri->bounds[0], tri->bounds[1]);
                 AddPointToBounds(v->xyz, draw->bounds[0], draw->bounds[1]);
             }

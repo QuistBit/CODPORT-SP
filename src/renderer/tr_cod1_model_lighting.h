@@ -9,6 +9,7 @@
 #include "cod1_model_light_candidates.h"
 #include "cod1_model_light_prepare.h"
 #include "cod1_model_light_shade_batch.h"
+#include "cod1_prepared_light_jobs.h"
 #if defined(_MSC_VER) && (defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP>=2))
 #include "cod1_light_quad347.h"
 #define C1Q347_ENABLED 1
@@ -285,7 +286,7 @@ qboolean R_Cod1StaticModelColors(const srfTriangles_t *surface,const trRefdef_t 
                                 const byte **rgba) {
     const cod1ModelLightSource_t *source;cod1ModelLightRuntime_t *runtime;
     cod1ModelLightColors_t *colors;cod1ModelLightKey_t key;
-    const c1mModelLightFrame *frame;byte *swap;int i;
+    const c1mModelLightFrame *frame;byte *swap;int i,parallelDone=0;
     if(!rgba)return qfalse;*rgba=NULL;
     if(c1StaticLightDebug || !surface || !(source=surface->cod1ModelLightSource) ||
        !c1ModelContext.valid || source->generation!=c1ModelContext.generation || source->candidates.unavailable ||
@@ -323,7 +324,24 @@ qboolean R_Cod1StaticModelColors(const srfTriangles_t *surface,const trRefdef_t 
         if(!colors->valid)return qfalse;*rgba=colors->active;return qtrue;
     }
     frame=&runtime->frame;c1ModelColorCacheRebuilds++;
-    for(i=0;i<surface->numVerts;i++) {
+    /* Work colors remain private until the join. Snapshot every setting here;
+     * workers neither read cvars nor mutate the cache's revision/list/counters. */
+    if(surface->numVerts>=512 && !key.settings.fullbright && C1J_Enabled()) {
+        c1PreparedLightJob job;c1jFp before;
+        job.light.frame=frame;job.light.sine=c1ModelContext.sine;
+        job.light.fullbright=0;job.light.identity=0;
+        job.light.roundMode=key.settings.roundMode;
+        job.vertices=(const unsigned char *)surface->verts;
+        job.stride=sizeof(*surface->verts);job.xyzOffset=offsetof(drawVert_t,xyz);
+        job.normalOffset=offsetof(drawVert_t,normal);job.alphaOffset=offsetof(drawVert_t,color)+3;
+        job.rgba=colors->work;
+        C1J_FpGet(&before);
+        parallelDone=C1J_ParallelFor((unsigned)surface->numVerts,256,C1PreparedLight_Range,&job);
+        if(parallelDone)c1ModelVertexShadeCalls+=(unsigned)surface->numVerts;
+        else C1J_FpRestore(&before,0,0);
+    }
+    if(parallelDone)i=surface->numVerts;
+    else for(i=0;i<surface->numVerts;i++) {
         const drawVert_t *v=&surface->verts[i];byte *color=colors->work+(size_t)i*4;
         if(key.settings.fullbright)color[0]=color[1]=color[2]=(byte)key.settings.identityByte;
         else {
@@ -366,58 +384,20 @@ qboolean R_Cod1ShadeEntityVertex(const trRefEntity_t *ent,const float *xyz,const
 /* The backend owns this immutable prepared frame for the whole surface.
  * No callbacks occur within the loop. Preserve per-vertex arithmetic order,
  * including division before accumulation and fullbright geometry validation. */
+#include "cod1_entity_light_jobs.h"
 qboolean R_Cod1ShadeEntityVertices(const trRefEntity_t *ent,int count,
         const vec4_t *xyz,const vec4_t *normal,byte *rgba) {
-    float world[3],n[3],cross[3][3],det;int i,j,v,roundMode,fullbright;
-    const c1mModelLightFrame *frame;c1mShadeBatch batch;c1jFp fp;int useBatch=0,quadSeparate=0;
+    cod1EntityLightInput_t input;
     if(count==0)return qtrue;
-    if(count<0 || !ent || !xyz || !normal || !rgba ||
-       !ent->cod1ModelLighting.valid || !c1ModelContext.valid)return qfalse;
-    frame=&ent->cod1ModelLighting;
-    CrossProduct(ent->e.axis[1],ent->e.axis[2],cross[0]);
-    CrossProduct(ent->e.axis[2],ent->e.axis[0],cross[1]);
-    CrossProduct(ent->e.axis[0],ent->e.axis[1],cross[2]);
-    det=DotProduct(ent->e.axis[0],cross[0]);if(det==0 || !C1M_Finite(det))return qfalse;
-    fullbright=c1ModelContext.fullbright && c1ModelContext.fullbright->integer;
-    roundMode=fullbright?0:R_Cod1ModelRoundMode();
-    if(!fullbright){
-        C1J_FpGet(&fp);
-        /* Hoisting is valid with masked exceptions. Otherwise preserve the
-         * scalar trap order, including branches whose light inputs go unread. */
-        if((fp.control&63)==63&&(fp.mxcsr&0x1f80)==0x1f80){
-            if(!C1M_ShadeBatchPrepare(&frame->world,frame->prepared.remainingSky,frame->prepared.lights,frame->prepared.weights,frame->prepared.count,roundMode,c1ModelContext.sine,&batch))return qfalse;
-            useBatch=1;
-        }
-    }
-#ifdef C1Q347_ENABLED
-    if(useBatch&&count<=SHADER_MAX_VERTEXES)
-        quadSeparate=C1Q347_Separate(rgba,(size_t)count*4,xyz,(size_t)count*sizeof(*xyz))&&
-                     C1Q347_Separate(rgba,(size_t)count*4,normal,(size_t)count*sizeof(*normal))&&
-                     C1Q347_Separate(rgba,(size_t)count*4,ent,sizeof(*ent));
-#endif
-    for(v=0;v<count;v++) {
-#ifdef C1Q347_ENABLED
-        if(quadSeparate&&count-v>=4){
-            c1jFp prior;C1J_FpGet(&prior);
-            if(C1Q347_Entity(&batch,ent->e.origin,ent->e.axis,cross,det,xyz+v,normal+v,rgba+(size_t)v*4)){v+=3;continue;}
-            C1J_FpRestore(&prior,0,0);
-        }
-#endif
-        byte *color=rgba+(size_t)v*4;
-        for(i=0;i<3;i++) {
-            world[i]=ent->e.origin[i];n[i]=0;
-            for(j=0;j<3;j++){world[i]+=xyz[v][j]*ent->e.axis[j][i];n[i]+=normal[v][j]*cross[j][i]/det;}
-        }
-        if(C1M_ShadeNormalize(n)<0)return qfalse;
-        if(fullbright) {
-            color[0]=color[1]=color[2]=(byte)tr.identityLightByte;color[3]=255;
-        } else if(useBatch){
-            if(!C1M_ShadeBatchVertex(&batch,world,n,color))return qfalse;
-        } else if(!C1M_Shade(&frame->world,frame->prepared.remainingSky,frame->prepared.lights,
-            frame->prepared.weights,frame->prepared.count,world,n,roundMode,
-            c1ModelContext.sine,color))return qfalse;
-    }
-    return qtrue;
+    if(count<0 || !ent || !xyz || !normal || !rgba)return qfalse;
+    /* Capture mutable settings once on the submitting thread. Every worker
+     * observes the same settings even when the frontend processes cvars. */
+    input.valid=c1ModelContext.valid;
+    input.fullbright=c1ModelContext.fullbright && c1ModelContext.fullbright->integer;
+    input.identity=(byte)tr.identityLightByte;
+    input.roundMode=input.fullbright?0:R_Cod1ModelRoundMode();
+    input.sine=c1ModelContext.sine;
+    return C1EntityLight_Shade(ent,count,xyz,normal,rgba,&input);
 }
 qboolean R_Cod1PrepareEntityLighting(const trRefdef_t *refdef,trRefEntity_t *ent) {
     c1ModelLightCandidates candidates;float center[3],direction[3]={0,0,0};int i,k;

@@ -40,9 +40,16 @@ If you have questions concerning this license or the applicable additional terms
 #endif
 static cvar_t *com_multithreading,*com_workerThreads,*com_asyncLog;
 static void Com_ThreadStatus_f(void){
- c1jStatus j;c1lStatus l;C1J_Status(&j);C1L_Status(&l);
+ c1jStatus j;c1lStatus l;int renderActive=-1;C1J_Status(&j);C1L_Status(&l);
+#ifdef _WIN32
+ renderActive=R241TraceRendererSmpActive();
+#endif
  Com_Printf("MT316 enabled=%d logical=%u available=%u budget=%u created=%u batches=%llu workerChunks=%llu callerChunks=%llu\n",
  C1J_Enabled(),j.logical,j.available,j.budget,j.created,j.batches,j.workerChunks,j.callerChunks);
+ Com_Printf("MT_R30 dispatch nonOwnerBatches=%llu contentionSerial=%llu nestedSerial=%llu\n",
+ j.nonOwnerBatches,j.contentionSerial,j.nestedSerial);
+ Com_Printf("MT_R30 renderer requested=%d active=%d asyncLogRequested=%d\n",
+ Cvar_VariableIntegerValue("r_smp"),renderActive,com_asyncLog?com_asyncLog->integer:0);
  Com_Printf("MT316 log active=%d queued=%llu written=%llu flushed=%llu pending=%u backpressure=%llu error=%d\n",
  l.active,l.queued,l.written,l.flushed,l.pending,l.backpressure,l.error);
 }
@@ -162,7 +169,7 @@ static void Com_PublishLog(void){
  }
 }
 static void Com_WriteLog( const char *text ) {
- FS_EnableAsyncLog(logfile,C1J_Enabled() && com_asyncLog && com_asyncLog->integer);
+ FS_EnableAsyncLog(logfile,com_asyncLog && com_asyncLog->integer);
 	FS_Write( text, strlen( text ), logfile );
 	logNeedsFlush = qtrue;
 	if ( com_logfile->integer > 1 || com_errorEntered ) {
@@ -186,7 +193,8 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 	static qboolean opening_qconsole = qfalse;
 
 	va_start( argptr,fmt );
-	vsprintf( msg,fmt,argptr );
+	vsnprintf( msg, sizeof( msg ), fmt, argptr );
+	msg[sizeof( msg ) - 1] = '\0';
 	va_end( argptr );
 
 	if ( rd_buffer ) {
@@ -263,7 +271,8 @@ void QDECL Com_DPrintf( const char *fmt, ... ) {
 	}
 
 	va_start( argptr,fmt );
-	vsprintf( msg,fmt,argptr );
+	vsnprintf( msg, sizeof( msg ), fmt, argptr );
+	msg[sizeof( msg ) - 1] = '\0';
 	va_end( argptr );
 
 	Com_Printf( "%s", msg );
@@ -2395,7 +2404,7 @@ void Com_Frame( void ) {
 		return;         // an ERR_DROP was thrown
 	}
     C1J_Configure(com_multithreading->integer,com_workerThreads->integer);
-    if(logfile && FS_Initialized())FS_EnableAsyncLog(logfile,C1J_Enabled() && com_asyncLog->integer);
+    if(logfile && FS_Initialized())FS_EnableAsyncLog(logfile,com_asyncLog->integer);
     CL_R241TraceFrameBegin(com_frameNumber);
 
 	// bk001204 - init to zero.

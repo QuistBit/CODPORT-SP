@@ -97,6 +97,9 @@ def main():
     main_dir.mkdir(parents=True)
     shutil.copyfile(ROOT / "main/training_player.cfg", main_dir / "training_player.cfg")
     shutil.copyfile(ROOT / "packaging/windows/wolfconfig.cfg", main_dir / "wolfconfig.cfg")
+    for name in ("Play-Training.cmd", "Play-Training-Single.cmd",
+                 "Play-Training-Multi.cmd", "Play-Training.ps1", "THREADING-MODES.md"):
+        shutil.copyfile(ROOT / "packaging/windows" / name, build / name)
     if args.openal:
         shutil.copyfile(args.openal, runtime / "soft_oal.dll")
     print(f"Game modules: {runtime}\nTraining profile: {main_dir.parent}")

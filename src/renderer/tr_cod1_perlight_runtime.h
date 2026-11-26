@@ -4,6 +4,8 @@
  * cached TBN and prepared-static lists remain open. */
 #include "cod1_perlight_projection.h"
 #include "cod1_perlight_basis_r64.h"
+#include "cod1_perlight_jobs.h"
+#include "../qcommon/cod1_jobs.h"
 #ifdef _MSC_VER
 #include <float.h>
 #else
@@ -32,7 +34,7 @@ static qboolean RB_Cod1PerlightDynamic(void) {
     shaderStage_t *runtimeStages[MAX_SHADER_STAGES];
     shaderStage_t **savedStages;
     cod1PerlightRuntime_t *program=tess.shader->cod1PerlightRuntime;
-    int l,i,s,roundMode,originalCount,useBasis,count,valid;
+    int l,i,s,roundMode,originalCount,useBasis,count,valid,parallelDone;
     if(!program)return qfalse;
     /* An authored program owns this path even if no eligible light remains.
      * Never replace zero contribution with RTCW's generated additive pass. */
@@ -74,7 +76,17 @@ static qboolean RB_Cod1PerlightDynamic(void) {
         light.radius=source->radius;
         for(i=0;i<3;++i) {light.origin[i]=source->transformed[i];light.color[i]=source->color[i];}
         valid=1;
-        for(i=0;i<tess.numVertexes;++i) {
+        parallelDone=0;
+        if(tess.numVertexes>=512 && C1J_Enabled()) {
+            c1PerlightJob job;c1jFp before;
+            job.light=&light;job.xyz=tess.xyz;job.normal=tess.normal;
+            job.projected=projected;job.clip=clip;job.useBasis=useBasis;
+            job.roundMode=(cod1PLRoundMode_t)roundMode;
+            C1J_FpGet(&before);
+            parallelDone=C1J_ParallelFor((unsigned)tess.numVertexes,256,C1Perlight_Range,&job);
+            if(!parallelDone)C1J_FpRestore(&before,0,0);
+        }
+        if(!parallelDone)for(i=0;i<tess.numVertexes;++i) {
             if(!Cod1PL_ProjectVertex(&light,tess.xyz[i],tess.normal[i],useBasis,
                                      (cod1PLRoundMode_t)roundMode,&projected[i])) {valid=0;break;}
             clip[i]=projected[i].clip;

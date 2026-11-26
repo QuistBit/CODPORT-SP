@@ -1681,7 +1681,9 @@ static void CG_DrawActiveFrameUntracedR241( int serverTime, stereoFrame_t stereo
 	cg.clientFrame++;
 
 	// update cg.predictedPlayerState
+	CG_R241TracePredictBegin();
 	CG_PredictPlayerState();
+	CG_R241TracePredictEnd();
 
 	DEBUGTIME
 
