@@ -105,7 +105,7 @@ static int ActorNormalConstruct(C1NormalOperation*o){
   /* Actual three Look bindings are taken from the live owner. A different
    * tree/role binding remains held; no initial-default yaw is substituted. */
   unsigned s=look.nodes[0],l=look.nodes[1],rr=look.nodes[2];
-  G_Printf("[Foley start] owned Look bindings %u %u %u\n",s,l,rr);
+  if(g_debugMove.integer)G_Printf("[Foley start] owned Look bindings %u %u %u\n",s,l,rr);
   if(s!=4||l!=2040||rr!=2059||strcmp(cod1GenericNames[s].name,"look_straight")||
      strcmp(cod1GenericNames[l].name,"look_left")||strcmp(cod1GenericNames[rr].name,"look_right")){G_Printf("[Foley start] rejected at record.inc line 104\n");return 0;}
   straight=r->nodes[s].currentWeight;left=r->nodes[l].currentWeight;right=r->nodes[rr].currentWeight;
@@ -133,7 +133,7 @@ static int ActorNormalConstruct(C1NormalOperation*o){
 static int ActorNormalStart(void*u,const GscActorScriptedPrefixRequest*input,char*error,size_t cap,
  int(*current)(void*),void*ctx){
  C1NormalOperation*o=&cod1NormalOperation;cod1ActorLease_t l;C1NormalRecord*record=NULL;GscEntityRef owner;int ok=0;(void)u;
- G_Printf("[Foley start] entered GAME at tick=%d\n",level.time);
+ if(g_debugMove.integer)G_Printf("[Foley start] entered GAME at tick=%d\n",level.time);
  if(!ActorControllerAnimationMutationAllowed()||!ActorControllerForeignMutationAllowed()){G_Printf("[Foley start] rejected at record.inc line 130\n");return 0;}
  if(o->busy){o->cancelled=1;{G_Printf("[Foley start] rejected at record.inc line 131\n");return 0;}}
  if(!input||!current||!ActorGoalBuffers(input,sizeof(*input),NULL,0,error,cap)||
@@ -152,7 +152,7 @@ static int ActorNormalStart(void*u,const GscActorScriptedPrefixRequest*input,cha
    * allocation remains exact; the same exclusive aux owner now owns the heap. */
  cod1NormalRecords[l.actorIndex]=record;record=NULL;
  cod1Actors[l.actorIndex].scriptedAux.record=FRESH_AUX_OWNED;
- G_Printf("[Foley start] committed normal body actor=%u clip=%u tick=%d goal=%g token=%u\n",owner.slot,o->q.animation.ordinal,o->q.now_ms,cod1GenericActors[l.actorIndex].nodes[o->q.animation.ordinal].goalWeight,cod1GenericActors[l.actorIndex].notify->flags[o->q.animation.ordinal].token);
+ if(g_debugMove.integer)G_Printf("[Foley start] committed normal body actor=%u clip=%u tick=%d goal=%g token=%u\n",owner.slot,o->q.animation.ordinal,o->q.now_ms,cod1GenericActors[l.actorIndex].nodes[o->q.animation.ordinal].goalWeight,cod1GenericActors[l.actorIndex].notify->flags[o->q.animation.ordinal].token);
  cod1Actors[l.actorIndex].scriptedAux.prefix=FRESH_PREFIX_UNUSED;
  ++cod1Actors[l.actorIndex].scriptedAux.revision;ok=1;
 done:

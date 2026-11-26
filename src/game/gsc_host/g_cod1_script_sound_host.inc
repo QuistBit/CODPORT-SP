@@ -96,7 +96,7 @@ static int GscSoundInvoke(void *user,const GscEntityRef *owner,const char *alias
  if(!GscSoundCurrent(&c)||strcmp(actual,marker)||gscTestQuake.sequence!=next)goto refuse;
  gscTestQuake.sequence=packet.sequence;trap_SendServerCommand(0,command);
  if(!GscSoundCurrent(&c)||gscTestQuake.sequence!=packet.sequence)goto refuse;
- G_Printf("[R194] SOUND_SENT alias=%s path=%s owner=%u\n",alias,packet.path,owner->slot);
+ G_DPrintf("[R194] SOUND_SENT alias=%s path=%s owner=%u\n",alias,packet.path,owner->slot);
  return GscSoundCurrent(&c);
 refuse:
  GscTestError(error,cap,"playsound owner/resource/mixer or map lease refused");return 0;

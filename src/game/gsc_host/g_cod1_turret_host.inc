@@ -427,7 +427,7 @@ static int FoleyDispatchFrame(const GscEntityRef *ref,int now,uint64_t generatio
  if(!current || current(ctx)!=1 || !ActorGoalLease(ref,&lease) || now!=level.time)return 0;
  if(!ActorScriptedClockSelected(lease.actorIndex))return G_Cod1ActorGenericFrame(ref,now,current,ctx);
  f=cod1FaceFrames+lease.actorIndex; owner=&cod1Actors[lease.actorIndex].scriptedController;
- if(now<=250)G_Printf("[Foley private] scripted frame entry slot=%u tick=%d generic=%d gen=%llu frame=%llu entered=%d entered_ms=%d done=%d open=%d count=%d poisoned=%d\n",ref->slot,f->tick,cod1GenericActors[lease.actorIndex].tick,(unsigned long long)generation,(unsigned long long)f->frame,owner->entered,owner->entered_ms,f->done,f->open,f->count,f->poisoned);
+ if(g_debugMove.integer&&now<=250)G_Printf("[Foley private] scripted frame entry slot=%u tick=%d generic=%d gen=%llu frame=%llu entered=%d entered_ms=%d done=%d open=%d count=%d poisoned=%d\n",ref->slot,f->tick,cod1GenericActors[lease.actorIndex].tick,(unsigned long long)generation,(unsigned long long)f->frame,owner->entered,owner->entered_ms,f->done,f->open,f->count,f->poisoned);
  if(!generation || !owner->entered || owner->invalid || !owner->initTask || owner->actorSerial!=lease.serial ||
     memcmp(&lease,&f->lease,sizeof(lease)) || owner->runtime!=f->runtime || owner->catalog!=f->catalog ||
     f->poisoned || f->count)return 0;
@@ -439,7 +439,7 @@ static int FoleyDispatchFrame(const GscEntityRef *ref,int now,uint64_t generatio
     float weight[98]={0},phase[2][21]={{0}},facial[2][25];
     C1GARecord *record=&cod1GenericActors[lease.actorIndex];
     if(!G_Cod1ActorScriptedSampleFull(ref,now,weight,phase,facial,current,ctx))return 0;
-    if(now<2200)G_Printf("[Foley pose] owner=%u/%u tick=%d body880Goal=%g bodyWeight=%g bodyPhase=%g bodyToken=%u face1647Goal=%g faceWeight=%g facePhase=%g faceToken=%u\\n",
+    if(g_debugMove.integer&&now<2200)G_Printf("[Foley pose] owner=%u/%u tick=%d body880Goal=%g bodyWeight=%g bodyPhase=%g bodyToken=%u face1647Goal=%g faceWeight=%g facePhase=%g faceToken=%u\n",
         ref->slot,ref->generation,now,record->nodes[880].goalWeight,weight[58],phase[0][7],record->notify->flags[880].token,
         record->nodes[1647].goalWeight,weight[59],phase[0][8],record->notify->flags[1647].token);
     return current(ctx)==1;
@@ -461,7 +461,7 @@ static int FoleyDispatchFrame(const GscEntityRef *ref,int now,uint64_t generatio
        (cod1Actors[lease.actorIndex].nativeData.entity.nativeEntityFlags&0x10000u))return 0;
    }
  }while(resume);
- if(generation<8 || (ref->slot==199 && now<=1500))G_Printf("[Foley private] selected frame owner=%u now=%d gen=%llu closed=%d\n",ref->slot,now,(unsigned long long)generation,!f->open);
+ if(g_debugMove.integer&&(generation<8 || (ref->slot==199 && now<=1500)))G_Printf("[Foley private] selected frame owner=%u now=%d gen=%llu closed=%d\n",ref->slot,now,(unsigned long long)generation,!f->open);
  return f->done && !f->open && !f->count && !f->poisoned && current(ctx)==1;
 }
 

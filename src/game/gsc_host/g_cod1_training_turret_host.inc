@@ -77,9 +77,9 @@ static GscActorScriptedControllerHost foleyPrivateController;
 static int FoleyPrivateInitReturn(void *user, const GscActorInitReturnRequest *q, char *error, size_t cap, int (*current)(void *), void *ctx) {
     const GscActorScriptedControllerHost *host = G_Cod1ActorScriptedControllerHost();
     int accepted;
-    G_Printf("[Foley private] ordinary init GAME entry slot=%u gen=%u request=%d level=%d task=%llu\n", q->entity.slot, q->entity.generation, q->now_ms, level.time, (unsigned long long)q->task_serial);
+    if(g_debugMove.integer)G_Printf("[Foley private] ordinary init GAME entry slot=%u gen=%u request=%d level=%d task=%llu\n", q->entity.slot, q->entity.generation, q->now_ms, level.time, (unsigned long long)q->task_serial);
     accepted = host->init_return(user, q, error, cap, current, ctx);
-    G_Printf("[Foley private] ordinary init GAME returned=%d\n", accepted);
+    if(!accepted||g_debugMove.integer)G_Printf("[Foley private] ordinary init GAME returned=%d\n", accepted);
     return accepted;
 }
 static const GscActorScriptedControllerHost *FoleyPrivateController(void) {
@@ -301,7 +301,7 @@ static int GscTestCourseActorFrame(const GscEntityRef *ref,int now,int(*current)
  int v,m;
  if(!gscTestTurret.nativeThreads)return G_Cod1ActorGenericFrame(ref,now,current,ctx);
  v=gsc_session_r237_frame_view(gscTestSession,gscTestId,&view);m=gsc_session_timing(gscTestSession,&snap);
- if(now<=250)G_Printf("[Foley private] frame clocks slot=%u level=%d origin=%lld last=%lld logical=%d bucket=%d open=%d gen=%llu snapshot=%d view=%d\n",ref->slot,now,(long long)snap.origin_host_ms,(long long)snap.last_host_ms,snap.logical_ms,view.host_now_ms,view.frame_open,(unsigned long long)view.frame_generation,m,v);
+ if(g_debugMove.integer&&now<=250)G_Printf("[Foley private] frame clocks slot=%u level=%d origin=%lld last=%lld logical=%d bucket=%d open=%d gen=%llu snapshot=%d view=%d\n",ref->slot,now,(long long)snap.origin_host_ms,(long long)snap.last_host_ms,snap.logical_ms,view.host_now_ms,view.frame_open,(unsigned long long)view.frame_generation,m,v);
  if(!v||!m||snap.session_id!=gscTestId||snap.busy||snap.has_error||view.frame_open||!view.frame_generation||
     snap.origin_host_ms<0||snap.last_host_ms!=now||now<snap.origin_host_ms||
     now-snap.origin_host_ms!=view.host_now_ms||snap.logical_ms!=view.host_now_ms)return 0;
@@ -388,7 +388,7 @@ int FoleySessionQueueFrameNote(const cod1ActorFaceNote_t *note){
     !memchr(note->event,0,sizeof(note->event))||!memchr(note->payload,0,sizeof(note->payload)))return 0;
  value.kind=GSC_EVENT_STRING;memcpy(value.string,note->payload,sizeof(note->payload));
  ok=gsc_session_notify_entity_with_payload(gscTestSession,gscTestId,&note->entity,note->event,&value,1,&awakened,error,sizeof(error));
- G_Printf("[Foley note] owner=%u/%u tick=%d ordinal=%u event=%s payload=%s accepted=%d woken=%d error=%s\n",
+ if(!ok||awakened<0||error[0]||g_debugMove.integer)G_Printf("[Foley note] owner=%u/%u tick=%d ordinal=%u event=%s payload=%s accepted=%d woken=%d error=%s\n",
     note->entity.slot,note->entity.generation,note->produced_ms,note->ordinal,note->event,note->payload,ok,awakened,error);
  return ok&&awakened>=0&&FoleyFrameNoteCurrent(note)&&GscTestTurretCurrent(NULL);
 }
@@ -425,7 +425,7 @@ int FoleyRunNoteBucket(const GscEntityRef *actor,int now,uint64_t generation,
     !TrainingNoteOwner(actor)||!G_Cod1EntitySameAllocation(actor)||
     !gsc_session_r237_frame_view(gscTestSession,gscTestId,&view)||!view.frame_open||view.frame_generation!=generation)return 0;
  ok=gsc_session_r237_run_current_bucket(gscTestSession,gscTestId,generation,error,sizeof(error));
- G_Printf("[Foley note bucket] owner=%u/%u tick=%d result=%d error=%s\n",actor->slot,actor->generation,now,ok,error);
+ if(!ok||error[0]||g_debugMove.integer)G_Printf("[Foley note bucket] owner=%u/%u tick=%d result=%d error=%s\n",actor->slot,actor->generation,now,ok,error);
  if(!ok||now!=level.time||!GscTestTurretCurrent(NULL)||
     !gsc_session_r237_frame_view(gscTestSession,gscTestId,&view)||!view.frame_open||
     view.frame_generation!=generation)return 0;
@@ -722,29 +722,37 @@ static void GscTestRunnerFrame(unsigned index,int now){
   if(!G_Cod1ActorReadGoal(owner,&goal,NULL,0))goto stop;
   if(!G_Cod1ActorMotionRead(owner,&motion))goto stop;
   if(goal.assigned&&(goal.assignment!=runner->diagnosticAssignment||(motion.blocked&&now%1000==0))){
-   cod1NavigationProbe_t p;int valid=G_Cod1NavigationProbe(gscTestSession,gscTestId,owner,now,&p);
-   if(valid)G_Printf("[542 nearest] owner=%u tick=%d assignment=%llu nodes=%d/%d candidates=%u/%u traces=%u/%u origin=%.9g,%.9g,%.9g target=%.9g,%.9g,%.9g start=%.9g,%.9g,%.9g end=%.9g,%.9g,%.9g\n",owner->slot,now,(unsigned long long)p.assignment,p.start,p.goal,p.candidates[0],p.candidates[1],p.traces[0],p.traces[1],p.origin[0],p.origin[1],p.origin[2],p.target[0],p.target[1],p.target[2],p.startNode[0],p.startNode[1],p.startNode[2],p.goalNode[0],p.goalNode[1],p.goalNode[2]);
-   if(valid){int count;unsigned flags;float direction[2];memcpy(&flags,p.path+0x3b8,4);count=(short)(p.path[0x380]|p.path[0x381]<<8);memcpy(direction,p.path+0x398,8);
-    G_Printf("[544 route] owner=%u tick=%d assignment=%llu available=%d native=%d team=%d traces=%u count=%d flags=%x direction=%.9g,%.9g\n",owner->slot,now,(unsigned long long)p.assignment,p.routeAvailable,p.routeResult,p.team,p.routeTraces,count,flags,direction[0],direction[1]);
-    G_Printf("[565 physics probe] owner=%u tick=%d assignment=%llu category=%d root=%d delta=%d physics=%d result=%d traces=%u rootXYZ=%.9g,%.9g,%.9g deltaXYZ=%.9g,%.9g,%.9g end=%.9g,%.9g,%.9g velocity=%.9g,%.9g,%.9g\n",owner->slot,now,(unsigned long long)p.assignment,p.category,p.rootAvailable,p.deltaAvailable,p.physicsAvailable,p.physicsResult,p.physicsTraces,p.root[0],p.root[1],p.root[2],p.delta[0],p.delta[1],p.delta[2],p.physicsEnd[0],p.physicsEnd[1],p.physicsEnd[2],p.physicsVelocity[0],p.physicsVelocity[1],p.physicsVelocity[2]);
-    if(p.routeAvailable&&owner->slot==223&&(goal.assignment!=runner->diagnosticAssignment||now%5000==0)){
-     G_Cod1NavigationDump(now,p.assignment,p.path);
+   /* Skip the optional experiment and its unavailable print when disabled. */
+   int probeMode=trap_Cvar_VariableIntegerValue("g_cod1NavigationProbe");
+   if(probeMode==1||probeMode==2){
+    cod1NavigationProbe_t p;int valid=G_Cod1NavigationProbe(gscTestSession,gscTestId,owner,now,&p);
+    if(valid)G_Printf("[542 nearest] owner=%u tick=%d assignment=%llu nodes=%d/%d candidates=%u/%u traces=%u/%u origin=%.9g,%.9g,%.9g target=%.9g,%.9g,%.9g start=%.9g,%.9g,%.9g end=%.9g,%.9g,%.9g\n",owner->slot,now,(unsigned long long)p.assignment,p.start,p.goal,p.candidates[0],p.candidates[1],p.traces[0],p.traces[1],p.origin[0],p.origin[1],p.origin[2],p.target[0],p.target[1],p.target[2],p.startNode[0],p.startNode[1],p.startNode[2],p.goalNode[0],p.goalNode[1],p.goalNode[2]);
+    if(valid){int count;unsigned flags;float direction[2];memcpy(&flags,p.path+0x3b8,4);count=(short)(p.path[0x380]|p.path[0x381]<<8);memcpy(direction,p.path+0x398,8);
+     G_Printf("[544 route] owner=%u tick=%d assignment=%llu available=%d native=%d team=%d traces=%u count=%d flags=%x direction=%.9g,%.9g\n",owner->slot,now,(unsigned long long)p.assignment,p.routeAvailable,p.routeResult,p.team,p.routeTraces,count,flags,direction[0],direction[1]);
+     G_Printf("[565 physics probe] owner=%u tick=%d assignment=%llu category=%d root=%d delta=%d physics=%d result=%d traces=%u rootXYZ=%.9g,%.9g,%.9g deltaXYZ=%.9g,%.9g,%.9g end=%.9g,%.9g,%.9g velocity=%.9g,%.9g,%.9g\n",owner->slot,now,(unsigned long long)p.assignment,p.category,p.rootAvailable,p.deltaAvailable,p.physicsAvailable,p.physicsResult,p.physicsTraces,p.root[0],p.root[1],p.root[2],p.delta[0],p.delta[1],p.delta[2],p.physicsEnd[0],p.physicsEnd[1],p.physicsEnd[2],p.physicsVelocity[0],p.physicsVelocity[1],p.physicsVelocity[2]);
+     if(p.routeAvailable&&owner->slot==223&&(goal.assignment!=runner->diagnosticAssignment||now%5000==0)){
+      G_Cod1NavigationDump(now,p.assignment,p.path);
+     }
     }
+    else G_Printf("[542 nearest unavailable] owner=%u tick=%d assignment=%llu\n",owner->slot,now,(unsigned long long)goal.assignment);
    }
-   else G_Printf("[542 nearest unavailable] owner=%u tick=%d assignment=%llu\n",owner->slot,now,(unsigned long long)goal.assignment);
   }
   if(goal.assigned&&goal.assignment!=runner->diagnosticAssignment){
-   int kind=G_Cod1RunnerCourseGoal(owner,goal.assignment,&goal.node);
-   if(kind==3||kind==4){
-    cod1NegotiationPair_t pair;int valid=G_Cod1NodeGraphNegotiationPair(gscTestSession,gscTestId,&runner->diagnosticLastNode,&goal.node,&pair);
-    G_Printf("[478 graph pair] owner=%u tick=%d assignment=%llu kind=%d valid=%d begin=%u end=%u\n",owner->slot,now,(unsigned long long)goal.assignment,kind,valid,runner->diagnosticLastNode.index,goal.node.index);
-    if(valid){const float*origin=g_entities[owner->slot].r.currentOrigin;float dx=pair.start[0]-origin[0],dy=pair.start[1]-origin[1];
-     G_Printf("[478 physical pair] owner=%u physical=%u/%u script=%llu/%u yaw=%.6f begin=%.6f,%.6f,%.6f end=%.6f,%.6f,%.6f origin=%.6f,%.6f,%.6f xySquared=%.9f current=%d\n",owner->slot,pair.beginPhysical,pair.endPhysical,(unsigned long long)pair.script.cache,(unsigned)pair.script.entry,pair.yaw,pair.start[0],pair.start[1],pair.start[2],pair.finish[0],pair.finish[1],pair.finish[2],origin[0],origin[1],origin[2],dx*dx+dy*dy,G_Cod1NodeGraphNegotiationCurrent(&pair));
+   if(g_debugMove.integer){
+    int kind=G_Cod1RunnerCourseGoal(owner,goal.assignment,&goal.node);
+    if(kind==3||kind==4){
+     cod1NegotiationPair_t pair;int valid=G_Cod1NodeGraphNegotiationPair(gscTestSession,gscTestId,&runner->diagnosticLastNode,&goal.node,&pair);
+     G_Printf("[478 graph pair] owner=%u tick=%d assignment=%llu kind=%d valid=%d begin=%u end=%u\n",owner->slot,now,(unsigned long long)goal.assignment,kind,valid,runner->diagnosticLastNode.index,goal.node.index);
+     if(valid){const float*origin=g_entities[owner->slot].r.currentOrigin;float dx=pair.start[0]-origin[0],dy=pair.start[1]-origin[1];
+      G_Printf("[478 physical pair] owner=%u physical=%u/%u script=%llu/%u yaw=%.6f begin=%.6f,%.6f,%.6f end=%.6f,%.6f,%.6f origin=%.6f,%.6f,%.6f xySquared=%.9f current=%d\n",owner->slot,pair.beginPhysical,pair.endPhysical,(unsigned long long)pair.script.cache,(unsigned)pair.script.entry,pair.yaw,pair.start[0],pair.start[1],pair.start[2],pair.finish[0],pair.finish[1],pair.finish[2],origin[0],origin[1],origin[2],dx*dx+dy*dy,G_Cod1NodeGraphNegotiationCurrent(&pair));
+     }
     }
    }
+   /* Keep tracking assignments even with diagnostics disabled. */
    runner->diagnosticLastNode=goal.node;runner->diagnosticAssignment=goal.assignment;
   }
-  if(runner->published&&now%500==0){
+  /* This read-only root interval is not consumed by motion or publication. */
+  if(g_debugMove.integer&&runner->published&&now%500==0){
    c1ari14Result_t root;int valid=G_Cod1ActorGeneralRootInterval(owner,now,0,&root,GscTestTurretCurrent,NULL);
    G_Printf("[479 general interval] owner=%u tick=%d valid=%d xyz=%.7f,%.7f,%.7f q=%.7f,%.7f\n",owner->slot,now,valid,valid?root.translation[0]:0,valid?root.translation[1]:0,valid?root.translation[2]:0,valid?root.q2[0]:0,valid?root.q2[1]:0);
   }

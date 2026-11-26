@@ -477,13 +477,13 @@ static int ActorControllerInitReturnSelected(void*u,const GscActorInitReturnRequ
  /* Trust boundary: configured Session invokes ONLY after actual canonical
   * animscripts/init::main normal pop, with authenticated returningFrame.self.
   * task_serial is an identity supplied by that VM owner, never ready proof. */
- if(ref.slot<MAX_GENTITIES && cod1ActorByEntity[ref.slot]){
+ if(g_debugMove.integer&&ref.slot<MAX_GENTITIES && cod1ActorByEntity[ref.slot]){
  unsigned idx=cod1ActorByEntity[ref.slot]-1;
  if(idx<COD1_ACTOR_CAPACITY){C1GARecord *g=cod1GenericActors+idx;
  G_Printf("[Foley private] init source slot=%u used=%d nodes=%d notify=%d tick=%d now=%d controller=%d\n",ref.slot,g->used,g->nodes!=NULL,g->notify!=NULL,g->tick,input->now_ms,cod1Actors[idx].scriptedController.initialized);}}
  if(!input->task_serial||!input->runtime_identity||!input->catalog_identity||input->now_ms<0||
     input->now_ms>INT_MAX-2000||!ActorControllerBegin(input,sizeof(*input),C1CTRL_INIT,&ref,input->now_ms,current,ctx))return 0;
- a=o->stage;m=&a->scriptedController; G_Printf("[Foley private] stage top=%d row=%d criticalTop=%d criticalRow=%d commands=%d genericTick=%d selected=%d\n",a->turretMount.currentTop,a->turretMount.currentStack[0],a->critical.top,a->critical.stack[0],a->critical.command_count,o->genericHeaderBefore.tick,o->frameBefore.selected);
+ a=o->stage;m=&a->scriptedController; if(g_debugMove.integer)G_Printf("[Foley private] stage top=%d row=%d criticalTop=%d criticalRow=%d commands=%d genericTick=%d selected=%d\n",a->turretMount.currentTop,a->turretMount.currentStack[0],a->critical.top,a->critical.stack[0],a->critical.command_count,o->genericHeaderBefore.tick,o->frameBefore.selected);
  if(m->entered||m->initTask||m->currentSource||!(dynamic==2?ActorPlacedControllerAdmission(input,&o->lease,current,ctx):dynamic==1?ActorSpawnControllerAdmission(input,&o->lease,current,ctx):dynamic==0?C1ObserveInit("FreshBootstrapTarget(&o->lease)",FreshBootstrapTarget(&o->lease)):0)||
     !C1ObserveInit("ActorControllerFreshDomain(a)",ActorControllerFreshDomain(a))||a->turretMount.currentTop||a->turretMount.currentStack[0]!=4||
     a->critical.command_count||a->critical.top||a->critical.stack[0]!=4)goto done;

@@ -16,5 +16,5 @@ static void CG_Cod1ScriptSoundCommand(void) {
  sound=trap_S_RegisterSound(packet.path);
  if(!sound||incarnation!=cgCod1ScriptQuakeIncarnation||epoch!=cgCod1ScriptQuakeEpoch||cgSoundSequence!=packet.sequence)return;
  trap_Cod1StartAliasSound(packet.channel==5?NULL:packet.origin,packet.channel==5?cg.clientNum:(int)packet.entity,channels[packet.channel],sound,packet.gain,packet.pitch,packet.dist_min,packet.dist_max);
- CG_Printf("[R194] SOUND_PLAY path=%s\n",packet.path);
+ if(cg_debugEvents.integer)CG_Printf("[R194] SOUND_PLAY path=%s\n",packet.path);
 }

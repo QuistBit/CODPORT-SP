@@ -269,7 +269,7 @@ static int GscSoundInvokeSelected(void *user,const GscEntityRef *owner,const cha
   G_Printf("[voice/body] owner=%u generation=%u tick=%d voice=%llu body=%s\n",owner->slot,owner->generation,level.time,(unsigned long long)side->pending.identity.sequence,alias);
  if(v->streamed && request)
   G_Printf("[voice start] owner=%u tick=%d seq=%llu alias=%s\n",owner->slot,level.time,(unsigned long long)packet.sequence,alias);
- G_Printf("[R194] SOUND_SENT alias=%s path=%s owner=%u\n",alias,packet.path,owner->slot);
+ G_DPrintf("[R194] SOUND_SENT alias=%s path=%s owner=%u\n",alias,packet.path,owner->slot);
  return GscSoundCurrent(&c);
 refuse:
  GscTestError(error,cap,"playsound owner/resource/mixer or map lease refused");return 0;
