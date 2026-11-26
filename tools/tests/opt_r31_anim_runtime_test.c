@@ -32,5 +32,18 @@ int main(void){
  enabled=0;level.framenum++;assert(!ActorProfileStart31()&&actorProfile31[0].calls==0&&actorProfile31[1].calls==0);
  enabled=1;level.framenum++;start=ActorProfileStart31();cod1EntityEpoch++;ActorProfileFinish31(0,start,1,400,7,1,0,0,0,0);assert(actorProfile31[0].calls==0);
  badClock=1;assert(!ActorProfileStart31());
- puts("R31 runtime: PASS");return 0;
+ badClock=0;level.framenum++;start=ActorProfileStart31();clockValue+=10;
+ ActorProfileFinish31(C1AP33_PUBLISH,start,2,500,7,1,0,0,0,1);
+ start=ActorProfileStart31();clockValue+=20;
+ ActorProfileFinish31(C1AP33_PUBLISH,start,2,500,8,1,0,0,0,2);
+ start=ActorProfileStart31();clockValue+=5;
+ ActorProfileFinish31(C1AP33_DISCARD,start,2,500,7,1,0,0,0,0);
+ assert(actorProfile31[C1AP33_PUBLISH].ladderActors==2&&actorProfile31[C1AP33_PUBLISH].ladderMask==3&&actorProfile31[C1AP33_PUBLISH].maxTick==30);
+ assert(actorProfile31[C1AP33_DISCARD].sum==5&&actorProfile31[C1AP33_PRIOR].calls==0);
+ level.framenum++;start=ActorProfileStart31();clockValue+=3;
+ ActorProfileFinish31(C1AP33_PUBLISH,start,2,750,7,1,0,0,0,8);
+ assert(strstr(line,"stage=publish")&&strstr(line,"ladder_actors=2")&&strstr(line,"ladder_mask=3"));
+ start=ActorProfileStart31();clockValue+=2;
+ ActorProfileFinish31(C1AP33_STAGES,start,2,750,7,1,0,0,0,0);
+ puts("R31/R33 runtime: PASS");return 0;
 }

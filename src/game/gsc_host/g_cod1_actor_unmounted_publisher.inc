@@ -108,9 +108,11 @@ static void TrainingTraversalPose(entityState_t *wire,const cod1ActorMotion_t *m
 }
 int G_Cod1ActorUnmountedPublish(const GscEntityRef*input,int now,int(*current)(void*),void*ctx){
  C1UAPCall*c=NULL;C1TActorPublished saved,next;entityState_t wire;gentity_t*e;char text[1024],actual[1024];unsigned i;int slot=-1,ok=0,scripted;
+ uint64_t profileStart,profileEpoch,profilePart;unsigned profileOwner,profileLadder=0;
  if(!input||!current||now!=level.time||!cod1EntityEpoch||cod1UnmountedPublishBusy||cod1UnmountedPublishSerial==UINT64_MAX||cod1TurretActorConfigBusy||
     !ActorGoalBuffers(input,sizeof(*input),NULL,0,NULL,0)||ActorUnmountedPublisherPrivate(input,sizeof(*input)))return 0;
- c=calloc(1,sizeof(*c));if(!c)return 0;c->borrowed=input;c->actor=*input;c->epoch=cod1EntityEpoch;c->serial=++cod1UnmountedPublishSerial;c->now=now;c->current=current;c->ctx=ctx;cod1UnmountedPublishBusy=c->epoch;
+ profileEpoch=cod1EntityEpoch;profileOwner=input->slot;profileStart=ActorProfileStart31();
+ c=calloc(1,sizeof(*c));if(!c){if(profileStart)ActorProfileFinish31(C1AP33_PUBLISH,profileStart,profileEpoch,now,profileOwner,0,0,0,0,0);return 0;}c->borrowed=input;c->actor=*input;c->epoch=cod1EntityEpoch;c->serial=++cod1UnmountedPublishSerial;c->now=now;c->current=current;c->ctx=ctx;cod1UnmountedPublishBusy=c->epoch;
  if(!ActorGoalLease(&c->actor,&c->lease)||G_Cod1ActorGenericPresent(&c->actor)!=1)goto done;
  c->record=cod1Actors[c->lease.actorIndex];c->body=g_entities[c->actor.slot];c->generic=cod1GenericActors[c->lease.actorIndex];
  if(!ActorUnmountedPublishFence(c)||!TurretActorCompositionText(&c->record.modelComposition,text))goto done;
@@ -157,11 +159,15 @@ int G_Cod1ActorUnmountedPublish(const GscEntityRef*input,int now,int(*current)(v
   int selected=jumper?ActorJumperSourcePoseSelected(&c->generic):ActorSourcePoseSelection(&c->generic);if(selected<0)goto done;
   if(!selected){if(!jumper&&g_debugMove.integer>1&&now%500==0)G_Printf("[381 body scope] owner=%u tick=%d source_body_absent=1 prior_profile_retained=1\n",c->actor.slot,now);goto prior_pose_profile;}
   c1asp14Packet_t packet;
+  profilePart=ActorProfileStart31();
   if(!ActorSourcePoseSample(&c->actor,now,&packet,ActorUnmountedPublishFence,c)||!C1SourcePoseWireWrite(&wire,&packet))goto done;
   /* Ordinary MAIN remains live while the retained mover executes its current
    * traversal. Publish that mover's original clip instead of hiding it behind
    * the running source-pose packet. No script events or movement are changed. */
-  if(TrainingTraversalPoseCurrent(&c->record))goto prior_pose_profile;
+  if(TrainingTraversalPoseCurrent(&c->record)){
+   if(profilePart)ActorProfileFinish31(C1AP33_DISCARD,profilePart,profileEpoch,now,profileOwner,1,0,0,0,0);
+   goto prior_pose_profile;
+  }
   wire.cod1TurretActorVersion=COD1_SOURCE_POSE_WIRE_VERSION;wire.cod1TurretActorFlags=1;wire.frame=0;
   if(jumper&&g_debugMove.integer>1)G_Printf("[385 jumper source] owner=%u/%u tick=%d phase=%.6f nodes=%u\n",c->actor.slot,c->actor.generation,now,c->generic.nodes[892].phase,packet.count);
   if(g_debugMove.integer>1)G_Printf("[378 source pose] tick=%d owner=%u nodes=%u source_clock=1 route_overlay=0\n",now,c->actor.slot,packet.count);
@@ -169,8 +175,11 @@ int G_Cod1ActorUnmountedPublish(const GscEntityRef*input,int now,int(*current)(v
  }
 prior_pose_profile:
  if(scripted){
-  if(!G_Cod1ActorScriptedSampleFull(&c->actor,now,wire.cod1TurretActorGenericCurrent,
-      wire.cod1TurretActorPhases,wire.cod1TurretActorCurrent,ActorUnmountedPublishFence,c))goto done;
+  int sampled;profilePart=ActorProfileStart31();
+  sampled=G_Cod1ActorScriptedSampleFull(&c->actor,now,wire.cod1TurretActorGenericCurrent,
+      wire.cod1TurretActorPhases,wire.cod1TurretActorCurrent,ActorUnmountedPublishFence,c);
+  if(profilePart)ActorProfileFinish31(C1AP33_PRIOR,profilePart,profileEpoch,now,profileOwner,sampled!=0,0,0,0,0);
+  if(!sampled)goto done;
   if(wire.cod1TurretActorGenericCurrent[97])memcpy(&wire.effect2Time,&wire.cod1TurretActorPhases[1][16],4);
   wire.cod1TurretActorPhases[1][16]=0;
  }else if(!G_Cod1ActorUnmountedSample(&c->actor,now,wire.cod1TurretActorGenericCurrent,
@@ -274,5 +283,15 @@ source_pose_ready:
   * The checked spatial lane remains NOCLIENT. The server admits only the
   * exact current owned unmounted wire to snapshot output; no relink is needed. */
  c->body=*e;ok=ActorUnmountedPublishCurrent(c)&&!memcmp(cod1UnmountedPublished+c->lease.actorIndex,&next,sizeof(next));
-done:if(c){if(cod1TurretActorConfigBusy==c->epoch)cod1TurretActorConfigBusy=0;if(cod1UnmountedPublishBusy==c->epoch)cod1UnmountedPublishBusy=0;}free(c);return ok;
+done:if(c){if(cod1TurretActorConfigBusy==c->epoch)cod1TurretActorConfigBusy=0;if(cod1UnmountedPublishBusy==c->epoch)cod1UnmountedPublishBusy=0;}free(c);
+ if(profileStart){
+  if(ok&&wire.cod1TurretActorVersion==COD1_SCRIPTED_ACTOR_WIRE_VERSION)switch(wire.frame){
+   case COD1_FRAME_LADDER_DOWN:profileLadder=1;break;
+   case COD1_FRAME_LADDER_ON:profileLadder=2;break;
+   case COD1_FRAME_LADDER_OFF:profileLadder=4;break;
+   case COD1_FRAME_LADDER_UP:profileLadder=8;break;
+  }
+  ActorProfileFinish31(C1AP33_PUBLISH,profileStart,profileEpoch,now,profileOwner,ok,0,0,0,profileLadder);
+ }
+ return ok;
 }

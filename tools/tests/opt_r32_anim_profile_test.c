@@ -45,5 +45,14 @@ int main(void){
  assert(!C1AP32_Frame(&w,&out,1,0,0));C1AP32_Record(&w,C1AP32_ACTOR,1,1,C1AP32_OWNERS);assert(w.actors==0);
  assert(!C1AP32_Frame(&w,&out,1,1,-1)&&w.frames==1);assert(!C1AP32_Frame(&w,&out,2,1,0)&&w.revision==2);
  assert(!C1AP32_Frame(&w,&out,2,0,1)&&w.first==0);assert(C1AP32_Ladder(317)==0&&C1AP32_Ladder(319)==2&&C1AP32_Ladder(320)==4&&C1AP32_Ladder(322)==0);
- puts("R32 observer: PASS");return 0;
+ assert(!C1AP32_Frame(&w,&out,2,1,2));
+ C1AP32_Record(&w,C1AP32_COURSE,10,1,7);
+ C1AP32_Record(&w,C1AP32_COURSE_LADDER,20,1,8);
+ C1AP32_Record(&w,C1AP32_COURSE_LOAD,4,0,8);
+ C1AP32_Record(&w,C1AP32_COURSE_MAP,2,1,8);
+ assert(w.stage[C1AP32_COURSE].sum==10&&w.stage[C1AP32_COURSE_LADDER].sum==20);
+ assert(w.stage[C1AP32_COURSE_LOAD].failed==1&&w.stage[C1AP32_COURSE_MAP].calls==1);
+ CGAP32_Print(&w);
+ assert(strstr(logText,"stage=course ")&&strstr(logText,"stage=course_ladder")&&strstr(logText,"stage=course_load")&&strstr(logText,"stage=course_map"));
+ puts("R32/R33 observer: PASS");return 0;
 }

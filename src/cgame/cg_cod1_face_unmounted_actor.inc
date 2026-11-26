@@ -154,17 +154,21 @@ static int CGFA4_CourseAsset(const cgfa4Lease_t *lease,cgfa4Resource_t *resource
         path=paths[i];frames=counts[i];intervals=frames-(i&1);bones=53;
     }
     if(!*cached){
-        int size=0;
+        uint64_t start=CGAP32_Start();int size=0;
         void *raw=CGFA4_Read(lease,path,&size);
         c1ab14Clip_t *clip=NULL;
         int ok=raw && C1AB14_Decode(raw,size,&clip) && clip->frames==frames &&
                clip->intervals==intervals && clip->fps==fps && clip->bones==bones;
         free(raw);
-        if(!ok || !CGFA4_Current(lease)){C1AB14_Free(clip);return 0;}
+        ok=ok&&CGFA4_Current(lease);
+        if(start)CGAP32_End(C1AP32_COURSE_LOAD,start,ok,(unsigned)lease->actor.number);
+        if(!ok){C1AB14_Free(clip);return 0;}
         *cached=clip;
     }
     if(!*mapped){
-        if(!C1AD14_Map(resource->resource,*cached,map))return 0;
+        uint64_t start=CGAP32_Start();int ok=C1AD14_Map(resource->resource,*cached,map);
+        if(start)CGAP32_End(C1AP32_COURSE_MAP,start,ok,(unsigned)lease->actor.number);
+        if(!ok)return 0;
         *mapped=1;
     }
     *clipOut=*cached;
@@ -208,7 +212,7 @@ static int CGFA4_CourseApproach(const cgfa4Lease_t *lease,cgfa4Resource_t *resou
         memcpy(bank.map[i],map,clip->bones);
         nodes[i+1].phase=phase;
     }
-    if(!CGFA4_Current(lease) || !C1AST14_Sample(&bank,nodes,3,mixed,128))return 0;
+    if(!CGFA4_Current(lease) || !CGAP32_Tree(&bank,nodes,3,mixed,128))return 0;
     for(i=0;i<2;i++)for(j=0;j<bank.clip[i]->bones;j++){
         unsigned bone=bank.map[i][j];
         pose[bone]=mixed[bone];
@@ -239,7 +243,7 @@ static int CGFA4_CourseEntry(const cgfa4Lease_t *lease,cgfa4Resource_t *resource
         if(!CGFA4_CourseAsset(lease,resource,frames[i],&clip,&map))return 0;
         bank.clip[i]=clip;memcpy(bank.map[i],map,clip->bones);
     }
-    if(!CGFA4_Current(lease)||!C1AST14_Sample(&bank,nodes,sizeof(nodes)/sizeof(nodes[0]),mixed,128))return 0;
+    if(!CGFA4_Current(lease)||!CGAP32_Tree(&bank,nodes,sizeof(nodes)/sizeof(nodes[0]),mixed,128))return 0;
     for(i=0;i<bank.count;i++)for(j=0;j<bank.clip[i]->bones;j++){
         unsigned bone=bank.map[i][j];
         pose[bone]=mixed[bone];
@@ -247,7 +251,7 @@ static int CGFA4_CourseEntry(const cgfa4Lease_t *lease,cgfa4Resource_t *resource
     return 1;
 }
 
-static int CGFA4_CourseClip(const cgfa4Lease_t *lease,cgfa4Resource_t *resource,
+static int CGFA4_CourseClipImpl(const cgfa4Lease_t *lease,cgfa4Resource_t *resource,
                             float phase,c1ab14Accumulator_t *pose){
     int flags=lease->actor.cod1TurretActorFlags;
     if(flags & COD1_COURSE_ENTRY_BIT)return CGFA4_CourseEntry(lease,resource,phase,pose);
@@ -257,6 +261,14 @@ static int CGFA4_CourseClip(const cgfa4Lease_t *lease,cgfa4Resource_t *resource,
     if((flags & ~COD1_COURSE_APPROACH_BIT)!=COD1_COURSE_STOP_FLAGS)return 1;
     return CGFA4_CourseLayer(lease,resource,COD1_CLIP_CROUCH_STOP,
                              lease->actor.cod1TurretActorPhases[1][11],lease->actor.cod1TurretActorPhases[1][12],pose);
+}
+static int CGFA4_CourseClip(const cgfa4Lease_t *lease,cgfa4Resource_t *resource,
+                            float phase,c1ab14Accumulator_t *pose){
+    uint64_t start=CGAP32_Start();unsigned owner=(unsigned)lease->actor.number;
+    int ladder=COD1_IS_LADDER_FRAME(lease->actor.frame);
+    int ok=CGFA4_CourseClipImpl(lease,resource,phase,pose);
+    if(start)CGAP32_End(ladder?C1AP32_COURSE_LADDER:C1AP32_COURSE,start,ok,owner);
+    return ok;
 }
 static int CGFA4_Jumper(const cgfa4Lease_t *lease,cgfa4Resource_t *resource,c1ab14Accumulator_t *pose){
  c1ab14Accumulator_t part[128]={0};unsigned i;float weight,phase;

@@ -12,7 +12,7 @@ static c1ap32Window cgAnim32;
 static uint64_t cgAnim32Hz,cgAnim32Revision;
 static int cgAnim32Frame,cgAnim32Known,cgAnim32Enabled;
 static void CGAP32_Print(const c1ap32Window *w){
- static const char *names[C1AP32_STAGES]={"actor","resource","pose_hit","pose_miss","source","clip_load","bone_map","tree_sample","skeleton","blend","submit"};
+ static const char *names[C1AP32_STAGES]={"actor","resource","pose_hit","pose_miss","source","clip_load","bone_map","tree_sample","skeleton","blend","submit","course","course_ladder","course_load","course_map"};
  unsigned i;
  CG_Printf("[OPT_ANIM_CG] revision=%llu first=%d last=%d hz=%llu frames=%u actors=%u decoded_ladder_actors=%u max_nodes=%u max_leaves=%u ladder_mask=%u\n",
   (unsigned long long)w->revision,w->first,w->last,(unsigned long long)cgAnim32Hz,w->frames,w->actors,w->decodedLadderActors,w->maxNodes,w->maxLeaves,w->ladderMask);

@@ -179,7 +179,7 @@ static int MotionSharedTerminal(const cod1ActorRecord_t *a,const GscEntityRef *r
  * The same registered runner has native contents 0x4000 and an RTCW
  * presentation body. World geometry, player and owner exclusions still
  * participate in the native query. No entity is temporarily unlinked. */
-static int MotionCourseSweep(const cod1ActorLease_t *lease,uint64_t assignment,int now,
+static int MotionCourseSweepImpl(const cod1ActorLease_t *lease,uint64_t assignment,int now,
                             const vec3_t start,const vec3_t end,int mask,trace_t *tr){
     const cod1ActorRecord_t *a=&cod1Actors[lease->actorIndex];
     const gentity_t *e=&g_entities[lease->entity.slot];
@@ -196,6 +196,13 @@ static int MotionCourseSweep(const cod1ActorLease_t *lease,uint64_t assignment,i
         if(trap_Cod1SpatialCapsuleTrace(&q,tr)!=COD1_SPATIAL_OK)return 0;
     }else trap_TraceCapsule(tr,start,e->r.mins,e->r.maxs,end,lease->entity.slot,mask);
     return MotionCurrent(lease,assignment,now);
+}
+static int MotionCourseSweep(const cod1ActorLease_t *lease,uint64_t assignment,int now,
+                            const vec3_t start,const vec3_t end,int mask,trace_t *tr){
+    uint64_t epoch=lease->entity.epoch,stamp=ActorProfileStart31();unsigned owner=lease->entity.slot;
+    int ok=MotionCourseSweepImpl(lease,assignment,now,start,end,mask,tr);
+    if(stamp)ActorProfileFinish31(C1AP33_SWEEP,stamp,epoch,now,owner,ok,0,0,0,0);
+    return ok;
 }
 /* PM clips linked character bodies as axis-aligned boxes
  * (CM_TraceInternal, ALWAYS_BBOX_VS_BBOX). An actor course sweep
@@ -256,7 +263,7 @@ static void MotionPassPlayer(const gentity_t *actor,const vec3_t origin,
 }
 /* Returns 1 for a completed floor query, 0 for lost ownership, -1 for no
  * walkable ground. Being blocked is ordinary controller state, not success. */
-static int MotionFloor(const cod1ActorLease_t *lease,uint64_t assignment,int now,const vec3_t at,
+static int MotionFloorImpl(const cod1ActorLease_t *lease,uint64_t assignment,int now,const vec3_t at,
                        vec3_t floor,int mask,int runnerGoal) {
     trace_t tr;vec3_t start,end;
     VectorCopy(at,start);VectorCopy(at,end);start[2]+=18;end[2]-=128;
@@ -274,6 +281,13 @@ static int MotionFloor(const cod1ActorLease_t *lease,uint64_t assignment,int now
     }
     if(!isfinite(tr.endpos[0])||!isfinite(tr.endpos[1])||!isfinite(tr.endpos[2]))return -1;
     VectorCopy(tr.endpos,floor);return 1;
+}
+static int MotionFloor(const cod1ActorLease_t *lease,uint64_t assignment,int now,const vec3_t at,
+                       vec3_t floor,int mask,int runnerGoal){
+    uint64_t epoch=lease->entity.epoch,stamp=ActorProfileStart31();unsigned owner=lease->entity.slot;
+    int result=MotionFloorImpl(lease,assignment,now,at,floor,mask,runnerGoal);
+    if(stamp)ActorProfileFinish31(C1AP33_FLOOR,stamp,epoch,now,owner,result>0,0,0,0,0);
+    return result;
 }
 static int MotionCrossesEntryPeer(const vec3_t start,const vec3_t end,
                                   const vec3_t center,float clearance){
@@ -623,8 +637,8 @@ static float MotionBrakeFraction(int dt,int remaining){
     float fraction=fminf(1,(float)dt/remaining);
     return fraction*(2-fraction);
 }
-static int MotionLadderStep(const cod1ActorLease_t *lease,const cod1ActorGoalSnapshot_t *goal,
-                            int now,int dt,int mask,const vec3_t origin,vec3_t pos,vec3_t facing,const char *runner){
+static int MotionLadderStepImpl(const cod1ActorLease_t *lease,const cod1ActorGoalSnapshot_t *goal,
+                            int now,int dt,int mask,const vec3_t origin,vec3_t pos,vec3_t facing,const char *runner,int *profileDown){
     cod1LocalRoute_t *r=&cod1Actors[lease->actorIndex].motion.route;
     gentity_t *e=g_entities+lease->entity.slot;
     int down=G_Cod1RunnerStep(&lease->entity,&goal->node)==21,sign=down?-1:1;
@@ -634,6 +648,7 @@ static int MotionLadderStep(const cod1ActorLease_t *lease,const cod1ActorGoalSna
     vec3_t delta,landing,clipEnd;
     int clip,result,finished;
     trace_t tr;
+    if(profileDown)*profileDown=down;
     if(!r->diveArmed)return -1;
     if(roots->epoch!=lease->entity.epoch){
         if(!MotionLoadRootSamples(lease,goal->assignment,now,down?"xanim/ladder_climbdown":"xanim/ladder_climbup",20,3,30,55,roots->loop,NULL) ||
@@ -711,7 +726,11 @@ static int MotionLadderStep(const cod1ActorLease_t *lease,const cod1ActorGoalSna
         }
         VectorCopy(landing,pos);
     }
-    trap_TraceCapsule(&tr,origin,e->r.mins,e->r.maxs,pos,lease->entity.slot,CONTENTS_BODY);
+    {
+        uint64_t epoch=lease->entity.epoch,stamp=ActorProfileStart31();unsigned owner=lease->entity.slot;
+        trap_TraceCapsule(&tr,origin,e->r.mins,e->r.maxs,pos,lease->entity.slot,CONTENTS_BODY);
+        if(stamp)ActorProfileFinish31(C1AP33_LADDER_TRACE,stamp,epoch,now,owner,1,0,0,0,0);
+    }
     if(!MotionCurrent(lease,goal->assignment,now))return -1;
     if(tr.startsolid || tr.allsolid || tr.fraction<1)return 0;
     if(r->ladderFrame!=clip && g_debugMove.integer)
@@ -735,6 +754,14 @@ static int MotionLadderStep(const cod1ActorLease_t *lease,const cod1ActorGoalSna
     return finished?2:1;
 }
 
+static int MotionLadderStep(const cod1ActorLease_t *lease,const cod1ActorGoalSnapshot_t *goal,
+                            int now,int dt,int mask,const vec3_t origin,vec3_t pos,vec3_t facing,const char *runner){
+    uint64_t epoch=lease->entity.epoch,stamp=ActorProfileStart31();unsigned owner=lease->entity.slot;
+    int down=0;
+    int result=MotionLadderStepImpl(lease,goal,now,dt,mask,origin,pos,facing,runner,stamp?&down:NULL);
+    if(stamp)ActorProfileFinish31(down?C1AP33_LADDER_DOWN:C1AP33_LADDER_UP,stamp,epoch,now,owner,result>0,0,0,0,down?1u:8u);
+    return result;
+}
 /* Local presentation of Training's living runner after the original terminal
  * stance write. Keep the chosen family and clock on the actor's assignment. */
 /* At 20051EB0 the scripted goal can be reached on a live path. On this
@@ -1065,10 +1092,12 @@ int G_Cod1ActorMotionFrame(const GscEntityRef *ref,int now,
     int blockLine=0,approachingLadder=0,walkingToStand=0;
     vec3_t scriptedTarget;
     c1CourseEntry_t entry={0};
+    uint64_t profileStart,profileEpoch;unsigned profileOwner;
     if(!ref||!current||!notify||!ActorGoalBuffers(ref,sizeof(*ref),NULL,0,NULL,0)||
        current(context)!=1||!MotionLease(ref,&lease)||now!=level.time)return 0;
     m=&cod1Actors[lease.actorIndex].motion;
     if(!m->active||m->busy||now<m->lastTime)return 0;
+    profileEpoch=lease.entity.epoch;profileOwner=lease.entity.slot;profileStart=ActorProfileStart31();
     goal=cod1Actors[lease.actorIndex].goal;m->busy=1;
     courseStep=goal.assigned?G_Cod1RunnerStep(ref,&goal.node):0;
     dt=now-m->lastTime;m->lastTime=now;
@@ -1426,12 +1455,19 @@ done:
         /* Commit before notify. A continuation may replace goal or delete self;
          * never write old pending state after this boundary. */
         m->notified=goal.assignment;
-        if(current(context)!=1||!MotionCurrent(&lease,goal.assignment,now))return 0;
-        return notify(context,ref)==1;
+        if(current(context)!=1||!MotionCurrent(&lease,goal.assignment,now)){
+            if(profileStart)ActorProfileFinish31(C1AP33_MOTION,profileStart,profileEpoch,now,profileOwner,0,0,0,0,0);
+            return 0;
+        }
+        result=notify(context,ref)==1;
+        if(profileStart)ActorProfileFinish31(C1AP33_MOTION,profileStart,profileEpoch,now,profileOwner,result,0,0,0,0);
+        return result;
     }
+    if(profileStart)ActorProfileFinish31(C1AP33_MOTION,profileStart,profileEpoch,now,profileOwner,1,0,0,0,0);
     return 1;
 lost:
     if(ActorLeaseValid(&lease))cod1Actors[lease.actorIndex].motion.busy=0;
+    if(profileStart)ActorProfileFinish31(C1AP33_MOTION,profileStart,profileEpoch,now,profileOwner,0,0,0,0,0);
     return 0;
 }
 
