@@ -28,30 +28,55 @@ Play-Training.cmd "C:\Games\Call of Duty"
 
 ## Сборка из исходников
 
-Откройте **x86 Native Tools Command Prompt for Visual Studio** с установленными MSVC, Windows SDK и Python 3. Выполните команду из корня репозитория.
+Установите Visual Studio или Build Tools с набором **«Разработка классических приложений на C++»**, компонентами MSVC для x86/x64 и Windows SDK. Для сборки используется **Windows PowerShell 5.1**; Python не требуется.
+
+Откройте **Build-Windows.cmd** двойным щелчком либо выполните его из корня репозитория в обычной командной строке Windows:
 
 ```bat
-python tools\build_windows.py
+Build-Windows.cmd
 ```
 
-В `build\bin` появятся `WolfSP.exe`, `qagamex86.dll`, `cgamex86.dll` и `uix86.dll`. Положите рядом с ними **32-битную** `soft_oal.dll`. В готовую сборку для Windows уже входит [OpenAL Soft 1.25.2](https://github.com/kcat/openal-soft/releases/tag/1.25.2).
+Скрипт находит Visual Studio и подготавливает окружение x86. После завершения или ошибки окно ждёт нажатия клавиши, чтобы сообщение оставалось видимым. При успешной сборке в `build\bin` появятся `WolfSP.exe`, `qagamex86.dll`, `cgamex86.dll` и `uix86.dll`, а в `build` — файлы запуска Training. Для повторной сборки выбирайте новый или пустой каталог через `-Output`.
+
+Положите **32-битную** `soft_oal.dll` в каталог `bin` либо передайте путь сборщику:
+
+```bat
+Build-Windows.cmd -Output build_opt_r30 -OpenAL "C:\path\soft_oal.dll"
+```
+
+В готовую сборку 724A для Windows уже входит [OpenAL Soft 1.25.2](https://github.com/kcat/openal-soft/releases/tag/1.25.2).
 
 В опубликованном `qagamex86.dll` компилятор использовал профиль выполнения Training для оптимизации игровой логики (PGO). Обычная сборка из исходников использует оптимизацию при компоновке (LTCG). Размер DLL и частота кадров при самостоятельной сборке могут отличаться.
 
 ```bat
-python tools\run_training.py --game "C:\Games\Call of Duty"
+build\Play-Training.cmd "C:\Games\Call of Duty"
 ```
 
-Для другого каталога сборки передайте `--output` при сборке и `--build` при запуске. Порт использует оригинальный сценарий `maps/training.gsc` из установленной игры и [конфигурацию Training](main/training_player.cfg).
+Без пути к игре файл запуска открывает выбор `CoDSP.exe`. Порт использует оригинальный сценарий `maps/training.gsc` из установленной игры и [конфигурацию Training](main/training_player.cfg).
+
+Если Visual Studio нужно указать вручную, передайте её корневой каталог. Существующий совместимый профиль PGO можно передать через `-GamePgd`:
+
+```bat
+Build-Windows.cmd -Output build_opt_r30 -VisualStudio "C:\Program Files\Microsoft Visual Studio\18\Community"
+Build-Windows.cmd -Output build_opt_r30_pgo -GamePgd "C:\path\training.pgd"
+```
+
+Для запуска без ожидания клавиши используйте PowerShell-скрипт напрямую:
+
+```bat
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\build_windows.ps1 -Output build_opt_r30
+```
+
+Прежний Python-сборщик остаётся дополнительным вариантом: `python tools\build_windows.py --output build_opt_r30` из **x86 Native Tools Command Prompt for Visual Studio**. Python нужен только при выборе этого варианта или Python-инструментов разработки.
 
 ### Сравнение режимов обработки — R30
 
-В исходники R30 добавлены два режима одной сборки: `--thread-mode single` и `--thread-mode multi` (по умолчанию). Сборщик также копирует в каталог сборки **Play-Training-Single.cmd** и **Play-Training-Multi.cmd** для запуска двойным щелчком. Режим выбирается до запуска игры.
+В исходники R30 добавлены два режима одной сборки: `single` и `multi` (по умолчанию). Сборщик копирует в каталог сборки **Play-Training-Single.cmd** и **Play-Training-Multi.cmd** для запуска двойным щелчком. Режим выбирается до запуска игры.
 
 ```bat
-python tools\build_windows.py --output build_opt_r30
-python tools\run_training.py --build build_opt_r30 --game "C:\Games\Call of Duty" --thread-mode single
-python tools\run_training.py --build build_opt_r30 --game "C:\Games\Call of Duty" --thread-mode multi
+Build-Windows.cmd -Output build_opt_r30
+build_opt_r30\Play-Training-Single.cmd "C:\Games\Call of Duty"
+build_opt_r30\Play-Training-Multi.cmd "C:\Games\Call of Duty"
 ```
 
 `single` выполняет игровые и графические расчёты на главном потоке; `multi` включает поток рендера и общий пул для независимых расчётов моделей, освещения и части загрузки столкновений. Логирование одинаково в обоих режимах; вспомогательные потоки звука и журнала могут работать и в `single`. Изменения R30 ещё требуют сборки MSVC и проверки в игре; опубликованный архив 724A их не содержит. Область изменений, проверки и порядок сравнения описаны в [OPT R30](docs/optimization/OPT_R30_MULTITHREADING.md).

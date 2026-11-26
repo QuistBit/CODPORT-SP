@@ -85,16 +85,40 @@ captures should identify which further stage justifies that larger refactor.
 
 ## Build once, run both modes
 
-Use an **x86 Native Tools Command Prompt for Visual Studio**, with MSVC,
-Windows SDK and Python available. Build all matching modules into a new folder:
+Install Visual Studio or Build Tools with **Desktop development with C++**, the
+x86/x64 MSVC tools and a Windows SDK. **Python is not required** for the primary
+Windows build or the packaged launchers. The builder uses Windows PowerShell
+5.1 and automatically locates Visual Studio and initializes its x86 environment.
+
+Double-click **Build-Windows.cmd** for the default `build` directory, or run it
+from the repository root in an ordinary Windows Command Prompt. Build all
+matching modules into a new or empty folder:
 
 ```bat
-python tools\build_windows.py --output build_opt_r30
+Build-Windows.cmd -Output build_opt_r30
 ```
 
-Provide the 32-bit OpenAL DLL either through `--openal "C:\path\soft_oal.dll"`
+Provide the 32-bit OpenAL DLL either through `-OpenAL "C:\path\soft_oal.dll"`
 at build time or by copying it into `build_opt_r30\bin`. The build script now
 copies the two launchers and `THREADING-MODES.md` into the build directory.
+
+The CMD wrapper waits for a key after completion or failure so its diagnostic
+message remains visible. These optional arguments select a particular Visual
+Studio installation or an existing compatible PGO database:
+
+```bat
+Build-Windows.cmd -Output build_opt_r30 -OpenAL "C:\path\soft_oal.dll"
+Build-Windows.cmd -Output build_opt_r30 -VisualStudio "C:\Program Files\Microsoft Visual Studio\18\Community"
+Build-Windows.cmd -Output build_opt_r30_pgo -GamePgd "C:\path\training.pgd"
+```
+
+For automation without the final keypress, invoke the PowerShell script directly:
+
+```bat
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\build_windows.ps1 -Output build_opt_r30
+```
+
+Start either mode from the resulting build directory:
 
 ```bat
 build_opt_r30\Play-Training-Single.cmd "C:\Games\Call of Duty"
@@ -102,9 +126,12 @@ build_opt_r30\Play-Training-Multi.cmd "C:\Games\Call of Duty"
 ```
 
 Without a game path, each launcher opens the existing `CoDSP.exe` picker.
-The equivalent Python commands are:
+The Python builder and launcher remain optional development alternatives. The
+Python builder requires an **x86 Native Tools Command Prompt for Visual Studio**
+and Python 3; their equivalent commands are:
 
 ```bat
+python tools\build_windows.py --output build_opt_r30
 python tools\run_training.py --build build_opt_r30 --game "C:\Games\Call of Duty" --thread-mode single
 python tools\run_training.py --build build_opt_r30 --game "C:\Games\Call of Duty" --thread-mode multi
 ```
@@ -212,3 +239,34 @@ These checks do **not** validate native MSVC x86 code generation/assembly,
 Windows ABI/CPU discovery, OpenGL context transfers, the complete renderer
 wrappers with retail resources, or gameplay. A native Windows build and the
 comparison above are still required. No FPS or loading-time gain is claimed.
+The PowerShell build entry point also requires validation on Windows; the
+portable kernel and Python tests above do not establish that it has compiled
+the engine successfully.
+
+### Build launcher without Python
+
+`Build-Windows.cmd` invokes the built-in Windows PowerShell executable and keeps
+the completion/error message visible. `tools/build_windows.ps1` discovers the
+installed C++ tools, imports the actual x86 environment from `vcvarsall.bat`, and
+runs the existing JSON recipe. It does not emulate initialization by setting an
+architecture flag. The original Python builder remains an optional alternative.
+
+The actual PowerShell recipe runner was exercised using PowerShell 7 on Linux
+with isolated native compiler/linker stubs. The complete manifest reached all
+32 compiler and seven library/link invocations and produced all seven dummy
+products. A separate fixture checked historical-header override and restoration,
+UTF-16LE response files with BOM, paths containing spaces and Cyrillic text,
+embedded quotes and trailing backslashes, stdout/stderr logs, PGD/OpenAL copies,
+preservation of nonempty output directories, and a native exit-code-37 failure
+that stops the build and retains its log.
+
+The reproducible test needs PowerShell and a POSIX C compiler, without Python:
+
+```sh
+pwsh -NoProfile -File tools/tests/test_build_windows.ps1
+```
+
+These tests validate build orchestration and argument/file handling. They do
+not execute Windows `cmd.exe`, Visual Studio discovery/initialization, Windows
+PowerShell 5.1, or MSVC. The Windows entry point and its 5.1-compatible API usage
+were also reviewed statically; an actual Windows build remains pending.
