@@ -73,6 +73,7 @@ static cgfa4Resource_t*CGFA4_Resource(const cgfa4Lease_t*l){cgfa4Resource_t stag
  C1AD14_Free(slot->resource);*slot=staged;staged.resource=NULL;ok=1;
  done:for(i=0;i<8;i++){free(models[i]);free(parts[i]);}C1AD14_Free(staged.resource);return ok?slot:NULL;
 }
+#include "cg_cod1_anim_profile32.inc"
 #include "cg_cod1_source_pose.inc"
 /* Layer the authored pelvis/leg tracks before hierarchy composition. Hands,
  * head and eyes retain their selected local channels; root delta is not reapplied. */
@@ -290,7 +291,7 @@ typedef struct {
     cod1TurretActorRenderState_t pose;
 } cgfa4Endpoint_t;
 static cgfa4Endpoint_t cgfa4Endpoints[32][2];
-static cgfa4Endpoint_t *CGFA4_Pose(const cgfa4Lease_t *lease,cgfa4Resource_t *r){
+static cgfa4Endpoint_t *CGFA4_PoseImpl(const cgfa4Lease_t *lease,cgfa4Resource_t *r,int *profileHit){
     const entityState_t *s=&lease->actor;
     cgfa4Endpoint_t *pair=cgfa4Endpoints[s->number%32],*slot;
     cod1TurretActorRenderState_t *state;
@@ -298,7 +299,7 @@ static cgfa4Endpoint_t *CGFA4_Pose(const cgfa4Lease_t *lease,cgfa4Resource_t *r)
     c1aw14Pose_t pose;unsigned i,k;
     for(i=0;i<2;i++)
         if(pair[i].revision==lease->revision && pair[i].pose.hModel==r->handle &&
-           !memcmp(&pair[i].wire,s,sizeof(*s)))return pair+i;
+           !memcmp(&pair[i].wire,s,sizeof(*s))){if(profileHit)*profileHit=1;return pair+i;}
     slot=pair[0].pose.sampleTick<=pair[1].pose.sampleTick?pair:pair+1;
     slot->revision=0;state=&slot->pose;
  float localPhases[2][21];int baseFlags=s->cod1TurretActorFlags & ~COD1_COURSE_EXTRA_FLAGS;int walking=s->cod1TurretActorVersion==COD1_SCRIPTED_ACTOR_WIRE_VERSION && (baseFlags==3 || baseFlags==COD1_COURSE_STOP_FLAGS);
@@ -312,13 +313,19 @@ static cgfa4Endpoint_t *CGFA4_Pose(const cgfa4Lease_t *lease,cgfa4Resource_t *r)
   float phase=0;int gait=C1SourceWalkRead(s,&phase);
   if(gait<0||!CGFA4_SourceSample(lease,r,accumulated))return NULL;
   if(gait&&!CGFA4_Walk(lease,r,phase,accumulated))return NULL;
-  if(!C1AD14_Build(r->resource,accumulated,r->bank.bones,&pose))return NULL;
+  if(!CGAP32_Skeleton(r->resource,accumulated,r->bank.bones,&pose))return NULL;
  }else if(!r||!CGFA4_Current(lease)||!(r->version==COD1_SCRIPTED_ACTOR_WIRE_VERSION?
  C1ASB14_NodesFull(lease->actor.cod1TurretActorGenericCurrent,localPhases,lease->actor.cod1TurretActorCurrent,nodes):
- C1AFU14_Nodes(lease->actor.cod1TurretActorGenericCurrent,localPhases,nodes))||!C1AST14_Sample(&r->bank,nodes,r->version==COD1_SCRIPTED_ACTOR_WIRE_VERSION?C1ASB14_NODES:56,accumulated,128)||(walking&&!((COD1_IS_RIFLE_CROUCHRUN(s->frame)||s->frame==COD1_FRAME_WALL_DIVE||s->frame==COD1_FRAME_PRONE_CRAWL||s->frame==COD1_FRAME_PRECOMBAT_RUN||COD1_IS_LADDER_FRAME(s->frame)||COD1_IS_REST_FRAME(s->frame)||COD1_IS_COURSE_WALK_FRAME(s->frame))?CGFA4_CourseClip:CGFA4_Walk)(lease,r,s->cod1TurretActorPhases[1][10],accumulated))||!CGFA4_Jumper(lease,r,accumulated)||!C1AD14_Build(r->resource,accumulated,r->bank.bones,&pose))return NULL;
+ C1AFU14_Nodes(lease->actor.cod1TurretActorGenericCurrent,localPhases,nodes))||!CGAP32_Tree(&r->bank,nodes,r->version==COD1_SCRIPTED_ACTOR_WIRE_VERSION?C1ASB14_NODES:56,accumulated,128)||(walking&&!((COD1_IS_RIFLE_CROUCHRUN(s->frame)||s->frame==COD1_FRAME_WALL_DIVE||s->frame==COD1_FRAME_PRONE_CRAWL||s->frame==COD1_FRAME_PRECOMBAT_RUN||COD1_IS_LADDER_FRAME(s->frame)||COD1_IS_REST_FRAME(s->frame)||COD1_IS_COURSE_WALK_FRAME(s->frame))?CGFA4_CourseClip:CGFA4_Walk)(lease,r,s->cod1TurretActorPhases[1][10],accumulated))||!CGFA4_Jumper(lease,r,accumulated)||!CGAP32_Skeleton(r->resource,accumulated,r->bank.bones,&pose))return NULL;
  memset(state,0,sizeof(*state));state->version=COD1_TURRET_ACTOR_RENDER_GENERIC_VERSION;state->size=sizeof(*state);state->hModel=r->handle;state->ownerNum=lease->actor.number;state->epochLo=lease->actor.cod1TurretEpochLo;state->epochHi=lease->actor.cod1TurretEpochHi;state->generation=lease->actor.cod1TurretActorGeneration;state->sampleTick=lease->actor.cod1TurretActorTick;state->boneCount=pose.bones;memcpy(state->origin,lease->actor.pos.trBase,12);memcpy(state->baseAngles,lease->actor.apos.trBase,12);
  for(i=0;i<pose.bones;i++){double norm=0;for(k=0;k<4;k++)norm+=(double)pose.q[i][k]*pose.q[i][k];if(!(norm>1e-15&&norm<1e15))return NULL;norm=sqrt(norm);for(k=0;k<4;k++)state->q[i][k]=(float)(pose.q[i][k]/norm);memcpy(state->p[i],pose.matrix[i]+12,12);}if(!CGFA4_Current(lease))return NULL;
     slot->wire=*s;slot->revision=lease->revision;return slot;
+}
+static cgfa4Endpoint_t *CGFA4_Pose(const cgfa4Lease_t *lease,cgfa4Resource_t *r){
+ uint64_t start=CGAP32_Start();int hit=0;
+ cgfa4Endpoint_t *result=CGFA4_PoseImpl(lease,r,start?&hit:NULL);
+ if(start)CGAP32_End(hit?C1AP32_HIT:C1AP32_MISS,start,result!=NULL,(unsigned)lease->actor.number);
+ return result;
 }
 static void CG_BlendActorPose(cod1TurretActorRenderState_t *out,const cod1TurretActorRenderState_t *next,float f){
     unsigned bone,j;
@@ -345,8 +352,10 @@ static int CGFA4_Entity(centity_t*cent){cgfa4Lease_t lease;cgfa4Resource_t*r;con
  int baseFlags=s->cod1TurretActorFlags & ~COD1_COURSE_EXTRA_FLAGS;
  int walking=s->cod1TurretActorVersion==COD1_SCRIPTED_ACTOR_WIRE_VERSION && (baseFlags==3 || baseFlags==COD1_COURSE_STOP_FLAGS);
  cgfa4Endpoint_t *first,*second;const entityState_t *n=&cent->nextState;
+ uint64_t profileActor,profilePart;CGAP32_Frame();profileActor=CGAP32_Start();
  if(s->cod1TurretActorVersion==COD1_SOURCE_POSE_WIRE_VERSION){static unsigned seen[MAX_GENTITIES];if(!seen[s->number]++)CG_Printf("[378 client arrived] owner=%d tick=%d\n",s->number,s->cod1TurretActorTick);}
- r=CGFA4_Resource(&lease);
+ profilePart=CGAP32_Start();r=CGFA4_Resource(&lease);
+ if(profilePart)CGAP32_End(C1AP32_RESOURCE,profilePart,r!=NULL,(unsigned)s->number);
  if(!r||!CGFA4_Current(&lease)||(first=CGFA4_Pose(&lease,r))==NULL)goto done;
  state=first->pose;
  if(cg.nextSnap && cent->interpolate && cg.frameInterpolation>0 && cg.frameInterpolation<=1 &&
@@ -359,14 +368,16 @@ static int CGFA4_Entity(centity_t*cent){cgfa4Lease_t lease;cgfa4Resource_t*r;con
     nextLease.snapshot=cg.nextSnap;nextLease.actor=*n;
     if(CGFA4_Current(&nextLease) && (second=CGFA4_Pose(&nextLease,r))!=NULL &&
        second->pose.boneCount==state.boneCount){
-        CG_BlendActorPose(&state,&second->pose,cg.frameInterpolation);
+        profilePart=CGAP32_Start();CG_BlendActorPose(&state,&second->pose,cg.frameInterpolation);
+        if(profilePart)CGAP32_End(C1AP32_BLEND,profilePart,1,(unsigned)s->number);
         if(cg_debugAnim.integer>2)CG_Printf("[Training render pose] owner=%d/%u t=%d first=%d next=%d f=%.4f x=%.3f joint=%.4f\n",
             state.ownerNum,state.generation,cg.time,s->cod1TurretActorTick,n->cod1TurretActorTick,
             cg.frameInterpolation,state.origin[0],state.p[state.boneCount-1][2]);
     }
  }
  if(!CGFA4_Current(&lease))goto done;
- ok=trap_R_AddCod1TurretActorToScene(&state)==1;
+ profilePart=CGAP32_Start();ok=trap_R_AddCod1TurretActorToScene(&state)==1;
+ if(profilePart)CGAP32_End(C1AP32_SUBMIT,profilePart,ok,(unsigned)s->number);
  if(ok && cg_debugAnim.integer && s->cod1TurretActorVersion==COD1_SOURCE_POSE_WIRE_VERSION){
   float phase=0;int gait=C1SourceWalkRead(s,&phase);static unsigned seen[MAX_GENTITIES];static int tick[MAX_GENTITIES];
   if(gait==1)seen[s->number]=s->cod1TurretActorGeneration;
@@ -451,7 +462,9 @@ static int CGFA4_Entity(centity_t*cent){cgfa4Lease_t lease;cgfa4Resource_t*r;con
   int a=C1AT14_Find(r->resource->assembly,"bip01 l foot"),b=C1AT14_Find(r->resource->assembly,"bip01 r foot");
   if(a>=0&&b>=0)CG_Printf("[Foley gait] owner=%d/%u tick=%d phase=%.5f xy=%.3f,%.3f feetZ=%.3f,%.3f\\n",state.ownerNum,state.generation,state.sampleTick,s->cod1TurretActorPhases[1][10],state.origin[0],state.origin[1],state.p[a][2],state.p[b][2]);
  }
- done:if(cgfa4Busy==lease.revision)cgfa4Busy=0;(void)ok;return 1;
+ done:if(cgfa4Busy==lease.revision)cgfa4Busy=0;
+ if(profileActor)CGAP32_End(C1AP32_ACTOR,profileActor,ok,(unsigned)lease.actor.number);
+ (void)ok;return 1;
 }
 
 #endif
