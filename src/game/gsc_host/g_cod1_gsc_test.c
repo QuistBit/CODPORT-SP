@@ -1838,7 +1838,8 @@ admit_program:
     if(gscTestEntityMode==43&&G_Cod1GscFeature47(C1CP47_F_ACTOR_PREFIX)==1){
         const GscSessionActorBootstrapHost *actors=G_Cod1GscFeature47(C1CP47_F_BSP_CONSTRUCT)==1?G_Cod1ActorBspBootstrapHost():G_Cod1ActorBootstrapHost();
         if(gscTestCarbine.selected)actors=gscTestTurret.selected?GscTestTurretActorHost(actors):GscTestCarbineActorHost(actors);
-        if(!actors||!gsc_session_admit_actor_bootstrap(gscTestSession,gscTestId,actors,error,sizeof(error))){G_Printf("[GSC R70] real actor cohort admission failed: %s\n",error);GscTestDrop();GscTestLeave();return;}
+        if(!actors){G_Printf("[GSC R70] real actor cohort host unavailable (retained BSP cohort or capability wrapper refused)\n");GscTestDrop();GscTestLeave();return;}
+        if(!gsc_session_admit_actor_bootstrap(gscTestSession,gscTestId,actors,error,sizeof(error))){G_Printf("[GSC R70] real actor cohort admission failed: %s\n",error);GscTestDrop();GscTestLeave();return;}
         readonlyContext.map=actors->map_certificate;
     }
     if(nodeProgramSelected){GscSessionNodeScriptAdmission nodes;

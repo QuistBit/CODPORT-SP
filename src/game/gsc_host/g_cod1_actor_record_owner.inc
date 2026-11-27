@@ -114,7 +114,7 @@ static int Cod1ActorRecordAllocationEnd(gentity_t*ent,int outcome){
  else if(outcome==1&&r->state==COD1_RECORD_SPAWNER_BOUND&&(ent->spawnflags&1))r->state=COD1_RECORD_SPAWNER;
  else return Cod1ActorRecordRefuse("Actor BSP record has no genuine terminal intake outcome");
  cod1ActorRecordActive=0;
- if(r->state==COD1_RECORD_PLACED&&trap_Cvar_VariableIntegerValue("g_cod1GscBspConstruct")==1)
+ if(r->state==COD1_RECORD_PLACED&&G_Cod1GscFeature47(C1CP47_F_BSP_CONSTRUCT)==1)
   return Cod1ActorRecordConstructBsp(r);
  return 1;
 }

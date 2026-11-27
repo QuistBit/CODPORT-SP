@@ -1,0 +1,9 @@
+# OPT R47J — route the actual per-record BSP constructor gate through the campaign profile
+
+Base d3aba80272a81bc622218e000efa5c3f1cd0fb5d. User rtcwconsole(9).log: both attempts show native profile training, early program compiled, 10 unaccounted actors, R70 cohort admission refused, pre-player graph unavailable, disconnected. The previous CFG control has 10 per-record constructor receipts and zero unaccounted actors.
+
+Cod1ActorRecordAllocationEnd still reads raw g_cod1GscBspConstruct, although native mode does not write that cvar. This bypasses construction on all placed records; Cod1CohortHeader explicitly requires no unaccounted rows. Replace the single gate with G_Cod1GscFeature47(C1CP47_F_BSP_CONSTRUCT). No changes to constructor sequence, records, spawner/filter branches, cohort validity, graph rules, or legacy values. Report a null cohort host distinctly rather than a blank VM admission error. No cvar writes, no automatic CFG.
+
+Actual local verification: extracted the exact Cod1ActorRecordAllocationEnd source from the pinned file (1562 bytes, FNV-1a 8d4b0a63); candidate 1549 bytes, c3d502bb. Compiled that function with controlled host/constructor and feature-read stubs; 144 cases each under GCC C11 strict, Clang C11 strict and Clang ASan/UBSan. Old version fails the same regression assertion. Includes native vs legacy, raw 0/1/2, profile 0/1, placed/spawner/filtered, stale identity and constructor failure. This does not execute the real constructor, actual GAME callbacks or the Windows DLL. A targeted scan of other selected host files found no further raw names, not an exhaustive source-tree proof.
+
+Acceptance: fresh process without +exec training_player.cfg or extra GSC arguments. Expect ten "[GSC BSP] constructor before next record" receipts, zero unaccounted actors, pre-player graph published, GSC started. Actual MSVC and game validation pending.
