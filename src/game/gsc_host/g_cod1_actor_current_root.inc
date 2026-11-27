@@ -14,6 +14,10 @@ typedef struct {
     uint64_t epoch,receipt,lookRevision,faceRevision,scriptedRevision;int now,gunIndex;
 } C1ActorCurrentRoot;
 static int ActorCurrentRootOrder(C1ActorCurrentRoot *v) {
+    if(cod1EntityActive&&cod1EntityEpoch==cod1GenericEpoch&&
+       cod1TurretAnimationReceipt==cod1GenericReceipt&&
+       C1AGO14_Copy(&cod1GenericSourceOrder,C1GA_COUNT,cod1GenericEpoch,cod1GenericReceipt,
+                    v->first,v->next,v->order,&v->frontier))return 1;
     return C1AGO14_Build(cod1GenericDefinitions,C1GA_COUNT,v->first,v->next,v->order,&v->frontier);
 }
 static int ActorCurrentRootResource(const C1ActorCurrentRoot *v,unsigned ordinal,

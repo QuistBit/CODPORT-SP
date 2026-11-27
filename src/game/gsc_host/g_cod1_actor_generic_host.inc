@@ -12,6 +12,9 @@
 #include "../../qcommon/cod1_actor_root_interval14.h"
 #include "../../qcommon/cod1_actor_unmounted_tree14.h"
 #define C1GA_COUNT 2078u
+#define C1AGO14_PREPARED_CAPACITY C1GA_COUNT
+#include "../../qcommon/cod1_actor_prepared_order14.h"
+#undef C1AGO14_PREPARED_CAPACITY
 typedef struct {c1afl14State_t flags[C1GA_COUNT];unsigned nameCount;uint64_t generation[C1GA_COUNT],pending[C1GA_COUNT],serial,ownerIdentity;int32_t pendingTick[C1GA_COUNT];} C1GANotifyState;
 typedef struct {unsigned ordinal;char text[64];} C1GANameEntry;
 typedef struct {
@@ -81,6 +84,7 @@ static int ActorGenericNamedPending(const C1GARecord*);
 static int ActorGenericNamedAdvance(C1GARecord*,unsigned,const c1ar14Root_t*,float,int);
 static C1GARecord cod1GenericActors[COD1_ACTOR_CAPACITY];
 static c1agt14Definition_t cod1GenericDefinitions[C1GA_COUNT];
+static c1ago14Prepared_t cod1GenericSourceOrder;
 static GscAnimationCatalogEntry cod1GenericNames[C1GA_COUNT];
 /* Names and parent links are immutable between catalog publication and reset. */
 static struct {unsigned entries[2][25]; int ready;} cod1GenericMGMap;
@@ -133,6 +137,7 @@ static int ActorGenericPrivate(const void *p,size_t n) {
     ActorOverlap(p,n,cod1GenericActors,sizeof(cod1GenericActors))||
     ActorOverlap(p,n,&cod1GenericUnmountedBank,sizeof(cod1GenericUnmountedBank))||
     ActorOverlap(p,n,&cod1GenericLookEpoch,sizeof(cod1GenericLookEpoch))||ActorOverlap(p,n,&cod1GenericLookBusy,sizeof(cod1GenericLookBusy))||ActorOverlap(p,n,&cod1GenericLookRevision,sizeof(cod1GenericLookRevision))||
+    ActorOverlap(p,n,&cod1GenericSourceOrder,sizeof(cod1GenericSourceOrder))||
     ActorOverlap(p,n,cod1GenericDefinitions,sizeof(cod1GenericDefinitions))||
     ActorOverlap(p,n,cod1GenericNames,sizeof(cod1GenericNames))||
     ActorOverlap(p,n,&cod1GenericEpoch,sizeof(cod1GenericEpoch))||
@@ -156,7 +161,9 @@ static void ActorGenericRetire(uint32_t index,const GscEntityRef*owner){
  ActorGenericFreeOwned(r);memset(r,0,sizeof(*r));
 }
 static void ActorGenericReset(void) {
- unsigned i;ActorLocomotionReset();ActorFaceReset();if(cod1GenericOperation.busy)cod1GenericOperation.cancelled=1;
+ unsigned i;
+ C1AGO14_Retire(&cod1GenericSourceOrder);
+ ActorLocomotionReset();ActorFaceReset();if(cod1GenericOperation.busy)cod1GenericOperation.cancelled=1;
  for(i=0;i<COD1_ACTOR_CAPACITY;i++){ActorGenericFreeOwned(cod1GenericActors+i);memset(&cod1GenericActors[i],0,sizeof(C1GARecord));}
  ActorClonePoolClear();
  memset(&cod1GenericMGMap,0,sizeof(cod1GenericMGMap));
@@ -222,6 +229,9 @@ static int ActorGenericBuild(void) {
  }
  for(i=0;i<C1GA_COUNT;i++)nodes[i].rate=1;
  if(!C1AGT14_Valid(d,nodes,C1GA_COUNT)||epoch!=cod1EntityEpoch||receipt!=cod1TurretAnimationReceipt||cod1GenericOperation.cancelled)goto done;
+ /* No callback between this derived preparation and catalog publication.
+  * A refusal leaves the old root scratch builder as the exact fallback. */
+ (void)C1AGO14_Prepare(&cod1GenericSourceOrder,d,C1GA_COUNT,epoch,receipt);
  memcpy(cod1GenericDefinitions,d,C1GA_COUNT*sizeof(*d));memcpy(cod1GenericNames,names,C1GA_COUNT*sizeof(*names));
  cod1GenericEpoch=epoch;cod1GenericReceipt=receipt;ok=1;
 done:gsc_animation_catalog_free(catalog);free(d);free(names);free(nodes);cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.nameStage=NULL;cod1GenericOperation.nameBytes=0;cod1GenericOperation.busy=0;return ok;
