@@ -116,19 +116,35 @@ static void C1AGC14_AdvanceNode(c1agc14Context_t*c,unsigned root,float dt,int no
  if(branch){if(notify)C1AGC14_SyncNotify(c,root,n->phase,rounded);C1AGC14_SyncStore(c,root,rounded,cycle);}
  else{if(notify)C1AGC14_Notify(c,root,n->phase,rounded);n->phase=rounded;n->cycle=cycle;}
 }
-static int C1AGC14_Inner(c1agc14Context_t*c,float dt,int notify){
- unsigned i,count=c->t->count;float used=dt;
+/* A validation ledger belongs to one synchronous admission only. Nothing
+ * is retained across clock steps, actor changes or VM callbacks. Each
+ * source ordinal is still checked on first use in the original order. */
+static int C1AGC46_MetadataOnce(const c1anm14Metadata_t*const*m,unsigned leaf,uint32_t*seen){
+ uint32_t bit=(uint32_t)1u<<(leaf%32u);unsigned word=leaf/32u;
+ if(!m[leaf])return 0;
+ if(seen[word]&bit)return 1;
+ if(!C1AGM14_Valid(m[leaf]))return 0;
+ seen[word]|=bit;return 1;
+}
+static int C1AGC46_ValidateClock(const c1agc14Context_t*c,float dt,int notify){
+ unsigned i,count=c->t->count;
+ uint32_t seen[(C1AGF14_MAX+31u)/32u]={0};
  if(!C1AGT14_Valid(c->d,c->n,count)||!C1ATL14_Finite(dt)||dt<0||dt>60||(notify!=0&&notify!=1)||(c->owner!=0&&c->owner!=1))return 0;
  for(i=0;i<count;i++){
   unsigned leaf=c->d[i].children?c->f[i].descendant:i;
   if(c->n[i].rate<0||c->n[i].rate>100||!C1ATL14_Finite(c->frequency[i])||c->frequency[i]<0||c->frequency[i]>120||
      c->f[i].descendant>=count||c->f[i].cursor<-1||c->f[i].cursor>255)return 0;
   if(c->f[i].descendant&&(!c->d[i].children||c->d[leaf].children||!C1AGT14_Descendant(c->d,leaf,i)))return 0;
-  if(!c->d[i].children&&c->n[i].currentWeight>0&&(!c->m[i]||!C1AGM14_Valid(c->m[i])))return 0;
+  if(!c->d[i].children&&c->n[i].currentWeight>0&&!C1AGC46_MetadataOnce(c->m,i,seen))return 0;
   if(c->f[i].token&&leaf){
-   if(!c->m[leaf]||!C1AGM14_Valid(c->m[leaf])||c->f[i].cursor>=(int)c->m[leaf]->count)return 0;
+   if(!C1AGC46_MetadataOnce(c->m,leaf,seen)||c->f[i].cursor>=(int)c->m[leaf]->count)return 0;
   }
  }
+ return 1;
+}
+static int C1AGC14_Inner(c1agc14Context_t*c,float dt,int notify){
+ float used=dt;
+ if(!C1AGC46_ValidateClock(c,dt,notify))return 0;
  memset(c->out,0,sizeof(*c->out));c->ok=1;
  if(notify){double fraction=C1AGC14_Search(c,0,dt);
   if(!c->ok||!isfinite(fraction)||fraction<0)return 0;
