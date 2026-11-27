@@ -32,7 +32,8 @@ static int R_LoadCod1Turret(model_t *mod){
  mod->cod1Turret=r;mod->type=MOD_COD1_TURRET_XMODEL;mod->numLods=1;
  mod->dataSize=(int)sizeof(*r)+(int)sizeof(*r->resource)+bytes[2];
  r->next=cod1TurretResources;cod1TurretResources=r;r=NULL;ok=1;
- done:for(i=0;i<5;i++)if(data[i])ri.FS_FreeFile(data[i]);
+ done:/* Reverse acquisition order for the temporary Hunk stack. */
+ for(i=5;i>0;--i)if(data[i-1])ri.FS_FreeFile(data[i-1]);
  if(r){C1TM_Free(r->resource);C1AW14_Free(r->animatedSkeleton);C1AB14_Free(r->animatedClip[0]);C1AB14_Free(r->animatedClip[1]);free(r);}return ok;
 }
 

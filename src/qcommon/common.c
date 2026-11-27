@@ -940,6 +940,43 @@ static hunkUsed_t  *hunk_permanent, *hunk_temp;
 static byte    *s_hunkData = NULL;
 static int s_hunkTotal;
 
+#include "cod1_hunk_profile36.h"
+static c1hp36Stats hunkProfile36;
+static cvar_t *com_cod1HunkProfile;
+static unsigned hunkProfileLast36;
+static uint64_t Hunk_ProfilePermanent36(void){return (uint64_t)hunk_low.permanent+(uint64_t)hunk_high.permanent;}
+static uint64_t Hunk_ProfileUsed36(void){return (uint64_t)hunk_low.temp+(uint64_t)hunk_high.temp;}
+static void Hunk_ProfilePrint36(const char *reason){
+ const c1hp36Stats *p=&hunkProfile36;
+ uint64_t permanent=Hunk_ProfilePermanent36(),used=Hunk_ProfileUsed36();
+ if(!s_hunkData||!p->epoch)return;
+ Com_Printf("[OPT_HUNK] reason=%s epoch=%llu frame=%d total=%d permanent=%llu used=%llu free=%llu peak_used=%llu peak_permanent=%llu peak_temp=%llu retained=%llu peak_retained=%llu fs_stack=%d\n",
+  reason,(unsigned long long)p->epoch,com_frameNumber,s_hunkTotal,(unsigned long long)permanent,(unsigned long long)used,
+  (unsigned long long)(used<=(uint64_t)s_hunkTotal?(uint64_t)s_hunkTotal-used:0),
+  (unsigned long long)p->peakUsed,(unsigned long long)p->peakPermanent,(unsigned long long)p->peakTemp,
+  (unsigned long long)p->retained,(unsigned long long)p->peakRetained,FS_LoadStack());
+ Com_Printf("[OPT_HUNK] epoch=%llu perm_calls=%llu perm_bytes=%llu temp_calls=%llu temp_bytes=%llu free_calls=%llu nonfinal=%llu nonfinal_bytes=%llu clear_calls=%llu cleared_bytes=%llu cleared_live_bytes=%llu largest_temp=%llu\n",
+  (unsigned long long)p->epoch,(unsigned long long)p->permCalls,(unsigned long long)p->permBytes,(unsigned long long)p->tempCalls,(unsigned long long)p->tempBytes,
+  (unsigned long long)p->freeCalls,(unsigned long long)p->nonFinal,(unsigned long long)p->nonFinalBytes,(unsigned long long)p->clearCalls,
+  (unsigned long long)p->clearedBytes,(unsigned long long)p->clearedLiveBytes,(unsigned long long)p->largestTemp);
+}
+static void Hunk_ProfileCheckpoint36(const char *reason){
+ if(com_cod1HunkProfile&&com_cod1HunkProfile->integer==1)Hunk_ProfilePrint36(reason);
+}
+static void Hunk_ProfileFrame36(void){
+ unsigned now;
+ if(!com_cod1HunkProfile||com_cod1HunkProfile->integer!=1)return;
+ /* No asynchronous renderer inspection: normal allocator-owner checkpoints
+  * and explicit meminfo still exist in SMP. */
+#if defined(_WIN32) && defined(_M_IX86)
+ if(R241TraceRendererSmpActive())return;
+#else
+ if(Cvar_VariableIntegerValue("r_smp"))return;
+#endif
+ now=(unsigned)com_frameTime;
+ if(now-hunkProfileLast36>=5000u){hunkProfileLast36=now;Hunk_ProfilePrint36("periodic");}
+}
+
 static int s_zoneTotal;
 //static	int		s_smallZoneTotal; // TTimo: unused
 
@@ -981,6 +1018,7 @@ void Com_Meminfo_f( void ) {
 	Com_Printf( "\n" );
 
 	//Com_Printf( "        %i number of tagged renderer allocations\n", g_numTaggedAllocs);
+	Hunk_ProfilePrint36("meminfo");
 }
 
 /*
@@ -1147,6 +1185,7 @@ void Com_InitHunkMemory( void ) {
 	}
 	// cacheline align
 	s_hunkData = ( byte * )( ( (int)s_hunkData + 31 ) & ~31 );
+	com_cod1HunkProfile = Cvar_Get("com_cod1HunkProfile","0",0);
 	Hunk_Clear();
 
 	Cmd_AddCommand( "meminfo", Com_Meminfo_f );
@@ -1180,6 +1219,7 @@ The server calls this after the level and game VM have been loaded
 void Hunk_SetMark( void ) {
 	hunk_low.mark = hunk_low.permanent;
 	hunk_high.mark = hunk_high.permanent;
+	Hunk_ProfileCheckpoint36("mark");
 }
 
 /*
@@ -1190,8 +1230,10 @@ The client calls this before starting a vid_restart or snd_restart
 =================
 */
 void Hunk_ClearToMark( void ) {
+	Hunk_ProfileCheckpoint36("before_mark_clear");
 	hunk_low.permanent = hunk_low.temp = hunk_low.mark;
 	hunk_high.permanent = hunk_high.temp = hunk_high.mark;
+	C1HP36_Reset(&hunkProfile36,Hunk_ProfilePermanent36(),Hunk_ProfileUsed36());
 }
 
 /*
@@ -1228,6 +1270,7 @@ void Hunk_Clear( void ) {
 #ifndef DEDICATED
 	CIN_CloseAllVideos();
 #endif
+	Hunk_ProfileCheckpoint36("before_clear");
 	hunk_low.mark = 0;
 	hunk_low.permanent = 0;
 	hunk_low.temp = 0;
@@ -1240,6 +1283,7 @@ void Hunk_Clear( void ) {
 
 	hunk_permanent = &hunk_low;
 	hunk_temp = &hunk_high;
+	C1HP36_Reset(&hunkProfile36,0,0);
 
 	Cvar_Set( "com_hunkused", va( "%i", hunk_low.permanent + hunk_high.permanent ) );
 	Com_Printf( "Hunk_Clear: reset the hunk ok\n" );
@@ -1311,6 +1355,7 @@ void *Hunk_Alloc( int size, ha_pref preference ) {
 	}
 
 	hunk_permanent->temp = hunk_permanent->permanent;
+	C1HP36_Alloc(&hunkProfile36,(uint64_t)size,0,Hunk_ProfilePermanent36(),Hunk_ProfileUsed36());
 
 	memset( buf, 0, size );
 
@@ -1382,6 +1427,7 @@ void *Hunk_AllocateTempMemory( int size ) {
 
 	hdr->magic = HUNK_MAGIC;
 	hdr->size = size;
+	C1HP36_Alloc(&hunkProfile36,(uint64_t)size,1,Hunk_ProfilePermanent36(),Hunk_ProfileUsed36());
 
 	// don't bother clearing, because we are going to load a file over it
 	return buf;
@@ -1395,6 +1441,7 @@ Hunk_FreeTempMemory
 */
 void Hunk_FreeTempMemory( void *buf ) {
 	hunkHeader_t    *hdr;
+	int final=0;
 
 	// free with Z_Free if the hunk has not been initialized
 	// this allows the config and product id files ( journal files too ) to be loaded
@@ -1418,16 +1465,19 @@ void Hunk_FreeTempMemory( void *buf ) {
 	if ( hunk_temp == &hunk_low ) {
 		if ( hdr == ( void * )( s_hunkData + hunk_temp->temp - hdr->size ) ) {
 			hunk_temp->temp -= hdr->size;
+			final=1;
 		} else {
 			Com_Printf( "Hunk_FreeTempMemory: not the final block\n" );
 		}
 	} else {
 		if ( hdr == ( void * )( s_hunkData + s_hunkTotal - hunk_temp->temp ) ) {
 			hunk_temp->temp -= hdr->size;
+			final=1;
 		} else {
 			Com_Printf( "Hunk_FreeTempMemory: not the final block\n" );
 		}
 	}
+	C1HP36_Free(&hunkProfile36,(uint64_t)hdr->size,final,Hunk_ProfilePermanent36(),Hunk_ProfileUsed36());
 }
 
 
@@ -1442,6 +1492,7 @@ permanent allocs use this side.
 */
 void Hunk_ClearTempMemory( void ) {
 	if ( s_hunkData != NULL ) {
+		C1HP36_ClearTemp(&hunkProfile36,(uint64_t)(hunk_temp->temp-hunk_temp->permanent));
 		hunk_temp->temp = hunk_temp->permanent;
 	}
 }
@@ -2634,6 +2685,7 @@ void Com_Frame( void ) {
 	// old net chan encryption key
 	key = lastTime * 0x87243987;
 
+    Hunk_ProfileFrame36();
     Com_PublishLog();
     CL_R241TraceFrameEnd();
 	com_frameNumber++;
@@ -2646,6 +2698,7 @@ Com_Shutdown
 */
 void Com_Shutdown( void ) {
  C1J_Shutdown();
+ Hunk_ProfileCheckpoint36("shutdown");
 	if ( logfile ) {
 		FS_FCloseFile( logfile );
 		logNeedsFlush = qfalse;

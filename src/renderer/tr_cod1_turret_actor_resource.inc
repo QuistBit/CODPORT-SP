@@ -60,6 +60,8 @@ qhandle_t RE_RegisterCod1TurretActor(const cod1TurretActorResourceState_t*input)
  }
  model=R_AllocModel();if(!model)goto done;
  Com_sprintf(model->name,sizeof(model->name),"@cod1_turret_actor_%d",model->index);model->type=MOD_COD1_TURRET_ACTOR;model->cod1TurretActor=r;model->numLods=1;model->dataSize=sizeof(*r);r->handle=model->index;r->next=cod1TurretActorResources;cod1TurretActorResources=r;ok=1;
- done:for(i=0;i<C1AA14_PARTS;i++)for(j=0;j<3;j++)if(data[i][j])ri.FS_FreeFile(data[i][j]);
+ done:/* FS_ReadFile uses temporary Hunk storage; unwind our reads in LIFO
+       * order on success and on any partially loaded prefix. */
+ for(i=C1AA14_PARTS;i>0;--i)for(j=3;j>0;--j)if(data[i-1][j-1])ri.FS_FreeFile(data[i-1][j-1]);
  if(!ok){if(r->sealed.storage)C1AA14_Unseal(&r->sealed);else C1AA14_Free(r->resource);free(r);return 0;}return r->handle;
 }
