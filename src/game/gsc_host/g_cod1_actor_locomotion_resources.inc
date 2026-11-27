@@ -11,6 +11,7 @@ typedef struct {
  const c1anm14Metadata_t*metadata[C1GA_COUNT];
  TurretClipExtent extent;
  c1agf14Topology_t topology;
+ c1agc46Ranges_t metadataRanges;
 } C1LocoResources;
 static C1LocoResources cod1LocoResources,*cod1LocoStage;
 static void ActorLocomotionFree(C1LocoResources*r){unsigned i;if(!r)return;
@@ -163,6 +164,8 @@ static int ActorLocomotionLoad(void){
   G_Printf("[377 locomotion resource] ordinal=%u name=%s frames=%u intervals=%u fps=%u notes=%u\n",i,cod1GenericNames[i].name,l->root->frames,l->root->intervals,l->root->fps,l->root->noteCount);
  }
  if(!v->count||r->revision!=revision||cod1EntityEpoch!=epoch||!level.spawning||level.restarted||!cod1EntityActive||r->busy!=epoch||r->epoch)goto done;
+ /* Optional derived index: no new resource admission failure. */
+ (void)C1AGC46_Prepare(v->metadata,C1GA_COUNT,&v->metadataRanges);
  v->epoch=epoch;v->revision=revision;*r=*v;memset(v,0,sizeof(*v));ok=1;
  G_Printf("[377 general clock bank] root=%u clips=%u authored_notes=%u epoch=%llu ready=1\n",r->root,r->count,r->authored,(unsigned long long)epoch);
 done:
@@ -249,8 +252,8 @@ static int ActorLocomotionMutate(C1GARecord*r,const GscActorAnimationRequest*q){
 static int ActorLocomotionFrameAdvance(C1GARecord*r,C1FaceFrame*f,float dt){
  c1agc14Step_t*step;unsigned i;int ok=0;
  if(!ActorLocomotionClosure(r))return 0;step=malloc(sizeof(*step));if(!step)return 0;
- if(!C1AGC14_AdvanceDisposable(cod1GenericDefinitions,r->nodes,r->notify->flags,&cod1LocoResources.topology,cod1LocoResources.metadata,
-                    cod1LocoResources.frequency,dt,1,1,step)||step->count>C1ANC14_MAX_NOTES)goto done;
+ if(!C1AGC14_AdvanceDisposablePrepared(cod1GenericDefinitions,r->nodes,r->notify->flags,&cod1LocoResources.topology,cod1LocoResources.metadata,
+                    cod1LocoResources.frequency,dt,1,1,step,&cod1LocoResources.metadataRanges)||step->count>C1ANC14_MAX_NOTES)goto done;
  for(i=0;i<step->count;i++){
   const c1agc14Event_t*e=step->event+i;cod1ActorFaceNote_t*q=f->notes+i;const c1anm14Metadata_t*m;
   if(e->node>=C1GA_COUNT||e->notify!=e->node+1||!r->notify->generation[e->node]||!ActorGenericName(r,e->node)[0])goto done;

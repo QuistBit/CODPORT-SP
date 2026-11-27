@@ -1,6 +1,7 @@
 #ifndef COD1_ACTOR_GENERIC_CLOCK14_H
 #define COD1_ACTOR_GENERIC_CLOCK14_H
 #include "cod1_actor_generic_flagged14.h"
+#include "cod1_actor_clock_ranges46.h"
 /* Original server47CCD0 closure. Search and advance deliberately differ in
  * float materialization. Sync descendants share the root's phase and cycle;
  * the event order is native preorder. VM delivery remains with the caller. */
@@ -135,17 +136,19 @@ static int C1AGC14_Inner(c1agc14Context_t*c,float dt,int notify){
  }
  c->out->usedDt=used;C1AGC14_AdvanceNode(c,0,used,notify);return c->ok;
 }
-static int C1AGC14_AdvanceStorage(const c1agt14Definition_t*d,c1atl14Node_t*n,c1afl14State_t*f,
+static int C1AGC14_AdvanceStorageIndexed(const c1agt14Definition_t*d,c1atl14Node_t*n,c1afl14State_t*f,
  const c1agf14Topology_t*t,const c1anm14Metadata_t*const*m,const float*frequency,
- float dt,int owner,int notify,c1agc14Step_t*out,int disposable){
+ float dt,int owner,int notify,c1agc14Step_t*out,int disposable,const c1agc46Ranges_t*ranges){
  c1agc14Context_t c;c1agc14Step_t*step=NULL;c1atl14Node_t*stage=NULL;c1afl14State_t*flags=NULL;
- unsigned i,count;int ok=0;size_t nb,fb,db,mb,rb;
+ unsigned i,count;int ok=0,indexed;size_t nb,fb,db,mb,rb;
  if(!d||!n||!f||!t||!m||!frequency||!out||!t->count||t->count>C1AGF14_MAX)return 0;
  count=t->count;nb=count*sizeof(*n);fb=count*sizeof(*f);db=count*sizeof(*d);mb=count*sizeof(*m);rb=count*sizeof(*frequency);
  if(C1ANC14_Overlap(n,nb,f,fb)||C1ANC14_Overlap(n,nb,out,sizeof(*out))||C1ANC14_Overlap(f,fb,out,sizeof(*out)))return 0;
 #define C1AGC14_RO(p,z) (C1ANC14_Overlap(n,nb,p,z)||C1ANC14_Overlap(f,fb,p,z)||C1ANC14_Overlap(out,sizeof(*out),p,z))
  if(C1AGC14_RO(d,db)||C1AGC14_RO(t,sizeof(*t))||C1AGC14_RO(m,mb)||C1AGC14_RO(frequency,rb))return 0;
- for(i=0;i<count;i++)if(m[i]&&C1AGC14_RO(m[i],sizeof(*m[i])))return 0;
+ indexed=C1AGC46_Admit(ranges,m,count,n,nb,f,fb,out,sizeof(*out));
+ if(!indexed)return 0;
+ if(indexed<0)for(i=0;i<count;i++)if(m[i]&&C1AGC14_RO(m[i],sizeof(*m[i])))return 0;
 #undef C1AGC14_RO
  if(disposable){stage=n;flags=f;step=out;}
  else {stage=malloc(nb);flags=malloc(fb);step=malloc(sizeof(*step));if(!stage||!flags||!step)goto done;
@@ -167,6 +170,11 @@ static int C1AGC14_AdvanceStorage(const c1agt14Definition_t*d,c1atl14Node_t*n,c1
  if(ok&&!disposable){memcpy(n,stage,nb);memcpy(f,flags,fb);*out=*step;}
 done:if(!disposable){free(stage);free(flags);free(step);}return ok;
 }
+static int C1AGC14_AdvanceStorage(const c1agt14Definition_t*d,c1atl14Node_t*n,c1afl14State_t*f,
+ const c1agf14Topology_t*t,const c1anm14Metadata_t*const*m,const float*frequency,
+ float dt,int owner,int notify,c1agc14Step_t*out,int disposable){
+ return C1AGC14_AdvanceStorageIndexed(d,n,f,t,m,frequency,dt,owner,notify,out,disposable,NULL);
+}
 static int C1AGC14_Advance(const c1agt14Definition_t*d,c1atl14Node_t*n,c1afl14State_t*f,
  const c1agf14Topology_t*t,const c1anm14Metadata_t*const*m,const float*frequency,
  float dt,int owner,int notify,c1agc14Step_t*out){return C1AGC14_AdvanceStorage(d,n,f,t,m,frequency,dt,owner,notify,out,0);}
@@ -174,4 +182,11 @@ static int C1AGC14_Advance(const c1agt14Definition_t*d,c1atl14Node_t*n,c1afl14St
 static int C1AGC14_AdvanceDisposable(const c1agt14Definition_t*d,c1atl14Node_t*n,c1afl14State_t*f,
  const c1agf14Topology_t*t,const c1anm14Metadata_t*const*m,const float*frequency,
  float dt,int owner,int notify,c1agc14Step_t*out){return C1AGC14_AdvanceStorage(d,n,f,t,m,frequency,dt,owner,notify,out,1);}
+/* Internal map-owned entry. All mutable state validation and native clock
+ * math remain in the same kernel; only metadata alias admission is indexed. */
+static int C1AGC14_AdvanceDisposablePrepared(const c1agt14Definition_t*d,c1atl14Node_t*n,c1afl14State_t*f,
+ const c1agf14Topology_t*t,const c1anm14Metadata_t*const*m,const float*frequency,
+ float dt,int owner,int notify,c1agc14Step_t*out,const c1agc46Ranges_t*ranges){
+ return C1AGC14_AdvanceStorageIndexed(d,n,f,t,m,frequency,dt,owner,notify,out,1,ranges);
+}
 #endif
