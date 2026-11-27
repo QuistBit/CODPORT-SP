@@ -749,7 +749,8 @@ static int GscTestTurretPoseProbePath(const char*p){return p&&!strcmp(p,"scripts
  * selects no substitute main and grants no completed-scene/AI certificate.
  * Fresh SP, training map, explicit profile flags and all owner gates below
  * remain required. */
-static int GscTestOriginalTrainingPath(const char*p){return p&&!strcmp(p,"maps/training.gsc");}
+#include "g_cod1_campaign_entry47.h"
+static int GscTestOriginalTrainingPath(const char*p){return C1CP47_IsRoot(C1CP47_TRAINING,p);}
 static int GscTestTurretEntryPath(const char*p){return p&&(GscTestOriginalTrainingPath(p)||!strcmp(p,"scripts/gsc_tests/r232_training_turret.gsc")||!strcmp(p,"scripts/gsc_tests/r234_training_turret.gsc")||!strcmp(p,"scripts/gsc_tests/r243_original_shuffle_demo.gsc")||GscTestTurretPoseProbePath(p));}
 
 static int GscTestR198SourcePath(const char *path) {
@@ -1884,18 +1885,19 @@ static void GscTestStartPrepared(int levelTime){
 /* New-map configuration precedes actor census, DATA capture and all script
  * loading. No live Session is reconfigured. Scripts stay in original VFS. */
 void G_Cod1GscCampaignMapProfile(void){
- char map[MAX_QPATH],path[MAX_QPATH];unsigned i;
+ char map[MAX_QPATH],path[MAX_QPATH];unsigned i;const c1cp47Route *route;
  static const char*off[]={"g_cod1GscActorPrefix","g_cod1GscAiArrays","g_cod1GscDeleteTransactions","g_cod1GscTrainingGrenades","g_cod1GscTrainingCarbine","g_cod1GscR232Turret","g_cod1GscTrainingFinale","g_cod1GscTrainingOpening","g_cod1GscNativeThreads","g_cod1GscPlacedInit","g_cod1GscPlacedCurrentState","g_cod1GscPlacedCohort","g_cod1GscGraphStartup","g_cod1GscBspConstruct","g_cod1GscMoodyCharacter","g_cod1GscTrainingRigs"};
  if(gscTestSession||gscTestBusy||level.restarted||g_gametype.integer!=GT_SINGLE_PLAYER||trap_Cvar_VariableIntegerValue("savegame_loading")||trap_Cvar_VariableIntegerValue("g_cod1GscTest")!=1||GscTestEntityModeValue()!=43)return;
  trap_Cvar_VariableStringBuffer("mapname",map,sizeof(map));trap_Cvar_VariableStringBuffer("g_cod1GscTestScript",path,sizeof(path));
- if(!strcmp(map,"us_intro")&&GscTestOriginalTrainingPath(path)){
+ route=C1CP47_LegacyTransition(map,path);
+ if(route&&route->id==C1CP47_US_INTRO){
   for(i=0;i<sizeof(off)/sizeof(off[0]);i++)trap_Cvar_Set(off[i],"0");
-  trap_Cvar_Set("g_cod1GscTestScript","maps/us_intro.gsc");
+  trap_Cvar_Set("g_cod1GscTestScript",route->root);
   trap_Cvar_Set("g_cod1GscClientStartup","1");trap_Cvar_Set("g_cod1GscScriptSound","1");
   trap_Cvar_Set("g_cod1GscSoundNotify","1");trap_Cvar_Set("g_cod1GscStreamedVoice","1");
   G_Printf("[Campaign] map entry selected original maps/us_intro.gsc\n");
  }
- if(!strcmp(map,"pathfinder")&&!strcmp(path,"maps/pathfinder.gsc")){
+ if(route&&route->id==C1CP47_PATHFINDER){
   trap_Cvar_Set("g_cod1GscAiArrays","1");
   trap_Cvar_Set("g_cod1GscDeleteTransactions","1");
   trap_Cvar_Set("g_cod1GscActorPrefix","1");trap_Cvar_Set("g_cod1GscGraphStartup","1");trap_Cvar_Set("g_cod1GscBspConstruct","1");
