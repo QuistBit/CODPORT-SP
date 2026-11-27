@@ -212,6 +212,7 @@ static int ActorEngineSceneCleanup( void ) {
 }
 
 void G_Cod1EntityMapBegin( void ) {
+    G_Cod1GscCampaignRetire47();
     if(!G_Cod1TurretFactoryMapCleanup()||!G_Cod1VehicleMapCleanup()){G_Error("vehicle cleanup refused at map boundary");return;}
     MoveDeltaBankReset();
     G_Cod1PlayerLifetimeMapReset();
@@ -250,6 +251,7 @@ void G_Cod1EntityMapReady( void ) {
 }
 
 void G_Cod1EntityMapEnd( void ) {
+    G_Cod1GscCampaignRetire47();
     if(!G_Cod1TurretFactoryMapCleanup()||!G_Cod1VehicleMapCleanup()){G_Error("vehicle cleanup refused at map boundary");return;}
     MoveDeltaBankReset();
     G_Cod1PlayerLifetimeMapReset();

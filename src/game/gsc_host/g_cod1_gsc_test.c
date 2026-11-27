@@ -59,6 +59,7 @@
 #include "../g_cod1_entity_host.h"
 #include "g_cod1_frame_profile35.h"
 #include "g_cod1_campaign_config47.h"
+#include "g_cod1_campaign_owner47.h"
 #include "../g_cod1_player_lifetime.h"
 #include "../bg_cod1_direct_fog.h"
 #include "../cod1_gsc/gsc_session.h"
@@ -113,6 +114,55 @@ static void GscConfigString47(unsigned key,char *out,int cap){
 static int GscConfigInteger47(unsigned key){
  if(key<C1CP47_F_COUNT)return G_Cod1GscFeature47((c1cp47Feature)key);
  return key==C1CP47_K_SAVE?trap_Cvar_VariableIntegerValue("savegame_loading"):0;
+}
+
+/* R47D observes the prospective normal lane at a real map boundary.
+ * Do not use this candidate to answer the legacy gateway yet. */
+static c1cp47Owner gscCampaignOwner47;
+void G_Cod1GscCampaignRetire47(void){C1CP47_OwnerRetire(&gscCampaignOwner47);}
+void G_Cod1GscCampaignBegin47(int restart){
+ (void)C1CP47_OwnerArm(&gscCampaignOwner47,G_Cod1EntityMapEpoch(),restart);
+}
+static int GscCampaignPending47(uint64_t epoch){
+ return epoch==G_Cod1EntityMapEpoch()&&C1CP47_OwnerPending(&gscCampaignOwner47,epoch);
+}
+void G_Cod1GscCampaignObserve47(const char *probed){
+ uint64_t epoch=G_Cod1EntityMapEpoch();
+ char value[MAX_CVAR_VALUE_STRING],live[MAX_QPATH];
+ unsigned i;int save,dedicated,legacy=0;
+ if(!GscCampaignPending47(epoch))return;
+ if(!probed||!G_Cod1MapEntities()||g_gametype.integer!=GT_SINGLE_PLAYER||
+    level.restarted||gscTestSession||gscTestBusy||
+    (strcmp(probed,"training")&&strcmp(probed,"us_intro"))){
+  (void)C1CP47_OwnerAdmit(&gscCampaignOwner47,epoch,NULL,NULL,0,0,0,0,0,0,1);
+  return;
+ }
+ /* Explicit legacy selections win. Read raw values once at admission,
+  * never normalize a diagnostic setting or write a cvar. */
+ for(i=0;i<C1CP47_F_COUNT;i++){
+  memset(value,0,sizeof(value));
+  C1CP47_ReadLegacyString(i,value,sizeof(value),trap_Cvar_VariableStringBuffer);
+  if(!GscCampaignPending47(epoch))return;
+  if(!memchr(value,0,sizeof(value))||!C1CP47_DefaultFeatureString(value)){legacy=1;break;}
+ }
+ if(!legacy){
+  memset(value,0,sizeof(value));
+  C1CP47_ReadLegacyString(C1CP47_K_ROOT,value,sizeof(value),trap_Cvar_VariableStringBuffer);
+  if(!GscCampaignPending47(epoch))return;
+  legacy=!memchr(value,0,sizeof(value))||!C1CP47_DefaultRootString(value);
+ }
+ dedicated=trap_Cvar_VariableIntegerValue("dedicated");
+ if(!GscCampaignPending47(epoch))return;
+ save=trap_Cvar_VariableIntegerValue("savegame_loading");
+ if(!GscCampaignPending47(epoch))return;
+ memset(live,0,sizeof(live));
+ trap_Cvar_VariableStringBuffer("mapname",live,sizeof(live));
+ if(!GscCampaignPending47(epoch))return;
+ if(C1CP47_OwnerAdmit(&gscCampaignOwner47,epoch,probed,memchr(live,0,sizeof(live))?live:NULL,
+    g_gametype.integer==GT_SINGLE_PLAYER,G_Cod1MapEntities(),level.restarted,
+    save,dedicated,legacy,gscTestSession!=NULL||gscTestBusy)&&
+    C1CP47_OwnerCurrent(&gscCampaignOwner47,epoch,live,g_gametype.integer==GT_SINGLE_PLAYER,G_Cod1MapEntities(),level.restarted,save))
+  G_DPrintf("[Campaign R47D] prospective profile map=%s epoch=%llu (not activated)\n",live,(unsigned long long)epoch);
 }
 
 static int GscTestEntityModeValue( void ) {
@@ -2363,6 +2413,7 @@ int G_Cod1GscTestCombatDeathEvent( const GscCombatEventTicket *ticket ) {
 }
 
 void G_Cod1GscTestShutdown( void ) {
+    G_Cod1GscCampaignRetire47();
     {char error[GSC_SESSION_ERROR_CAP];if(!GscTestHudReset(error,sizeof(error)))G_Printf("[GSC R200] shutdown HUD cleanup: %s\n",error);}
     G_Cod1PlayerNativeReset();
     GscTestPrecacheStringReset();
@@ -2385,6 +2436,7 @@ void G_Cod1GscTestShutdown( void ) {
     GscTestDrop(); GscTestLeave();
 }
 void G_Cod1GscTestBeforeLoad( void ) {
+    G_Cod1GscCampaignRetire47();
     {char error[GSC_SESSION_ERROR_CAP];if(!GscTestHudReset(error,sizeof(error)))G_Printf("[GSC R200] load HUD cleanup: %s\n",error);}
     G_Cod1PlayerNativeReset();
     GscTestPrecacheStringReset();

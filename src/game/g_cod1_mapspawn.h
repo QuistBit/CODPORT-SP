@@ -28,8 +28,8 @@ static unsigned int g_cod1ScriptModelCacheEpoch;
 static qboolean g_cod1ScriptModelCacheRetired;
 #include "g_cod1_path_entity_registry.inc"
 
-static void G_Cod1MapSpawnBegin( void ) {
-    char mapname[MAX_QPATH], filename[MAX_QPATH + 16];
+static void G_Cod1MapSpawnBegin( char mapname[MAX_QPATH] ) {
+    char filename[MAX_QPATH + 16];
     unsigned char header[8];
     fileHandle_t file;
     int length;
@@ -69,7 +69,7 @@ static void G_Cod1MapSpawnBegin( void ) {
         trap_SetConfigstring( CS_FOGVARS, "" );
     }
 #endif
-    trap_Cvar_VariableStringBuffer( "mapname", mapname, sizeof(mapname) );
+    trap_Cvar_VariableStringBuffer( "mapname", mapname, MAX_QPATH );
     Com_sprintf( filename, sizeof(filename), "maps/%s.bsp", mapname );
     length = trap_FS_FOpenFile( filename, &file, FS_READ );
     if ( length < 0 ) {

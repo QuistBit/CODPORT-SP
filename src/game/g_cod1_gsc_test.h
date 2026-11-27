@@ -12,6 +12,9 @@ struct gentity_s;
 /* DATA receipt for the exact current early compiled Session; no entry permit. */
 uint64_t G_Cod1GscTestEarlyProgramIdentity(uint64_t epoch,uint64_t receipt);
 void G_Cod1GscCampaignMapProfile(void);
+void G_Cod1GscCampaignBegin47(int restart);
+void G_Cod1GscCampaignObserve47(const char *probedMap);
+void G_Cod1GscCampaignRetire47(void);
 int G_Cod1GscTestPrepareBeforeBsp( int levelTime );
 int G_Cod1GscTestPreparePlacedResources(void);
 struct cod1ActorBspConstructionOwner_s;
@@ -46,6 +49,9 @@ int G_Cod1GscTestEntityUseEvent( struct gentity_s *owner, struct gentity_s *play
 void G_Cod1GscTestClientSpawned( struct gentity_s *player );
 #else
 #define G_Cod1GscCampaignMapProfile() ((void)0)
+#define G_Cod1GscCampaignBegin47(restart) ((void)0)
+#define G_Cod1GscCampaignObserve47(map) ((void)0)
+#define G_Cod1GscCampaignRetire47() ((void)0)
 #define G_Cod1GscTestPrepareBeforeBsp(t) (1)
 #define G_Cod1GscTestGraphBeforePlayer(n) (1)
 #define G_Cod1GscTestGraphCommand(n) (0)

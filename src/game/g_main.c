@@ -1430,6 +1430,7 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	ClearRegisteredItems();
 
 	// parse the key/value pairs and spawn gentities
+	G_Cod1GscCampaignBegin47(restart);
 	G_SpawnEntitiesFromString();
 
 	// create the camera entity that will communicate with the scripts

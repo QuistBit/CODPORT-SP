@@ -1138,8 +1138,10 @@ Parses textual entity definitions out of an entstring and spawns gentities.
 ==============
 */
 void G_SpawnEntitiesFromString( void ) {
+    char probedMap47[MAX_QPATH];
     G_Cod1GscCampaignMapProfile();
-	G_Cod1MapSpawnBegin();
+	G_Cod1MapSpawnBegin(probedMap47);
+    G_Cod1GscCampaignObserve47(probedMap47);
 	G_Cod1SpawnerMapBegin();
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
 	Cod1NodeRegistryBegin();
