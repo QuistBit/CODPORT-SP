@@ -253,13 +253,14 @@ typedef struct {
  C1FaceFrame frame;cod1ActorRecord_t*actor;gentity_t*entity;
  uint64_t epoch,faceRevision,scriptedRevision;int now;const GscEntityRef*borrowed;int(*current)(void*);void*ctx;
 } C1FaceFrameCall;
+#include "g_cod1_face_frame_storage35.h"
 static C1FaceFrameCall*cod1FaceFrameOperation;
 static int ActorFaceFramePrivate(const void*p,size_t n){C1FaceFrameCall*c=cod1FaceFrameOperation;
 #if defined(_MSC_VER) && defined(_M_IX86) && _M_IX86_FP >= 2
  if(ActorOverlap(p,n,&faceTopology,sizeof(faceTopology)))return 1;
 #endif
  if(ActorOverlap(p,n,cod1FaceFrames,sizeof(cod1FaceFrames))||ActorOverlap(p,n,&cod1FaceFrameOperation,sizeof(cod1FaceFrameOperation)))return 1;
- return c&&(ActorOverlap(p,n,c,sizeof(*c))||ActorOverlap(p,n,c->actor,c->actor?sizeof(*c->actor):0)||ActorOverlap(p,n,c->entity,c->entity?sizeof(*c->entity):0)||ActorOverlap(p,n,c->baseline.nodes,c->baseline.nodes?C1GA_COUNT*sizeof(*c->baseline.nodes):0)||ActorGenericNamesPrivate(p,n,&c->baseline)||ActorOverlap(p,n,c->baseline.notify,c->baseline.notify?sizeof(*c->baseline.notify):0));
+ return c&&(ActorOverlap(p,n,c,sizeof(C1FaceFrameAllocation))||ActorOverlap(p,n,c->baseline.nodes,c->baseline.nodes?C1GA_COUNT*sizeof(*c->baseline.nodes):0)||ActorGenericNamesPrivate(p,n,&c->baseline)||ActorOverlap(p,n,c->baseline.notify,c->baseline.notify?sizeof(*c->baseline.notify):0));
 }
 static int ActorFaceFrameFence(C1FaceFrameCall*c){
  cod1ActorLease_t after;C1GARecord*r=cod1GenericActors+c->lease.actorIndex;
@@ -273,13 +274,12 @@ static C1FaceFrameCall*ActorFaceFrameAcquire(const GscEntityRef*input,int now,in
  C1FaceFrameCall*c=NULL;C1GARecord*r;
  if(!ActorControllerProviderEnter(C1CP_FRAME_ENTER,input,now,current,ctx))return NULL;
  if(!input||!current||now<0||now!=level.time||cod1GenericOperation.busy||!ActorGoalBuffers(input,sizeof(*input),NULL,0,NULL,0)||ActorGenericPrivate(input,sizeof(*input)))return NULL;
- c=calloc(1,sizeof(*c));if(!c)return NULL;c->owner=*input;c->borrowed=input;c->now=now;c->current=current;c->ctx=ctx;c->epoch=cod1EntityEpoch;c->faceRevision=cod1FaceResources.revision;c->scriptedRevision=cod1ScriptedResources.revision;
+ c=ActorFaceFrameAllocate();if(!c)return NULL;c->owner=*input;c->borrowed=input;c->now=now;c->current=current;c->ctx=ctx;c->epoch=cod1EntityEpoch;c->faceRevision=cod1FaceResources.revision;c->scriptedRevision=cod1ScriptedResources.revision;
  if(!ActorGoalLease(&c->owner,&c->lease)||cod1Actors[c->lease.actorIndex].turretMount.mounted)goto rejected;
  r=cod1GenericActors+c->lease.actorIndex;if(!r->used||!r->runtime||!r->catalog||!r->notify||memcmp(&r->lease,&c->lease,sizeof(c->lease))||r->revision==UINT64_MAX||!ActorFaceFrameClosure(r))goto rejected;
  c->saved=*r;c->frame=cod1FaceFrames[c->lease.actorIndex];
  if(c->frame.poisoned||(c->frame.selected&&(memcmp(&c->frame.lease,&c->lease,sizeof(c->lease))||c->frame.runtime!=r->runtime||c->frame.catalog!=r->catalog||c->frame.identity!=r->notify->ownerIdentity)))goto rejected;
- c->actor=malloc(sizeof(*c->actor));c->entity=malloc(sizeof(*c->entity));
- if(!c->actor||!c->entity||(writable&&!ActorGenericClone(&c->stage,r))||!ActorGenericClone(&c->baseline,r))goto rejected;
+ if((writable&&!ActorGenericClone(&c->stage,r))||!ActorGenericClone(&c->baseline,r))goto rejected;
  memcpy(c->actor,cod1Actors+c->lease.actorIndex,sizeof(*c->actor));memcpy(c->entity,g_entities+c->owner.slot,sizeof(*c->entity));
  cod1FaceFrameOperation=c;cod1GenericOperation.busy=1;cod1GenericOperation.cancelled=0;
  cod1GenericOperation.stage=c->stage.nodes;
@@ -288,12 +288,12 @@ static C1FaceFrameCall*ActorFaceFrameAcquire(const GscEntityRef*input,int now,in
  cod1GenericOperation.notifyBytes=writable?sizeof(*c->stage.notify):0;cod1GenericOperation.nameStage=c->stage.names;cod1GenericOperation.nameBytes=writable?C1GA_COUNT*sizeof(*c->stage.names):0;
  if(current(ctx)!=1||!ActorFaceFrameFence(c)){cod1FaceFrameOperation=NULL;cod1GenericOperation.busy=0;cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.nameStage=NULL;cod1GenericOperation.nameBytes=0;goto rejected;}
  return c;
- rejected:if(c){ActorGenericFreeOwned(&c->stage);ActorGenericFreeOwned(&c->baseline);free(c->actor);free(c->entity);free(c);}return NULL;
+ rejected:if(c){ActorGenericFreeOwned(&c->stage);ActorGenericFreeOwned(&c->baseline);ActorFaceFrameFree(c);}return NULL;
 }
 static C1FaceFrameCall*ActorFaceFrameEnter(const GscEntityRef*input,int now,int(*current)(void*),void*ctx){
  return ActorFaceFrameAcquire(input,now,current,ctx,1);
 }
-static void ActorFaceFrameLeave(C1FaceFrameCall*c){ActorGenericFreeOwned(&c->stage);ActorGenericFreeOwned(&c->baseline);free(c->actor);free(c->entity);free(c);cod1FaceFrameOperation=NULL;cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.nameStage=NULL;cod1GenericOperation.nameBytes=0;cod1GenericOperation.busy=0;}
+static void ActorFaceFrameLeave(C1FaceFrameCall*c){ActorGenericFreeOwned(&c->stage);ActorGenericFreeOwned(&c->baseline);ActorFaceFrameFree(c);cod1FaceFrameOperation=NULL;cod1GenericOperation.stage=NULL;cod1GenericOperation.bytes=0;cod1GenericOperation.notifyStage=NULL;cod1GenericOperation.notifyBytes=0;cod1GenericOperation.nameStage=NULL;cod1GenericOperation.nameBytes=0;cod1GenericOperation.busy=0;}
 static int ActorFaceFrameCommit(C1FaceFrameCall*c,const C1FaceFrame*next){
  C1GARecord*r=cod1GenericActors+c->lease.actorIndex;
  if(c->current(c->ctx)!=1||!ActorFaceFrameFence(c)||!ActorFaceFrameClosure(&c->stage))return 0;

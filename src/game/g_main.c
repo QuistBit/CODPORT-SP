@@ -36,6 +36,7 @@ If you have questions concerning this license or the applicable additional terms
 #include "g_cod1_gsc_test.h"
 #include "g_cod1_author_fog.h"
 #include "g_cod1_entity_host.h"
+#include "gsc_host/g_cod1_frame_profile35.h"
 #include "bg_cod1_weapon_io.h"
 #include "bg_cod1_inventory.h"
 
@@ -2541,9 +2542,11 @@ G_RunFrame
 Advances the non-player objects in the world
 ================
 */
-static int G_RunFrameSlice(int levelTime,int budgetMs) {
+static int G_RunFrameSliceImpl(int levelTime,int budgetMs) {
 	int i;
 	gentity_t   *ent;
+    c1fp35Token profilePart;
+    int gscDone;
 //int start, end;
 
     if(g_frameSliceOpen && g_frameSliceTime!=levelTime){
@@ -2577,7 +2580,11 @@ static int G_RunFrameSlice(int levelTime,int budgetMs) {
         g_frameSliceOpen=1;
         g_frameSliceTime=levelTime;
     }
-    if(!G_Cod1GscTestRunFrameSlice(levelTime,g_frameSliceBudget?G_FrameSliceExpired:NULL))return 0;
+    profilePart=C1FP35_Begin(levelTime);
+    gscDone=G_Cod1GscTestRunFrameSlice(levelTime,g_frameSliceBudget?G_FrameSliceExpired:NULL);
+    C1FP35_End(C1FP35_GSC,profilePart,gscDone?1:2);
+    if(!gscDone)return 0;
+    profilePart=C1FP35_Begin(levelTime);
 	/* Retire delivered loop owners even after VM completion or destruction. */
 	G_Cod1GscLoopSoundFrame();
 
@@ -2701,9 +2708,13 @@ static int G_RunFrameSlice(int levelTime,int budgetMs) {
 		G_RunThink( ent );
 	}
 //end = trap_Milliseconds();
+    C1FP35_End(C1FP35_ENTITIES,profilePart,1);
 
 	// Ridah, move the AI
+    profilePart=C1FP35_Begin(levelTime);
 	AICast_StartServerFrame( level.time );
+    C1FP35_End(C1FP35_AI,profilePart,1);
+    profilePart=C1FP35_Begin(levelTime);
 
 //start = trap_Milliseconds();
 	// perform final fixups on the players
@@ -2745,7 +2756,15 @@ static int G_RunFrameSlice(int levelTime,int budgetMs) {
 	CheckReloadStatus();
 
     g_frameSliceOpen=0;
+    C1FP35_End(C1FP35_GAME_POST,profilePart,1);
     return 1;
+}
+
+static int G_RunFrameSlice(int levelTime,int budgetMs){
+    c1fp35Token profile=C1FP35_Begin(levelTime);
+    int result=G_RunFrameSliceImpl(levelTime,budgetMs);
+    C1FP35_End(C1FP35_GAME,profile,result?1:2);
+    return result;
 }
 
 void G_RunFrame(int levelTime){

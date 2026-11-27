@@ -57,6 +57,7 @@
 #endif
 #include "../g_local.h"
 #include "../g_cod1_entity_host.h"
+#include "g_cod1_frame_profile35.h"
 #include "../g_cod1_player_lifetime.h"
 #include "../bg_cod1_direct_fog.h"
 #include "../cod1_gsc/gsc_session.h"
@@ -2071,7 +2072,9 @@ int G_Cod1GscTestRunFrameSlice(int levelTime,int (*deadline)(void)){
     gscFrameDeadline=deadline;
     if(gscFrameCursor.stage==GSC_FRAME_NATIVE){
         unsigned begin=gscFrameCursor.profile?(unsigned)trap_Milliseconds():0;
+        c1fp35Token profilePart=C1FP35_Begin(levelTime);
         result=gscTestCompleted?1:GscTestNativeFrameAdvance(levelTime,&advanced,expired,error,sizeof(error));
+        C1FP35_End(C1FP35_NATIVE,profilePart,result);
         if(gscFrameCursor.profile)gscFrameCursor.profileElapsed+=(unsigned)trap_Milliseconds()-begin;
         if(result==2)return GscTestPauseFrame();
         if(!result){
@@ -2105,7 +2108,9 @@ int G_Cod1GscTestRunFrameSlice(int levelTime,int (*deadline)(void)){
         if(expired && expired())return GscTestPauseFrame();
     }
     if(gscTestTurret.selected){
+        c1fp35Token profilePart=C1FP35_Begin(levelTime);
         result=GscTestTurretFrame(levelTime,&gscFrameCursor.nextRunner,expired,error,sizeof(error));
+        C1FP35_End(C1FP35_ACTORS,profilePart,result);
         if(result==2)return GscTestPauseFrame();
         if(!result){
             G_Printf("[R232] original turret course frame refused: %s\n",error);

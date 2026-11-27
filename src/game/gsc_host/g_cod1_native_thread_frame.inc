@@ -91,6 +91,8 @@ static int GscTestNativeFrameAdvance(int now,int*advanced,int (*expired)(void),c
  }
  for(;;){
   uint64_t generation=gscFrameCursor.generation;
+  const int stageAtStart=gscFrameCursor.nativeStage;
+  c1fp35Token profilePart=C1FP35_Begin(now);
   switch(gscFrameCursor.nativeStage){
    case NATIVE_GOALS: result=!!G_Cod1TrainingStationaryGoals(now,GscTestTurretCurrent,GscTestTurretGoal,NULL);break;
    case NATIVE_RIG: result=!!TrainingRigFrame(now,TrainingRigNote);break;
@@ -109,6 +111,8 @@ static int GscTestNativeFrameAdvance(int now,int*advanced,int (*expired)(void),c
     break;
    default:return GscTestNativeFrameError(error,cap,"invalid native frame phase");
   }
+  C1FP35_End(stageAtStart==NATIVE_COURSE?C1FP35_COURSE:stageAtStart==NATIVE_CURRENT?C1FP35_VM_CURRENT:
+             stageAtStart==NATIVE_EXCLUSIVE?C1FP35_VM_EXCLUSIVE:C1FP35_NATIVE_OTHER,profilePart,result);
   if(!result){G_Printf("[native frame] tick=%d failed phase=%d\n",now,gscFrameCursor.nativeStage);return 0;}
   if(result==2)return 2;
   if(gscFrameCursor.nativeStage==NATIVE_EXCLUSIVE)return 1;
