@@ -33,7 +33,7 @@ static int GscTestGrenadeCurrent(void *user) {
         !level.spawning && !level.restarted && gscTestEntityMode==43 &&
         gscTestGrenades.epoch==G_Cod1EntityMapEpoch() &&
         gscTestGrenades.id==gscTestId &&
-        trap_Cvar_VariableIntegerValue("g_cod1GscTrainingGrenades")==1 &&
+        G_Cod1GscFeature47(C1CP47_F_GRENADES)==1 &&
         GscTestModuleReadCurrent() && gscTestSession==owner && !gscTestStopRequested &&
         gscTestGrenades.selected && gscTestGrenades.epoch==epoch && gscTestGrenades.id==id &&
         gscTestId==id && epoch==G_Cod1EntityMapEpoch() &&
@@ -50,7 +50,7 @@ static int GscTestGrenadeConstructionCurrent(void*user){
   gscTestGrenadePrepare.id==gscTestId&&gscTestGrenades.id==gscTestId&&
   gscTestGrenadePrepare.epoch==G_Cod1EntityMapEpoch()&&gscTestGrenades.epoch==gscTestGrenadePrepare.epoch&&
   gscTestGrenades.selected&&!gscTestStopRequested&&!level.spawning&&!level.restarted&&gscTestEntityMode==43&&
-  trap_Cvar_VariableIntegerValue("g_cod1GscTrainingGrenades")==1&&
+  G_Cod1GscFeature47(C1CP47_F_GRENADES)==1&&
   GscTestModuleReadCurrent()&&GscTestEarlyCurrent()&&!gscTestStopRequested&&
   gscTestGrenadePrepare.active&&gscTestGrenadePrepare.session==owner&&gscTestSession==owner&&
   gscTestGrenadePrepare.id==id&&gscTestId==id&&gscTestGrenades.id==id&&

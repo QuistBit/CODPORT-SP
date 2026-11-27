@@ -150,7 +150,7 @@ int G_Cod1TurretSpawn(gentity_t *ent) {
  const char *keys[4]={"leftarc","rightarc","toparc","bottomarc"};
  if(!ent||!level.spawning||!G_Cod1MapEntities()||!ent->classname||strcmp(ent->classname,"misc_mg42")||
     !G_Cod1EntityCapture(ent,&ref)||TurretFind(&ref)||!TurretResources()||!TurretBankLoad()||!TurretAnimationLoad()||!TurretActorPublisherBegin()||!G_Cod1EntitySameAllocation(&ref))return 0;
- if(trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1&&
+ if(G_Cod1GscFeature47(C1CP47_F_TURRET)==1&&
     (!ActorGenericLookLoad()||!G_Cod1EntitySameAllocation(&ref)||!level.spawning))return 0;
  G_SpawnString("weaponinfo","",&value);if(strcmp(value,"mg42_bipod_stand"))return 0;
  G_SpawnString("model","",&value);if(Q_stricmp(value,"xmodel/mg42_bipod"))return 0;

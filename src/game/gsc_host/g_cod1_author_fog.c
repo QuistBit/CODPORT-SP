@@ -13,6 +13,7 @@
 #error R78 authored fog requires the existing direct-fog build profile
 #endif
 #include "../g_local.h"
+#include "../g_cod1_gsc_test.h"
 #include "../bg_cod1_direct_fog.h"
 #include "../cod1_gsc/gsc_session.h"
 #include "cod1_author_fog.h"
@@ -250,7 +251,7 @@ void G_Cod1AuthorFogInitAfterMapBootstrap( int levelTime ) {
     if (trap_Cvar_VariableIntegerValue("g_cod1MapFog") != 1) goto cleanup;
     if (g_gametype.integer != GT_SINGLE_PLAYER ||
         trap_Cvar_VariableIntegerValue("savegame_loading") != 0 ||
-        trap_Cvar_VariableIntegerValue("g_cod1GscTest") == 1 ||
+        G_Cod1GscFeature47(C1CP47_F_ENABLE) == 1 ||
         !G_Cod1MapEntities()) {
         G_Printf("[GSC R78] initial authored fog skipped: requires fresh qualified SP map without isolated GSC test\n");
         goto cleanup;

@@ -1,15 +1,34 @@
 /* Map declaration and selected configuration only; no runtime certificate. */
-static const char*const gscEarlyNames[]={
- "g_cod1GscTest","g_cod1GscEntityTest","g_cod1GscActorPrefix",
- "g_cod1GscAiArrays","g_cod1GscDeleteTransactions","g_cod1GscR232Turret",
- "g_cod1GscScriptSound","g_cod1GscSoundNotify","g_cod1GscStreamedVoice",
- "g_cod1GscTrainingCarbine","g_cod1GscTrainingFinale","g_cod1GscTrainingGrenades",
- "g_cod1GscTrainingOpening","developer_script","savegame_loading","mapname","g_cod1GscTestScript","g_cod1GscBspConstruct","g_cod1GscGraphStartup","g_cod1GscClientStartup","g_cod1GscNativeThreads","g_cod1GscPlacedInit","g_cod1GscPlacedCurrentState","g_cod1GscPlacedCohort"
+static const unsigned gscEarlyKeys[]={
+ C1CP47_F_ENABLE,
+ C1CP47_F_MODE,
+ C1CP47_F_ACTOR_PREFIX,
+ C1CP47_F_AI_ARRAYS,
+ C1CP47_F_DELETE,
+ C1CP47_F_TURRET,
+ C1CP47_F_SOUND,
+ C1CP47_F_SOUND_NOTIFY,
+ C1CP47_F_VOICE,
+ C1CP47_F_CARBINE,
+ C1CP47_F_FINALE,
+ C1CP47_F_GRENADES,
+ C1CP47_F_OPENING,
+ C1CP47_K_DEVELOPER,
+ C1CP47_K_SAVE,
+ C1CP47_K_MAP,
+ C1CP47_K_ROOT,
+ C1CP47_F_BSP_CONSTRUCT,
+ C1CP47_F_GRAPH_STARTUP,
+ C1CP47_F_CLIENT_STARTUP,
+ C1CP47_F_NATIVE_THREADS,
+ C1CP47_F_PLACED_INIT,
+ C1CP47_F_PLACED_STATE,
+ C1CP47_F_PLACED_COHORT
 };
 static struct {
  uint64_t epoch,receipt,id;void*user;int(*current)(void*,uint64_t,uint64_t);
  int attempted,prepared,consumed,nodeSelected,busy,cancelled;
- char values[sizeof(gscEarlyNames)/sizeof(gscEarlyNames[0])][MAX_CVAR_VALUE_STRING],path[MAX_CVAR_VALUE_STRING];
+ char values[sizeof(gscEarlyKeys)/sizeof(gscEarlyKeys[0])][MAX_CVAR_VALUE_STRING],path[MAX_CVAR_VALUE_STRING];
 } gscTestEarlyProgram;
 static int GscTestEarlySelected(void){
  return G_Cod1GscFeature47(C1CP47_F_ENABLE)==1&&
@@ -25,8 +44,8 @@ static int GscTestEarlyCurrent(void){
  if(gscTestEarlyProgram.busy){gscTestEarlyProgram.cancelled=1;return 0;}
  if(!GscTestEarlyOwner())return 0;
  gscTestEarlyProgram.busy=1;
- for(i=0;i<sizeof(gscEarlyNames)/sizeof(gscEarlyNames[0]);i++){
-  memset(value,0,sizeof(value));trap_Cvar_VariableStringBuffer(gscEarlyNames[i],value,sizeof(value));
+ for(i=0;i<sizeof(gscEarlyKeys)/sizeof(gscEarlyKeys[0]);i++){
+  memset(value,0,sizeof(value));GscConfigString47(gscEarlyKeys[i],value,sizeof(value));
   if(!memchr(value,0,sizeof(value))||strcmp(value,gscTestEarlyProgram.values[i])||!GscTestEarlyOwner()){ok=0;break;}
  }
  if(!ok)gscTestEarlyProgram.cancelled=1;
@@ -36,8 +55,8 @@ static int GscTestEarlyCapture(void){
  unsigned i;
  if(!GscTestEarlyOwner()||gscTestEarlyProgram.busy)return 0;
  gscTestEarlyProgram.busy=1;
- for(i=0;i<sizeof(gscEarlyNames)/sizeof(gscEarlyNames[0]);i++){
-  trap_Cvar_VariableStringBuffer(gscEarlyNames[i],gscTestEarlyProgram.values[i],sizeof(gscTestEarlyProgram.values[i]));
+ for(i=0;i<sizeof(gscEarlyKeys)/sizeof(gscEarlyKeys[0]);i++){
+  GscConfigString47(gscEarlyKeys[i],gscTestEarlyProgram.values[i],sizeof(gscTestEarlyProgram.values[i]));
   if(!memchr(gscTestEarlyProgram.values[i],0,sizeof(gscTestEarlyProgram.values[i]))||!GscTestEarlyOwner()){
    gscTestEarlyProgram.cancelled=1;gscTestEarlyProgram.busy=0;return 0;
   }

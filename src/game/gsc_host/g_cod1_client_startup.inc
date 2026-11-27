@@ -13,16 +13,16 @@ static void GscTestLeave(void);
 /* Map/script pairing is rechecked at every startup lease boundary. */
 static int GscTestBriefingSelection(void){
  char map[MAX_QPATH],path[MAX_QPATH];
- trap_Cvar_VariableStringBuffer("mapname",map,sizeof(map));
- trap_Cvar_VariableStringBuffer("g_cod1GscTestScript",path,sizeof(path));
+ GscConfigString47(C1CP47_K_MAP,map,sizeof(map));
+ GscConfigString47(C1CP47_K_ROOT,path,sizeof(path));
  return !gscTestStopRequested&&((!strcmp(map,"us_intro")&&!strcmp(path,"maps/us_intro.gsc"))||(!strcmp(map,"pathfinder")&&!strcmp(path,"maps/pathfinder.gsc")));
 }
 static int GscTestClientStartupOptions(void){
  if(G_Cod1GscFeature47(C1CP47_F_GRAPH_STARTUP)==1)return GscTestGraphClientOptions();
- static const char*names[]={"g_cod1GscClientStartup","g_cod1GscTest","g_cod1GscEntityTest","savegame_loading","g_cod1GscActorPrefix","g_cod1GscAiArrays","g_cod1GscDeleteTransactions","g_cod1GscTrainingGrenades","g_cod1GscTrainingCarbine","g_cod1GscR232Turret","g_cod1GscSoundNotify","g_cod1GscStreamedVoice","g_cod1GscTrainingFinale"};
+ static const unsigned keys[]={C1CP47_F_CLIENT_STARTUP,C1CP47_F_ENABLE,C1CP47_F_MODE,C1CP47_K_SAVE,C1CP47_F_ACTOR_PREFIX,C1CP47_F_AI_ARRAYS,C1CP47_F_DELETE,C1CP47_F_GRENADES,C1CP47_F_CARBINE,C1CP47_F_TURRET,C1CP47_F_SOUND_NOTIFY,C1CP47_F_VOICE,C1CP47_F_FINALE};
  static const int values[]={1,1,43,0,0,0,0,0,0,0,0,0,0};unsigned i;int briefing=GscTestBriefingSelection();char map[MAX_QPATH];
- trap_Cvar_VariableStringBuffer("mapname",map,sizeof(map));
- for(i=0;i<sizeof(values)/sizeof(values[0]);i++)if(gscTestStopRequested||trap_Cvar_VariableIntegerValue(names[i])!=((briefing&&(i==10||i==11||((i==5||i==6)&&!strcmp(map,"pathfinder"))))?1:values[i])||gscTestStopRequested)return 0;
+ GscConfigString47(C1CP47_K_MAP,map,sizeof(map));
+ for(i=0;i<sizeof(values)/sizeof(values[0]);i++)if(gscTestStopRequested||GscConfigInteger47(keys[i])!=((briefing&&(i==10||i==11||((i==5||i==6)&&!strcmp(map,"pathfinder"))))?1:values[i])||gscTestStopRequested)return 0;
  return 1;
 }
 static int GscTestClientStartupIdentity(const GscTestClientStartup*p){
@@ -50,7 +50,7 @@ static int GscTestClientStartupPlayerCurrentPure(const GscTestClientStartup*p){
 static int GscTestClientStartupCurrent(const GscTestClientStartup*p,int prepared){
  GscSessionSnapshot s;char path[MAX_QPATH];
  if(!GscTestClientStartupIdentity(p)||!GscTestClientStartupOptions()||!GscTestClientStartupIdentity(p))return 0;
- memset(path,0,sizeof(path));trap_Cvar_VariableStringBuffer("g_cod1GscTestScript",path,sizeof(path));
+ memset(path,0,sizeof(path));GscConfigString47(C1CP47_K_ROOT,path,sizeof(path));
  if(!GscTestClientStartupIdentity(p)||!memchr(path,0,sizeof(path))||strcmp(path,p->path))return 0;
  if(prepared&&(!gsc_session_snapshot(p->session,&s)||s.busy||s.state!=GSC_SESSION_PREPARED))return 0;
  if(!GscTestClientStartupPlayerCurrentPure(p))return 0;

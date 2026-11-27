@@ -18,7 +18,7 @@ static int GscTestCarbineCurrent(void *unused) {
     return gscTestCarbine.selected&&gscTestCarbine.epoch==G_Cod1EntityMapEpoch()&&gscTestCarbine.id==gscTestId&&
         gscTestSession&&!gscTestStopRequested&&!gscTestCompleted&&!level.restarted&&
         gscTestEntityMode==43&&gscTestActorPrefixEpoch==gscTestCarbine.epoch&&
-        trap_Cvar_VariableIntegerValue("g_cod1GscTrainingCarbine")==1&&GscTestModuleReadCurrent()&&
+        G_Cod1GscFeature47(C1CP47_F_CARBINE)==1&&GscTestModuleReadCurrent()&&
         gsc_session_is_running(gscTestSession,gscTestCarbine.id);
 }
 qboolean G_Cod1GscTestCarbineActive(void){return GscTestCarbineCurrent(NULL)?qtrue:qfalse;}
@@ -43,18 +43,18 @@ static int GscTestCarbineFieldRead(void *unused,const GscEntityRef *ref,const ch
     if(gscTestCarbine.opening&&!strcmp(name,"cod1_scripted_body_released"))return FoleyReadReleasedBody(ref,out,error,size);
     if(!strcmp(name,"count")&&G_Cod1SpawnerIntakeIdentity(ref))
         return G_Cod1SpawnerCountRead(ref,out,error,size);
-    if(!strcmp(name,"enemy")&&trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1)
+    if(!strcmp(name,"enemy")&&G_Cod1GscFeature47(C1CP47_F_TURRET)==1)
         return G_Cod1ActorReadAbsentEnemyField(ref,out,error,size);
-    if((!strcmp(name,"weapon")||!strcmp(name,"name"))&&trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1)
+    if((!strcmp(name,"weapon")||!strcmp(name,"name"))&&G_Cod1GscFeature47(C1CP47_F_TURRET)==1)
         return G_Cod1ActorReadRuntimeStringField(ref,name,out,error,size);
     if(!Q_stricmp(name,"script_noteworthy"))return G_Cod1EntityReadNoteworthy(ref,out,error,size);
-    if(!strcmp(name,"classname")&&trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1)
+    if(!strcmp(name,"classname")&&G_Cod1GscFeature47(C1CP47_F_TURRET)==1)
         return G_Cod1EntityReadClassnameField(ref,out,error,size);
-    if(!strcmp(name,"model")&&trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1)
+    if(!strcmp(name,"model")&&G_Cod1GscFeature47(C1CP47_F_TURRET)==1)
         return G_Cod1EntityReadModelField(ref,out,error,size);
-    if(!strcmp(name,"anim_pose")&&trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1)
+    if(!strcmp(name,"anim_pose")&&G_Cod1GscFeature47(C1CP47_F_TURRET)==1)
         return G_Cod1ActorPoseFieldHost()->read(NULL,ref,name,out,error,size);
-    if(ref->slot>=MAX_CLIENTS&&trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1&&
+    if(ref->slot>=MAX_CLIENTS&&G_Cod1GscFeature47(C1CP47_F_TURRET)==1&&
        (!Q_stricmp(name,"grenade")||!Q_stricmp(name,"lookforward")||!Q_stricmp(name,"lookright")||!Q_stricmp(name,"lookup")||!Q_stricmp(name,"groundtype")||!Q_stricmp(name,"desiredangle")||!strcmp(name,"node")||!Q_stricmp(name,"chainnode")||!strcmp(name,"team")||!strcmp(name,"accuracy")||!strcmp(name,"accuracystationarymod")||
         !strcmp(name,"scariness")||!strcmp(name,"health")||!strcmp(name,"maxhealth")||!Q_stricmp(name,"grenadeawareness")||!Q_stricmp(name,"suppressionwait")||!Q_stricmp(name,"maxsightdistsqrd")||!Q_stricmp(name,"walkdist")||!Q_stricmp(name,"interval")||!Q_stricmp(name,"dontavoidplayer")||!Q_stricmp(name,"dropweapon")||!Q_stricmp(name,"pacifist")||!Q_stricmp(name,"chainfallback")||!Q_stricmp(name,"drawoncompass")||!Q_stricmp(name,"useable")))
         return G_Cod1ActorReadRuntimeField(ref,name,out,error,size);
@@ -100,7 +100,7 @@ static int GscTestCarbineFieldWrite(void *unused,const GscEntityRef *ref,const c
     }
     if(ref&&ref->slot<MAX_CLIENTS&&name&&(!strcmp(name,"health")||!strcmp(name,"maxhealth")))
         return G_Cod1PlayerHealthFieldWrite(ref,name,value,error,size,GscTestCarbineCurrent,NULL);
-    if(name&&!strcmp(name,"anim_pose")&&GscTestCarbineCurrent(NULL)&&trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1)
+    if(name&&!strcmp(name,"anim_pose")&&GscTestCarbineCurrent(NULL)&&G_Cod1GscFeature47(C1CP47_F_TURRET)==1)
         return G_Cod1ActorPoseFieldHost()->write(NULL,ref,name,value,error,size);
     if(gscTestCarbine.followup&&name&&!strcmp(name,"cod1_hint_string"))return G_Cod1HintWrite(ref,value,error,size);
     if(gscTestCarbine.followup&&!strcmp(name,"count")&&G_Cod1ItemLifecycleOwns(ref))return GscTestGrenadeFieldWrite(NULL,ref,name,value,error,size);
@@ -139,7 +139,7 @@ static int GscTestMoodyFrame(int now,char *error,size_t size){
         if(i==level.num_entities||!G_Cod1EntityCapture(&g_entities[i],&gscTestCarbine.moodyRef))return 0;
         /* Select the topology owner before character::_utility::new. The
          * legacy scripts retain their explicit alias controller. */
-        gscTestCarbine.moodyCharacter=trap_Cvar_VariableIntegerValue("g_cod1GscMoodyCharacter")==1;
+        gscTestCarbine.moodyCharacter=G_Cod1GscFeature47(C1CP47_F_MOODY)==1;
         if(gscTestCarbine.moodyCharacter){
             G_Printf("[Training] Moody retained for character setup entity=%u\n",gscTestCarbine.moodyRef.slot);
         }else{
@@ -148,7 +148,7 @@ static int GscTestMoodyFrame(int now,char *error,size_t size){
             G_Printf("[R223] Original Moody visible controller ready entity=%u\n",gscTestCarbine.moodyRef.slot);
         }
     }
-    if(gscTestCarbine.moodyCharacter!=(trap_Cvar_VariableIntegerValue("g_cod1GscMoodyCharacter")==1)){
+    if(gscTestCarbine.moodyCharacter!=(G_Cod1GscFeature47(C1CP47_F_MOODY)==1)){
         GscTestError(error,size,"Moody topology selection changed during its lifetime");return 0;
     }
     if(gscTestCarbine.moodyCharacter){

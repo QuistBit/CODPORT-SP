@@ -58,6 +58,7 @@
 #include "../g_local.h"
 #include "../g_cod1_entity_host.h"
 #include "g_cod1_frame_profile35.h"
+#include "g_cod1_campaign_config47.h"
 #include "../g_cod1_player_lifetime.h"
 #include "../bg_cod1_direct_fog.h"
 #include "../cod1_gsc/gsc_session.h"
@@ -102,6 +103,16 @@ static int GscTestTurretStorageProtected(const void *,size_t);
  * map-owned capability lane must not bypass independent lifetime gates. */
 int G_Cod1GscFeature47(c1cp47Feature feature){
  return C1CP47_ReadLegacy(feature,trap_Cvar_VariableIntegerValue);
+}
+
+/* String configuration receipts preserve the original raw spelling and
+ * truncation. The legacy path does not normalize numeric strings. */
+static void GscConfigString47(unsigned key,char *out,int cap){
+ C1CP47_ReadLegacyString(key,out,cap,trap_Cvar_VariableStringBuffer);
+}
+static int GscConfigInteger47(unsigned key){
+ if(key<C1CP47_F_COUNT)return G_Cod1GscFeature47((c1cp47Feature)key);
+ return key==C1CP47_K_SAVE?trap_Cvar_VariableIntegerValue("savegame_loading"):0;
 }
 
 static int GscTestEntityModeValue( void ) {
@@ -1191,7 +1202,7 @@ static void GscTestInitPhase( int levelTime,int early ) {
         if(!GscTestEarlyCapture()){GscTestDrop();GscTestLeave();return;}
     }
     memset(path, 0, sizeof(path));
-    trap_Cvar_VariableStringBuffer("g_cod1GscTestScript", path, sizeof(path));
+    GscConfigString47(C1CP47_K_ROOT, path, sizeof(path));
     path[sizeof(path)-1] = '\0';
     memset(&host, 0, sizeof(host)); host.enabled = 1;
     host.read = GscTestRead; host.release = GscTestRelease; host.fog = GscTestFog;
@@ -1203,7 +1214,7 @@ static void GscTestInitPhase( int levelTime,int early ) {
           !gscTestStopRequested&&gscTestPreparingEarly&&level.spawning&&!level.restarted):
          GscTestClientStartupOptions())){G_Printf("[GSC R104] client startup selection or captured owner refused\n");GscTestDrop();GscTestLeave();return;}
     if((!strcmp(path,"scripts/gsc_tests/r229_training_finale.gsc")||(!strcmp(path,"scripts/gsc_tests/r230_training_voice.gsc")||GscTestTurretEntryPath(path)))){
-        char map[64];trap_Cvar_VariableStringBuffer("mapname",map,sizeof(map));map[sizeof(map)-1]=0;
+        char map[64];GscConfigString47(C1CP47_K_MAP,map,sizeof(map));map[sizeof(map)-1]=0;
         if(strcmp(map,"training")){G_Printf("[R229] Training profile held on next map; briefing GSC not selected\n");GscTestLeave();return;}
     }
     if(GscTestBriefingSelection())gscSoundStreamedSelected=COD1_SS_CAMPAIGN_VOICE_PROFILE;
@@ -1809,7 +1820,7 @@ static void GscTestStartPrepared(int levelTime){
         G_Printf("[GSC R114] scene marker refused before start: %s\n",error);
         GscTestDrop();GscTestLeave();return;
     }
-    {char probePath[128];trap_Cvar_VariableStringBuffer("g_cod1GscTestScript",probePath,sizeof(probePath));if((!strcmp(probePath,"maps/vehicle_factory_probe.gsc")||!strcmp(probePath,"maps/pathfinder.gsc"))&&!GscVehicleResourcesBegin()){G_Printf("[vehicle] resource bank refused\n");GscTestDrop();GscTestLeave();return;}}
+    {char probePath[128];GscConfigString47(C1CP47_K_ROOT,probePath,sizeof(probePath));if((!strcmp(probePath,"maps/vehicle_factory_probe.gsc")||!strcmp(probePath,"maps/pathfinder.gsc"))&&!GscVehicleResourcesBegin()){G_Printf("[vehicle] resource bank refused\n");GscTestDrop();GscTestLeave();return;}}
     if((gscTestEntityMode==22 || gscTestEntityMode==23 || gscTestEntityMode==24 || gscTestEntityMode==25 || (gscTestEntityMode==26 || (gscTestEntityMode==27 || (gscTestEntityMode==28 || (gscTestEntityMode==29 || (gscTestEntityMode==30 || (gscTestEntityMode==31 || (gscTestEntityMode==32 || (gscTestEntityMode==33 || (gscTestEntityMode==34 || gscTestEntityMode==35 || gscTestEntityMode==36 || gscTestEntityMode==37 || gscTestEntityMode==38 || gscTestEntityMode==39 || (gscTestEntityMode==40||(gscTestEntityMode==41||(gscTestEntityMode==42||gscTestEntityMode==43))))))))))))) && !GscTestFxBegin(error,sizeof(error))) {
         G_Printf("[GSC R115] FX scene refused before start: %s\n",error);
         GscTestDrop();GscTestLeave();return;
@@ -1894,7 +1905,7 @@ void G_Cod1GscCampaignMapProfile(void){
  char map[MAX_QPATH],path[MAX_QPATH];unsigned i;const c1cp47Route *route;
  static const char*off[]={"g_cod1GscActorPrefix","g_cod1GscAiArrays","g_cod1GscDeleteTransactions","g_cod1GscTrainingGrenades","g_cod1GscTrainingCarbine","g_cod1GscR232Turret","g_cod1GscTrainingFinale","g_cod1GscTrainingOpening","g_cod1GscNativeThreads","g_cod1GscPlacedInit","g_cod1GscPlacedCurrentState","g_cod1GscPlacedCohort","g_cod1GscGraphStartup","g_cod1GscBspConstruct","g_cod1GscMoodyCharacter","g_cod1GscTrainingRigs"};
  if(gscTestSession||gscTestBusy||level.restarted||g_gametype.integer!=GT_SINGLE_PLAYER||trap_Cvar_VariableIntegerValue("savegame_loading")||G_Cod1GscFeature47(C1CP47_F_ENABLE)!=1||GscTestEntityModeValue()!=43)return;
- trap_Cvar_VariableStringBuffer("mapname",map,sizeof(map));trap_Cvar_VariableStringBuffer("g_cod1GscTestScript",path,sizeof(path));
+ GscConfigString47(C1CP47_K_MAP,map,sizeof(map));GscConfigString47(C1CP47_K_ROOT,path,sizeof(path));
  route=C1CP47_LegacyTransition(map,path);
  if(route&&route->id==C1CP47_US_INTRO){
   for(i=0;i<sizeof(off)/sizeof(off[0]);i++)trap_Cvar_Set(off[i],"0");

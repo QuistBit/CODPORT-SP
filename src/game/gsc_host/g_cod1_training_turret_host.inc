@@ -95,7 +95,7 @@ static void GscTestTurretReset(void){memset(&gscTestTurret,0,sizeof(gscTestTurre
 static int GscTestTurretDeveloperCurrent(uint64_t receipt){
  return receipt&&receipt==gscTestTurret.developerReceipt&&gscTestTurret.selected&&
   gscTestTurret.epoch==G_Cod1EntityMapEpoch()&&!level.spawning&&!level.restarted&&
-  trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1&&
+  G_Cod1GscFeature47(C1CP47_F_TURRET)==1&&
   trap_Cvar_VariableIntegerValue("developer_script")==gscTestTurret.developer&&
   GscTestModuleReadCurrent();
 }
@@ -151,14 +151,14 @@ static int GscTestTurretSelect(const GscActorAnimationHost*actorAnimations,
     gscTestTurretCertificateSerial==UINT64_MAX)return 0;
  value=trap_Cvar_VariableIntegerValue("developer_script");if(value!=0&&value!=1)return 0;
  memset(&animations,0,sizeof(animations));memset(&developer,0,sizeof(developer));
- gscTestTurret.programSelected=trap_Cvar_VariableIntegerValue("g_cod1GscActorPrefix")==1;
-  gscTestTurret.nativeThreads=trap_Cvar_VariableIntegerValue("g_cod1GscNativeThreads");
+ gscTestTurret.programSelected=G_Cod1GscFeature47(C1CP47_F_ACTOR_PREFIX)==1;
+  gscTestTurret.nativeThreads=G_Cod1GscFeature47(C1CP47_F_NATIVE_THREADS);
   if((gscTestTurret.nativeThreads!=0&&gscTestTurret.nativeThreads!=1)||
      (gscTestTurret.nativeThreads&&!gscTestTurret.programSelected))return 0;
-  {int placedState=trap_Cvar_VariableIntegerValue("g_cod1GscPlacedCurrentState");
-   if((placedState!=0&&placedState!=1)||(placedState&&(!gscTestTurret.nativeThreads||trap_Cvar_VariableIntegerValue("g_cod1GscPlacedInit")!=1)))return 0;}
- {int cohort=trap_Cvar_VariableIntegerValue("g_cod1GscPlacedCohort");
-  if((cohort!=0&&cohort!=1)||(cohort&&trap_Cvar_VariableIntegerValue("g_cod1GscPlacedCurrentState")!=1))return 0;}
+  {int placedState=G_Cod1GscFeature47(C1CP47_F_PLACED_STATE);
+   if((placedState!=0&&placedState!=1)||(placedState&&(!gscTestTurret.nativeThreads||G_Cod1GscFeature47(C1CP47_F_PLACED_INIT)!=1)))return 0;}
+ {int cohort=G_Cod1GscFeature47(C1CP47_F_PLACED_COHORT);
+  if((cohort!=0&&cohort!=1)||(cohort&&G_Cod1GscFeature47(C1CP47_F_PLACED_STATE)!=1))return 0;}
  if(gscTestTurret.programSelected){
   if(!G_Cod1EarlyTurretProgramPlan(&plan)||plan.developer_enabled!=value)return 0;
  }else{
@@ -173,7 +173,7 @@ static int GscTestTurretSelect(const GscActorAnimationHost*actorAnimations,
  return (gscTestTurret.programSelected?plan.current(plan.user,plan.epoch,plan.receipt):GscTestTurretDeveloperCurrent(developer.certificate.receipt))&&
   gsc_session_select_r232_turrets(gscTestSession,&turret,error,size)&&
   (gscTestTurret.programSelected?gsc_session_select_turret_program(gscTestSession,&plan,error,size):gsc_session_select_r232_turret_animations(gscTestSession,&animations,error,size))&&
-  (!gscTestTurret.programSelected || trap_Cvar_VariableIntegerValue("g_cod1GscTrainingRigs")!=1 ||
+  (!gscTestTurret.programSelected || G_Cod1GscFeature47(C1CP47_F_RIGS)!=1 ||
      (GscTestTrainingRigDeclarations(&plan,error,size)&&GscTestNamespaceStartOriginSelect(error,size)))&&
   gsc_session_select_r243_stance(gscTestSession,R243GameStanceHost(),error,size)&&
   gsc_session_select_r243_animtime(gscTestSession,R243GameAnimTimeHost(),error,size)&&
@@ -202,7 +202,7 @@ static int GscTestTurretSelect(const GscActorAnimationHost*actorAnimations,
     (gsc_session_select_r238_array_value_cow(gscTestSession,error,size)&&
      gsc_session_select_r237_frame_buckets(gscTestSession,error,size)&&
      gsc_session_select_r243_thread_start(gscTestSession,error,size)&&
-     (trap_Cvar_VariableIntegerValue("g_cod1GscPlacedCohort")!=1||
+     (G_Cod1GscFeature47(C1CP47_F_PLACED_COHORT)!=1||
       gsc_session_select_configured_precache_interval(gscTestSession,error,size))&&
      gsc_session_select_r243_same_bucket_wait(gscTestSession,error,size)&&
      gsc_session_select_r243_thread_entities(gscTestSession,G_Cod1ScriptThreadAuthorityHost(),error,size)&&
@@ -230,7 +230,7 @@ static int GscTestTurretAdmit(char*error,size_t size,GscReadOnlyContext *context
  a.animations.host.validate=GscTestTurretAnimationValidate;a.animations.host.invoke=GscTestTurretAnimationInvoke;
  a.developer.enabled=gscTestTurret.developer;a.developer.certificate.receipt=gscTestTurret.developerReceipt;a.developer.certificate.current=GscTestTurretDeveloperCurrent;
  if (!gsc_session_admit_turret_program(gscTestSession,gscTestId,&a,error,size)) return 0;
- if(trap_Cvar_VariableIntegerValue("g_cod1GscTrainingRigs")==1 && !GscTestAnimationNamespaceResources(error,size,1))return 0;
+ if(G_Cod1GscFeature47(C1CP47_F_RIGS)==1 && !GscTestAnimationNamespaceResources(error,size,1))return 0;
  context->animation=a.animations.map_certificate;
  context->developer=a.developer.certificate;
  return 1;

@@ -11,7 +11,7 @@ static int GscTestFinaleAdmission(const Cod1MissionTransition *s,int now){
     !p->inuse||!p->client||p->health<=0||
     p->client->pers.connected!=CON_CONNECTED||p->client->noclip||
     p->client->sess.sessionTeam==TEAM_SPECTATOR||
-    trap_Cvar_VariableIntegerValue("g_cod1GscTrainingFinale")!=1)return 0;
+    G_Cod1GscFeature47(C1CP47_F_FINALE)!=1)return 0;
  return now==level.time&&!memcmp(s,&gscTestFinale,sizeof(*s))&&
         GscTestMissionCurrent(s->session,s->epoch);
 }
