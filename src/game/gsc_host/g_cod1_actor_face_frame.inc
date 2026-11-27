@@ -77,11 +77,12 @@ static int ActorFaceTreeValid(const c1atl14Node_t *nodes){
 #define ActorFaceTreeValid(nodes) C1AGT14_Valid(cod1GenericDefinitions,(nodes),C1GA_COUNT)
 #endif
 
+static void ActorFaceFrameWorkspaceClear(void);
 static void ActorFaceFrameReset(void){
 #if defined(_MSC_VER) && defined(_M_IX86) && _M_IX86_FP >= 2
  faceTopology.valid=0;
 #endif
- memset(cod1FaceFrames,0,sizeof(cod1FaceFrames));}
+ memset(cod1FaceFrames,0,sizeof(cod1FaceFrames));ActorFaceFrameWorkspaceClear();}
 static void ActorFaceFrameRetire(uint32_t index,const GscEntityRef*owner){
  if(index<COD1_ACTOR_CAPACITY&&owner&&cod1FaceFrames[index].selected&&ActorRefEqual(&cod1FaceFrames[index].lease.entity,owner))memset(cod1FaceFrames+index,0,sizeof(C1FaceFrame));
 }
@@ -253,14 +254,15 @@ typedef struct {
  C1FaceFrame frame;cod1ActorRecord_t*actor;gentity_t*entity;
  uint64_t epoch,faceRevision,scriptedRevision;int now;const GscEntityRef*borrowed;int(*current)(void*);void*ctx;
 } C1FaceFrameCall;
-#include "g_cod1_face_frame_storage35.h"
+#include "g_cod1_face_frame_workspace45.h"
 static C1FaceFrameCall*cod1FaceFrameOperation;
 static int ActorFaceFramePrivate(const void*p,size_t n){C1FaceFrameCall*c=cod1FaceFrameOperation;
 #if defined(_MSC_VER) && defined(_M_IX86) && _M_IX86_FP >= 2
  if(ActorOverlap(p,n,&faceTopology,sizeof(faceTopology)))return 1;
 #endif
  if(ActorOverlap(p,n,cod1FaceFrames,sizeof(cod1FaceFrames))||ActorOverlap(p,n,&cod1FaceFrameOperation,sizeof(cod1FaceFrameOperation)))return 1;
- return c&&(ActorOverlap(p,n,c,sizeof(C1FaceFrameAllocation))||ActorOverlap(p,n,c->baseline.nodes,c->baseline.nodes?C1GA_COUNT*sizeof(*c->baseline.nodes):0)||ActorGenericNamesPrivate(p,n,&c->baseline)||ActorOverlap(p,n,c->baseline.notify,c->baseline.notify?sizeof(*c->baseline.notify):0));
+ if(ActorFaceFrameWorkspacePrivate(p,n))return 1;
+ return c&&(ActorOverlap(p,n,c->baseline.nodes,c->baseline.nodes?C1GA_COUNT*sizeof(*c->baseline.nodes):0)||ActorGenericNamesPrivate(p,n,&c->baseline)||ActorOverlap(p,n,c->baseline.notify,c->baseline.notify?sizeof(*c->baseline.notify):0));
 }
 static int ActorFaceFrameFence(C1FaceFrameCall*c){
  cod1ActorLease_t after;C1GARecord*r=cod1GenericActors+c->lease.actorIndex;
