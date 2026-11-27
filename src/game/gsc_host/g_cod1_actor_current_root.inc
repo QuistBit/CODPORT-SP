@@ -1,4 +1,5 @@
 #include "../g_cod1_actor_current_root.h"
+#include "../../qcommon/cod1_actor_source_order14.h"
 /* Source parse order and native compiled indices are separate. Native4548C0
  * inserts named siblings at the head(45E21B), then455270 reserves immediate
  * children contiguously before recursing. This map repeats that actual order,
@@ -12,31 +13,8 @@ typedef struct {
     c1arc14Node_t nodes[128];const c1ar14Root_t *roots[82];const c1ab14Clip_t *bodies[82];
     uint64_t epoch,receipt,lookRevision,faceRevision,scriptedRevision;int now,gunIndex;
 } C1ActorCurrentRoot;
-static int ActorCurrentRootOrderVisit(C1ActorCurrentRoot *v,unsigned source,unsigned depth) {
-    unsigned first=v->frontier,n=0;int child;
-    if(depth>64||source>=C1GA_COUNT||cod1GenericDefinitions[source].children>C1GA_COUNT-v->frontier)return 0;
-    v->frontier+=cod1GenericDefinitions[source].children;
-    for(child=v->first[source];child>=0;child=v->next[child]){
-        if(n>=cod1GenericDefinitions[source].children)return 0;
-        v->order[child]=first+n++;
-        if(!ActorCurrentRootOrderVisit(v,(unsigned)child,depth+1))return 0;
-    }
-    return n==cod1GenericDefinitions[source].children;
-}
 static int ActorCurrentRootOrder(C1ActorCurrentRoot *v) {
-    unsigned i,parent;
-    for(i=0;i<C1GA_COUNT;i++){v->first[i]=v->next[i]=-1;v->order[i]=~0u;}
-    if(cod1GenericDefinitions[0].parent)return 0;
-    for(i=1;i<C1GA_COUNT;i++){
-        parent=cod1GenericDefinitions[i].parent;
-        /* Actual catalog parser publishes names in textual preorder. */
-        if(parent>=i)return 0;
-        v->next[i]=v->first[parent];v->first[parent]=(int)i;
-    }
-    v->order[0]=0;v->frontier=1;
-    if(!ActorCurrentRootOrderVisit(v,0,0)||v->frontier!=C1GA_COUNT)return 0;
-    for(i=0;i<C1GA_COUNT;i++)if(v->order[i]>=C1GA_COUNT)return 0;
-    return 1;
+    return C1AGO14_Build(cod1GenericDefinitions,C1GA_COUNT,v->first,v->next,v->order,&v->frontier);
 }
 static int ActorCurrentRootResource(const C1ActorCurrentRoot *v,unsigned ordinal,
     const c1ar14Root_t **root,const c1ab14Clip_t **body) {

@@ -6,7 +6,7 @@
  * is manufactured here. All changes commit together after bounded validation. */
 #include "cod1_actor_tree_clock14.h"
 #include <stdlib.h>
-typedef struct {unsigned parent,children,flags;} c1agt14Definition_t;
+#include "cod1_actor_definition14.h"
 static int C1AGT14_ValidScalar(const c1agt14Definition_t*d,const c1atl14Node_t*n,unsigned count){
  unsigned i,k,depth,children[4096];
  if(!d||!n||!count||count>4096||d[0].parent)return 0;
