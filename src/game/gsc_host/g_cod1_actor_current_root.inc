@@ -28,6 +28,19 @@ static int ActorCurrentRootOrder(C1ActorRootOrderScratch *v) {
                     v->first,v->next,v->order,&v->frontier))return 1;
     return C1AGO14_Build(cod1GenericDefinitions,C1GA_COUNT,v->first,v->next,v->order,&v->frontier);
 }
+/* The immutable actor snapshot is also the ordinary read-only projection.
+ * The reserved writable overlay is populated only for a mounted actor. */
+static const c1atl14Node_t *ActorCurrentRootNodes(const C1ActorCurrentRoot *v) {
+    return v->actor.turretMount.mounted?v->working:v->original;
+}
+static int ActorCurrentRootPrepareNodes(C1ActorCurrentRoot *v) {
+    unsigned t,j;
+    if(!v->actor.turretMount.mounted)return 1;
+    if(v->gunIndex<0||!v->mg.used||v->mg.selected<0)return 0;
+    memcpy(v->working,v->original,sizeof(v->working));
+    for(t=0;t<2;t++)for(j=0;j<25;j++)v->working[v->mgMap[t][j]]=v->mg.actorTree[t].node[j];
+    return 1;
+}
 static int ActorCurrentRootResource(const C1ActorCurrentRoot *v,unsigned ordinal,
     const c1ar14Root_t **root,const c1ab14Clip_t **body) {
     const char *name;int index;unsigned t,j;
@@ -46,11 +59,11 @@ static int ActorCurrentRootResource(const C1ActorCurrentRoot *v,unsigned ordinal
         (*root)->intervals==(*root)->frames-1+((*root)->flags&1u)&&(*root)->fps&&(*root)->fps<=120;
 }
 static int ActorCurrentRootCollect(C1ActorCurrentRoot *v,unsigned source,int parent,unsigned depth,
-    const int *first,const int *next,const unsigned *order) {
+    const int *first,const int *next,const unsigned *order,const c1atl14Node_t *projection) {
     const c1atl14Node_t *live;const c1ar14Root_t *root;const c1ab14Clip_t *body;
     c1arc14Node_t *n;unsigned here,leaf;int child;
     if(source>=C1GA_COUNT||depth>32||v->count>=128)return 0;
-    here=v->count++;n=v->nodes+here;memset(n,0,sizeof(*n));live=v->working+source;
+    here=v->count++;n=v->nodes+here;memset(n,0,sizeof(*n));live=projection+source;
     v->source[here]=source;n->ordinal=order[source];n->parent=parent;n->leaf=-1;
     n->definition_children=cod1GenericDefinitions[source].children;
     n->phase=live->phase;n->goalWeight=live->goalWeight;n->currentWeight=live->currentWeight;
@@ -72,8 +85,8 @@ static int ActorCurrentRootCollect(C1ActorCurrentRoot *v,unsigned source,int par
     for(child=first[source];child>=0;child=next[child]){
         /* Exhaustively inspect EVERY actual definition child. Omit only its
          * genuine zero goal; unknown positive resources are never an identity. */
-        if(v->working[child].goalWeight>0&&
-           !ActorCurrentRootCollect(v,(unsigned)child,(int)here,depth+1,first,next,order))return 0;
+        if(projection[child].goalWeight>0&&
+           !ActorCurrentRootCollect(v,(unsigned)child,(int)here,depth+1,first,next,order,projection))return 0;
     }
     return 1;
 }
@@ -82,9 +95,10 @@ static int ActorCurrentRootCollect(C1ActorCurrentRoot *v,unsigned source,int par
  * neither the topology pointer nor a view is stored in the stage. */
 static int ActorCurrentRootProject(C1ActorCurrentRoot *v,unsigned source) {
     const c1ago14Prepared_t *p=ActorCurrentRootPrepared();
-    if(p)return ActorCurrentRootCollect(v,source,-1,0,p->first,p->next,p->order);
+    const c1atl14Node_t *projection=ActorCurrentRootNodes(v);
+    if(p)return ActorCurrentRootCollect(v,source,-1,0,p->first,p->next,p->order,projection);
     if(!ActorCurrentRootOrder(&v->scratch))return 0;
-    return ActorCurrentRootCollect(v,source,-1,0,v->scratch.first,v->scratch.next,v->scratch.order);
+    return ActorCurrentRootCollect(v,source,-1,0,v->scratch.first,v->scratch.next,v->scratch.order,projection);
 }
 static int ActorCurrentRootFence(const C1ActorCurrentRoot *v,const GscEntityRef *input) {
     cod1ActorLease_t lease;
@@ -104,7 +118,7 @@ static int ActorCurrentRootFence(const C1ActorCurrentRoot *v,const GscEntityRef 
 int G_Cod1ActorRootCurrent(const GscEntityRef *input,int now,unsigned sourceOrdinal,
     c1arc14Result_t *output,int (*current)(void *),void *context) {
     C1ActorCurrentRoot *v=NULL;c1arc14Result_t result;cod1ActorLease_t lease;
-    const c1ar14Root_t *root;const c1ab14Clip_t *body;unsigned i,t,j;int ok=0;
+    const c1ar14Root_t *root;const c1ab14Clip_t *body;unsigned i;int ok=0;
     if(!input||!output||!current||now!=level.time||!sourceOrdinal||sourceOrdinal>=C1GA_COUNT||
        cod1GenericOperation.busy||!ActorGoalBuffers(input,sizeof(*input),output,sizeof(*output),NULL,0)||
        ActorGenericPrivate(input,sizeof(*input))||ActorGenericPrivate(output,sizeof(*output))||
@@ -120,21 +134,18 @@ int G_Cod1ActorRootCurrent(const GscEntityRef *input,int now,unsigned sourceOrdi
        !ActorGenericMGMap(v->mgMap)||!TurretAnimationBanks()||
        cod1GenericLookEpoch!=v->epoch||!C1AUT14_Ready(&cod1GenericUnmountedBank))goto done;
     v->actor=cod1Actors[lease.actorIndex];v->entity=g_entities[v->owner.slot];
-    memcpy(v->original,v->generic.nodes,sizeof(v->original));memcpy(v->working,v->original,sizeof(v->working));
+    memcpy(v->original,v->generic.nodes,sizeof(v->original));
     for(i=0;i<C1T_CAPACITY;i++)if(cod1Turrets[i].used&&ActorRefEqual(&cod1Turrets[i].actor,&v->owner)){
         if(v->gunIndex>=0)goto done;v->gunIndex=(int)i;v->gun=cod1Turrets[i];v->mg=cod1TurretAnimations[i];
     }
     if(!ActorGenericRootMGCurrent(&v->owner,v->gunIndex,&v->gun,&v->mg,now))goto done;
-    if(v->actor.turretMount.mounted){
-        if(v->gunIndex<0||!v->mg.used||v->mg.selected<0)goto done;
-        for(t=0;t<2;t++)for(j=0;j<25;j++)v->working[v->mgMap[t][j]]=v->mg.actorTree[t].node[j];
-    }
+    if(!ActorCurrentRootPrepareNodes(v))goto done;
     if(!cod1GenericDefinitions[sourceOrdinal].children&&
-       !(v->working[sourceOrdinal].goalWeight>0))goto done;
+       !(ActorCurrentRootNodes(v)[sourceOrdinal].goalWeight>0))goto done;
     cod1GenericOperation.busy=1;cod1GenericOperation.cancelled=0;
     cod1GenericOperation.stage=v;cod1GenericOperation.bytes=sizeof(*v);
     if(current(context)!=1||!ActorCurrentRootFence(v,input)||
-       !C1AGT14_Valid(cod1GenericDefinitions,v->working,C1GA_COUNT)||
+       !C1AGT14_Valid(cod1GenericDefinitions,ActorCurrentRootNodes(v),C1GA_COUNT)||
        !ActorCurrentRootProject(v,sourceOrdinal)||
        !C1ARC14_Current(v->roots,v->leaves,v->nodes,v->count,0,&result))goto unlock;
     if(current(context)!=1||!ActorCurrentRootFence(v,input))goto unlock;
