@@ -137,7 +137,8 @@ static int GscConfigInteger47(unsigned key){
  return key==C1CP47_K_SAVE?trap_Cvar_VariableIntegerValue("savegame_loading"):0;
 }
 
-/* R47E enables the candidate only on explicit request at map admission. */
+/* R47I: normal fresh SP map admission is automatic; explicit legacy
+ * settings still select the historical diagnostic lane. */
 void G_Cod1GscCampaignRetire47(void){C1CP47_OwnerRetire(&gscCampaignOwner47);}
 void G_Cod1GscCampaignBegin47(int restart){
  (void)C1CP47_OwnerArm(&gscCampaignOwner47,G_Cod1EntityMapEpoch(),restart);
@@ -151,13 +152,18 @@ void G_Cod1GscCampaignObserve47(const char *probed){
  unsigned i;int save,dedicated,requested,legacy=0;
  const char *conflict=NULL;
  if(!GscCampaignPending47(epoch))return;
- requested=trap_Cvar_VariableIntegerValue("g_cod1CampaignProfile");
+ /* The engine returns an empty string for an unregistered cvar. An
+  * integer read would collapse absence and an explicit diagnostic opt-out. */
+ memset(value,0,sizeof(value));
+ trap_Cvar_VariableStringBuffer("g_cod1CampaignProfile",value,sizeof(value));
  if(!GscCampaignPending47(epoch))return;
+ requested=memchr(value,0,sizeof(value))!=NULL&&C1CP47_NativeRequested(value);
  if(!probed||!G_Cod1MapEntities()||g_gametype.integer!=GT_SINGLE_PLAYER||
     level.restarted||gscTestSession||gscTestBusy||
     (strcmp(probed,"training")&&strcmp(probed,"us_intro"))){
   (void)C1CP47_OwnerAdmit(&gscCampaignOwner47,epoch,NULL,NULL,0,0,0,0,0,0,1);
-  if(requested==1)G_Printf("[Campaign R47F] native profile not admitted: map/format/SP or Session boundary\n");
+  if(requested==1&&(value[0]||(probed&&(!strcmp(probed,"training")||!strcmp(probed,"us_intro")))))
+   G_Printf("[Campaign R47I] native profile not admitted: map/format/SP or Session boundary\n");
   return;
  }
  /* Explicit legacy selections win. Read raw values once at admission,
@@ -191,8 +197,8 @@ void G_Cod1GscCampaignObserve47(const char *probed){
    G_Printf("[Campaign R47E] native map profile=%s epoch=%llu\n",live,(unsigned long long)epoch);
   else G_DPrintf("[Campaign R47E] prospective profile map=%s epoch=%llu (not activated)\n",live,(unsigned long long)epoch);
  }else if(requested==1){
-  if(conflict)G_Printf("[Campaign R47F] native profile not admitted: legacy configuration %s\n",conflict);
-  else G_Printf("[Campaign R47F] native profile not admitted: live map/save/dedicated or Session boundary\n");
+  if(conflict)G_Printf("[Campaign R47I] native profile not admitted: legacy configuration %s\n",conflict);
+  else G_Printf("[Campaign R47I] native profile not admitted: live map/save/dedicated or Session boundary\n");
  }
 }
 

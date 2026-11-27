@@ -57,8 +57,7 @@ if ($CampaignMode -eq 'native') {
         '+set', 'r_cod1PointLighting', '0', '+set', 'cg_debugEvents', '0',
         '+set', 'cg_footsteps', '1', '+set', 'r_cod1EfxShaders', '1',
         '+set', 'dmflags', '0', '+set', 'cg_r196FoleyScene', '0',
-        '+set', 'cg_r197FoleyTransition', '0', '+set', 'logfile', '1',
-        '+set', 'g_cod1CampaignProfile', '1'
+        '+set', 'cg_r197FoleyTransition', '0', '+set', 'logfile', '1'
     )
 } else {
     $engineArgs += @('+exec', 'training_player.cfg')

@@ -1,6 +1,11 @@
 #ifndef COD1_CAMPAIGN_LANE47_H
 #define COD1_CAMPAIGN_LANE47_H
 #include "g_cod1_campaign_owner47.h"
+/* An absent/empty optional selector means normal campaign startup. Only
+ * explicit legacy/invalid values opt out; world and legacy fences still apply. */
+static inline int C1CP47_NativeRequested(const char *s){
+ return s&&(!*s||!strcmp(s,"1"));
+}
 /* The lane is selected once, before BSP construction. Revocation cannot
  * convert a native Session to legacy configuration. Only a newer map arm
  * clears the native latch. The live world/receipt gates stay separate. */
