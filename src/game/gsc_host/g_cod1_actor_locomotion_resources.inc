@@ -249,11 +249,22 @@ static int ActorLocomotionMutate(C1GARecord*r,const GscActorAnimationRequest*q){
  if(named){if(!ActorGenericNameSet(r,n,q->notify,(size_t)(end-q->notify)))return 0;r->notify->generation[n]=++r->notify->serial;r->notify->pending[n]=0;r->notify->pendingTick[n]=0;}
  return ActorLocomotionClosure(r);
 }
+#include "g_cod1_phase_profile46.h"
+static int ActorLocomotionKernel46(C1GARecord*r,float dt,c1agc14Step_t*step){
+#if defined(_WIN32) && defined(_MSC_VER) && defined(_M_IX86)
+ C1PhaseProfile46 t=ActorPhaseProfileStart46(&r->lease.entity,level.time);
+#endif
+ int ok=C1AGC14_AdvanceDisposablePrepared(cod1GenericDefinitions,r->nodes,r->notify->flags,&cod1LocoResources.topology,cod1LocoResources.metadata,
+                    cod1LocoResources.frequency,dt,1,1,step,&cod1LocoResources.metadataRanges);
+#if defined(_WIN32) && defined(_MSC_VER) && defined(_M_IX86)
+ ActorPhaseProfileEnd46(C1AP46_CLOCK_KERNEL,t,ok);
+#endif
+ return ok;
+}
 static int ActorLocomotionFrameAdvance(C1GARecord*r,C1FaceFrame*f,float dt){
  c1agc14Step_t*step;unsigned i;int ok=0;
  if(!ActorLocomotionClosure(r))return 0;step=malloc(sizeof(*step));if(!step)return 0;
- if(!C1AGC14_AdvanceDisposablePrepared(cod1GenericDefinitions,r->nodes,r->notify->flags,&cod1LocoResources.topology,cod1LocoResources.metadata,
-                    cod1LocoResources.frequency,dt,1,1,step,&cod1LocoResources.metadataRanges)||step->count>C1ANC14_MAX_NOTES)goto done;
+ if(!ActorLocomotionKernel46(r,dt,step)||step->count>C1ANC14_MAX_NOTES)goto done;
  for(i=0;i<step->count;i++){
   const c1agc14Event_t*e=step->event+i;cod1ActorFaceNote_t*q=f->notes+i;const c1anm14Metadata_t*m;
   if(e->node>=C1GA_COUNT||e->notify!=e->node+1||!r->notify->generation[e->node]||!ActorGenericName(r,e->node)[0])goto done;

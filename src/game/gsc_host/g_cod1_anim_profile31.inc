@@ -1,7 +1,9 @@
 /* GAME-only opt-in observer. Called on the existing server owner thread. */
 enum { C1AP33_PUBLISH=2, C1AP33_DISCARD, C1AP33_PRIOR, C1AP33_MOTION,
  C1AP33_LADDER_UP, C1AP33_LADDER_DOWN, C1AP33_SWEEP, C1AP33_FLOOR,
- C1AP33_LADDER_TRACE, C1AP33_STAGES };
+ C1AP33_LADDER_TRACE, C1AP46_COURSE_BEGIN, C1AP46_COURSE_STEP,
+ C1AP46_COURSE_DRAIN, C1AP46_COURSE_SAMPLE, C1AP46_COURSE_BUCKET,
+ C1AP46_COURSE_NOTE, C1AP46_CLOCK_KERNEL, C1AP33_STAGES };
 #if defined(_WIN32) && defined(_MSC_VER) && defined(_M_IX86)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -30,7 +32,8 @@ static uint64_t ActorProfileStart31(void){
 }
 static void ActorProfileFinish31(unsigned stage,uint64_t start,uint64_t epoch,int now,unsigned owner,
  int ok,unsigned iterations,unsigned nodes,unsigned leaves,unsigned ladder){
- static const char *names[C1AP33_STAGES]={"controller","pose","publish","discard_pose","prior_pose","motion","ladder_up","ladder_down","sweep","floor","ladder_trace"};
+ static const char *names[C1AP33_STAGES]={"controller","pose","publish","discard_pose","prior_pose","motion","ladder_up","ladder_down","sweep","floor","ladder_trace",
+  "course_begin","course_step","course_drain","course_sample","course_bucket","course_note","locomotion_kernel"};
  LARGE_INTEGER q;c1ap31Window complete;
  if(!start||stage>=C1AP33_STAGES||epoch!=cod1EntityEpoch||!QueryPerformanceCounter(&q)||q.QuadPart<=0||(uint64_t)q.QuadPart<start)return;
  if(C1AP31_Record(actorProfile31+stage,&complete,epoch,now,owner,(uint64_t)q.QuadPart-start,ok,iterations,nodes,leaves,ladder))

@@ -395,6 +395,8 @@ void G_Cod1TurretPoseTrace(const GscEntityRef*gun,int now){
 }
 
 int FoleySessionQueueFrameNote(const cod1ActorFaceNote_t *note);
+int FoleyRunNoteBucket(const GscEntityRef*,int,uint64_t,const cod1ActorLease_t*,int*);
+#include "g_cod1_course_profile46.h"
 static const cod1ActorFaceNote_t *foleyDelivering;
 int FoleyFrameNoteCurrent(const cod1ActorFaceNote_t *note){
  C1FaceFrameCall *c=cod1FaceFrameOperation;
@@ -413,11 +415,10 @@ static int FoleyPrivateFrameNote(void *ctx,const cod1ActorFaceNote_t *note){
  int ok;
  if(foleyDelivering)return 0;
  foleyDelivering=note;
- ok=FoleyFrameNoteCurrent(note)&&FoleySessionQueueFrameNote(note)&&FoleyFrameNoteCurrent(note);
+ ok=FoleyFrameNoteCurrent(note)&&CourseClockQueue46(note)&&FoleyFrameNoteCurrent(note);
  foleyDelivering=NULL;
  return ok;
 }
-int FoleyRunNoteBucket(const GscEntityRef*,int,uint64_t,const cod1ActorLease_t*,int*);
 static int MoodyIdleTree(const C1GARecord *);
 static int FoleyDispatchFrame(const GscEntityRef *ref,int now,uint64_t generation,int (*current)(void*),void *ctx,int beforeVm,const cod1ActorLease_t *prepared){
  cod1ActorLease_t lease;
@@ -438,21 +439,21 @@ static int FoleyDispatchFrame(const GscEntityRef *ref,int now,uint64_t generatio
  if(f->frame==generation && f->tick==now && f->done && cod1GenericActors[lease.actorIndex].tick==now){
     float weight[98]={0},phase[2][21]={{0}},facial[2][25];
     C1GARecord *record=&cod1GenericActors[lease.actorIndex];
-    if(!G_Cod1ActorScriptedSampleFull(ref,now,weight,phase,facial,current,ctx))return 0;
+    if(!CourseClockSample46(ref,now,weight,phase,facial,current,ctx))return 0;
     if(g_debugMove.integer&&now<2200)G_Printf("[Foley pose] owner=%u/%u tick=%d body880Goal=%g bodyWeight=%g bodyPhase=%g bodyToken=%u face1647Goal=%g faceWeight=%g facePhase=%g faceToken=%u\n",
         ref->slot,ref->generation,now,record->nodes[880].goalWeight,weight[58],phase[0][7],record->notify->flags[880].token,
         record->nodes[1647].goalWeight,weight[59],phase[0][8],record->notify->flags[1647].token);
     return current(ctx)==1;
  }
  if(!f->frame && f->tick==now && owner->entered_ms==now && cod1GenericActors[lease.actorIndex].tick==now)return 1;
- if(!prepared&&!G_Cod1ActorFaceFrameBegin(ref,now,generation,current,ctx)){G_Printf("[Foley private] frame begin refused slot=%u now=%d\n",ref->slot,now);return 0;}
+ if(!prepared&&!CourseClockBegin46(ref,now,generation,current,ctx)){G_Printf("[Foley private] frame begin refused slot=%u now=%d\n",ref->slot,now);return 0;}
  do{
    cod1ActorLease_t after;
-   if(!G_Cod1ActorFaceFrameStep(ref,now,generation,&resume,current,ctx))return 0;
-   if(f->open&&!G_Cod1ActorFaceFrameDrain(ref,now,generation,current,FoleyPrivateFrameNote,ctx))return 0;
+   if(!CourseClockStep46(ref,now,generation,&resume,current,ctx))return 0;
+   if(f->open&&!CourseClockDrain46(ref,now,generation,current,FoleyPrivateFrameNote,ctx))return 0;
    if(resume){
     int retired=0;
-    if(!FoleyRunNoteBucket(ref,now,generation,beforeVm?&lease:NULL,&retired)||current(ctx)!=1)return 0;
+    if(!CourseClockBucket46(ref,now,generation,beforeVm?&lease:NULL,&retired)||current(ctx)!=1)return 0;
     if(retired)return 1; /* Only the actor work ended. The VM still owns this frame. */
     if(!ActorGoalLease(ref,&after)||
        memcmp(&after,&lease,sizeof(after))||!owner->entered||owner->invalid||owner->actorSerial!=lease.serial||
@@ -487,7 +488,7 @@ int TrainingJumperClock(int now,uint64_t generation,int prepare,int(*current)(vo
  if(!ActorGoalLease(&ref,&l)||!ActorScriptedClockSelected(l.actorIndex)||!current(ctx))return 0;
  f=cod1FaceFrames+l.actorIndex;
  if(f->tick==now&&!f->frame&&!f->open)return 1;
- if(prepare)return G_Cod1ActorFaceFrameBegin(&ref,now,generation,current,ctx);
+ if(prepare)return CourseClockBegin46(&ref,now,generation,current,ctx);
  if(f->tick!=now||f->frame!=generation||!f->open||f->count||!ActorRefEqual(&f->lease.entity,&ref))return 0;
  {int ok=FoleyDispatchFrame(&ref,now,generation,current,ctx,1,&l);
  if(!ok)G_Printf("[Training jump exit] actor clock refused now=%d frame=%llu open=%d done=%d count=%u\n",now,generation,f->open,f->done,f->count);return ok;}
@@ -499,7 +500,7 @@ int TrainingMoodyFrame(const GscEntityRef *ref,int now,uint64_t generation,int p
  if(!MoodyIdleTree(cod1GenericActors+lease.actorIndex)){G_Printf("[382 frame] MoodyIdleTree refused tick=%d prepare=%d\n",now,prepare);return 0;}
  f=cod1FaceFrames+lease.actorIndex;
  if(f->tick==now&&!f->frame&&!f->open)return 1;
- if(prepare)return G_Cod1ActorFaceFrameBegin(ref,now,generation,current,ctx);
+ if(prepare)return CourseClockBegin46(ref,now,generation,current,ctx);
  {int ok=FoleyDispatchFrame(ref,now,generation,current,ctx,1,&lease);if(!ok)G_Printf("[382 frame] dispatch refused tick=%d prepare=%d\n",now,prepare);return ok;}
 }
 static int FoleyPrivateSelectedBeforeVm(const GscEntityRef *ref,int now,uint64_t generation,int (*current)(void*),void *ctx,cod1ActorLease_t *lease){
@@ -654,7 +655,7 @@ static int TrainingCourseClockSteps(CourseClockCursor *cursor,const GscEntityRef
   * finish Elder's already-open frame after the other actor poses are current. */
  while(cursor->stage==2 && cursor->next<cursor->count){
   const cod1ActorLease_t *l=&cursor->speaking[cursor->next++];
-  if(!G_Cod1ActorFaceFrameBegin(&l->entity,now,frame,current,ctx))return 0;
+  if(!CourseClockBegin46(&l->entity,now,frame,current,ctx))return 0;
   if(expired && expired())return 2;
  }
  if(cursor->stage==2){
