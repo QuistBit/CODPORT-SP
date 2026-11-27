@@ -149,11 +149,15 @@ void G_Cod1GscCampaignObserve47(const char *probed){
  uint64_t epoch=G_Cod1EntityMapEpoch();
  char value[MAX_CVAR_VALUE_STRING],live[MAX_QPATH];
  unsigned i;int save,dedicated,requested,legacy=0;
+ const char *conflict=NULL;
+ if(!GscCampaignPending47(epoch))return;
+ requested=trap_Cvar_VariableIntegerValue("g_cod1CampaignProfile");
  if(!GscCampaignPending47(epoch))return;
  if(!probed||!G_Cod1MapEntities()||g_gametype.integer!=GT_SINGLE_PLAYER||
     level.restarted||gscTestSession||gscTestBusy||
     (strcmp(probed,"training")&&strcmp(probed,"us_intro"))){
   (void)C1CP47_OwnerAdmit(&gscCampaignOwner47,epoch,NULL,NULL,0,0,0,0,0,0,1);
+  if(requested==1)G_Printf("[Campaign R47F] native profile not admitted: map/format/SP or Session boundary\n");
   return;
  }
  /* Explicit legacy selections win. Read raw values once at admission,
@@ -162,16 +166,15 @@ void G_Cod1GscCampaignObserve47(const char *probed){
   memset(value,0,sizeof(value));
   C1CP47_ReadLegacyString(i,value,sizeof(value),trap_Cvar_VariableStringBuffer);
   if(!GscCampaignPending47(epoch))return;
-  if(!memchr(value,0,sizeof(value))||!C1CP47_DefaultFeatureString(value)){legacy=1;break;}
+  if(!memchr(value,0,sizeof(value))||!C1CP47_DefaultFeatureString(value)){legacy=1;conflict=C1CP47_KeyName(i);break;}
  }
  if(!legacy){
   memset(value,0,sizeof(value));
   C1CP47_ReadLegacyString(C1CP47_K_ROOT,value,sizeof(value),trap_Cvar_VariableStringBuffer);
   if(!GscCampaignPending47(epoch))return;
   legacy=!memchr(value,0,sizeof(value))||!C1CP47_DefaultRootString(value);
+  if(legacy)conflict=C1CP47_KeyName(C1CP47_K_ROOT);
  }
- requested=trap_Cvar_VariableIntegerValue("g_cod1CampaignProfile");
- if(!GscCampaignPending47(epoch))return;
  dedicated=trap_Cvar_VariableIntegerValue("dedicated");
  if(!GscCampaignPending47(epoch))return;
  save=trap_Cvar_VariableIntegerValue("savegame_loading");
@@ -187,6 +190,9 @@ void G_Cod1GscCampaignObserve47(const char *probed){
        G_Cod1MapEntities(),level.restarted,save,requested))
    G_Printf("[Campaign R47E] native map profile=%s epoch=%llu\n",live,(unsigned long long)epoch);
   else G_DPrintf("[Campaign R47E] prospective profile map=%s epoch=%llu (not activated)\n",live,(unsigned long long)epoch);
+ }else if(requested==1){
+  if(conflict)G_Printf("[Campaign R47F] native profile not admitted: legacy configuration %s\n",conflict);
+  else G_Printf("[Campaign R47F] native profile not admitted: live map/save/dedicated or Session boundary\n");
  }
 }
 

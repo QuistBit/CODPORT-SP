@@ -340,7 +340,10 @@ function Invoke-WindowsBuild {
     [void][IO.Directory]::CreateDirectory($mainDirectory)
     [IO.File]::Copy((Join-Path $Root 'main/training_player.cfg'), (Join-Path $mainDirectory 'training_player.cfg'), $true)
     [IO.File]::Copy((Join-Path $Root 'packaging/windows/wolfconfig.cfg'), (Join-Path $mainDirectory 'wolfconfig.cfg'), $true)
-    foreach ($file in @('Play-Training.cmd', 'Play-Training-Single.cmd', 'Play-Training-Multi.cmd', 'Play-Training.ps1', 'THREADING-MODES.md')) {
+    $nativeMainDirectory = Join-Path $Build 'profile-native/main'
+    [void][IO.Directory]::CreateDirectory($nativeMainDirectory)
+    [IO.File]::Copy((Join-Path $Root 'packaging/windows/wolfconfig.cfg'), (Join-Path $nativeMainDirectory 'wolfconfig.cfg'), $true)
+    foreach ($file in @('Play-Training.cmd', 'Play-Training-Single.cmd', 'Play-Training-Multi.cmd', 'Play-Training-Native.cmd', 'Play-Training.ps1', 'THREADING-MODES.md')) {
         [IO.File]::Copy((Join-Path $Root ('packaging/windows/' + $file)), (Join-Path $Build $file), $true)
     }
     if ($OpenAL) { [IO.File]::Copy($OpenAL, (Join-Path $runtime 'soft_oal.dll'), $true) }

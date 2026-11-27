@@ -1,6 +1,8 @@
 param(
     [string]$GameDirectory,
-    [ValidateSet('single', 'multi')][string]$ThreadMode = 'multi'
+    [ValidateSet('single', 'multi')][string]$ThreadMode = 'multi',
+    [ValidateSet('legacy', 'native')][string]$CampaignMode = 'legacy',
+    [switch]$PrintArguments
 )
 $ErrorActionPreference = 'Stop'
 
@@ -24,7 +26,11 @@ foreach ($required in @('CoDSP.exe', 'main\pak0.pk3')) {
     }
 }
 $runtime = Join-Path $PSScriptRoot 'bin'
-$profile = Join-Path $PSScriptRoot 'profile'
+$profileName = if ($CampaignMode -eq 'native') { 'profile-native' } else { 'profile' }
+$profile = Join-Path $PSScriptRoot $profileName
+if ($CampaignMode -eq 'native' -and -not (Test-Path -LiteralPath (Join-Path $profile 'main\wolfconfig.cfg') -PathType Leaf)) {
+    throw 'Native profile missing. Build R47F or later from source in a new output directory.'
+}
 $smp = if ($ThreadMode -eq 'single') { '0' } else { '1' }
 $workers = if ($ThreadMode -eq 'single') { '0' } else { '-1' }
 $compute = if ($ThreadMode -eq 'single') { '0' } else { '1' }
@@ -39,9 +45,29 @@ $engineArgs = @(
     '+set', 'r_smp', $smp, '+set', 'r_swapInterval', '0',
     '+set', 'com_multithreading', $compute, '+set', 'com_workerThreads', $workers,
     '+set', 'com_asyncLog', '1',
-    '+set', 'developer', '0', '+set', 'logfile', '2', '+exec', 'training_player.cfg'
+    '+set', 'developer', '0', '+set', 'logfile', '2'
 )
-Write-Host "Threading mode: $ThreadMode"
+if ($CampaignMode -eq 'native') {
+    # Preserve the non-GSC values from the accepted Training control.
+    # No training_player.cfg execution or g_cod1Gsc feature assignments.
+    $engineArgs += @(
+        '+set', 'sv_framerate_smoothing', '1',
+        '+set', 'r_cod1MaterialTrace', '0', '+set', 'r_cod1ImageTrace', '0',
+        '+set', 'r_cod1StaticLighting', '1', '+set', 'r_cod1StaticLightDebug', '0',
+        '+set', 'r_cod1PointLighting', '0', '+set', 'cg_debugEvents', '0',
+        '+set', 'cg_footsteps', '1', '+set', 'r_cod1EfxShaders', '1',
+        '+set', 'dmflags', '0', '+set', 'cg_r196FoleyScene', '0',
+        '+set', 'cg_r197FoleyTransition', '0', '+set', 'logfile', '1',
+        '+set', 'g_cod1CampaignProfile', '1'
+    )
+} else {
+    $engineArgs += @('+exec', 'training_player.cfg')
+}
+if ($PrintArguments) {
+    ConvertTo-Json -InputObject $engineArgs -Compress
+    exit 0
+}
+Write-Host "Threading mode: $ThreadMode; campaign mode: $CampaignMode; profile: $profile"
 Push-Location -LiteralPath $runtime
 try {
     & (Join-Path $runtime 'WolfSP.exe') @engineArgs | Out-Null

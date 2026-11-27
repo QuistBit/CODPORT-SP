@@ -42,7 +42,7 @@ void SP_trigger_damage(gentity_t *e) {
     if(!G_Cod1MapEntities()||g_gametype.integer!=GT_SINGLE_PLAYER||!G_Cod1EntityCapture(e,&ref))return;
     cod1DamageTriggerOwned[ref.slot]=0;
     if(!G_Cod1GscTestEntityEventsEnabled()||
-       (e->spawnflags!=0&&(e->spawnflags!=3||trap_Cvar_VariableIntegerValue("g_cod1GscTrainingGrenades")!=1))){G_Printf("R222 trigger_damage unsupported profile/flags; entity retired\n");G_FreeEntity(e);return;}
+       (e->spawnflags!=0&&(e->spawnflags!=3||G_Cod1GscFeature47(C1CP47_F_GRENADES)!=1))){G_Printf("R222 trigger_damage unsupported profile/flags; entity retired\n");G_FreeEntity(e);return;}
     G_SpawnFloat("wait","0.5",&e->wait);
     if(!isfinite(e->wait)||e->wait<0.f||e->wait>3600.f){G_FreeEntity(e);return;}
     InitTrigger(e);if(!G_Cod1EntitySameAllocation(&ref))return;

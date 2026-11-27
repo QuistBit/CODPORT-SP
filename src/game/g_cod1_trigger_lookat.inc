@@ -16,7 +16,7 @@ void SP_trigger_lookat(gentity_t *e){
  GscEntityRef ref;int index,count;
  if(!G_Cod1MapEntities()||g_gametype.integer!=GT_SINGLE_PLAYER||!G_Cod1EntityCapture(e,&ref))return;
  cod1LookAtOwned[ref.slot]=0;
- if(trap_Cvar_VariableIntegerValue("g_cod1GscTrainingOpening")!=1||!G_Cod1GscTestEntityEventsEnabled()){
+ if(G_Cod1GscFeature47(C1CP47_F_OPENING)!=1||!G_Cod1GscTestEntityEventsEnabled()){
   if(G_Cod1EntitySameAllocation(&ref))G_FreeEntity(e);return;
  }
  if(!G_Cod1EntitySameAllocation(&ref))return;
@@ -33,7 +33,7 @@ void G_Cod1LookAtRunFrame(void){
  GscEntityRef player,hit,ref;gentity_t *p;vec3_t eye,end,forward,view;trace_t wall,trace;
  float nearest;int i,j,now=level.time,awakened;uint64_t epoch;
  if(!G_Cod1MapEntities()||g_gametype.integer!=GT_SINGLE_PLAYER||level.restarted||
-    trap_Cvar_VariableIntegerValue("g_cod1GscTrainingOpening")!=1||!G_Cod1GscTestEntityEventsEnabled())return;
+    G_Cod1GscFeature47(C1CP47_F_OPENING)!=1||!G_Cod1GscTestEntityEventsEnabled())return;
  p=&g_entities[0];if(!p->client||p->client->pers.connected!=CON_CONNECTED||p->health<=0||
     p->client->ps.stats[STAT_HEALTH]<=0||p->client->noclip||p->client->sess.sessionTeam==TEAM_SPECTATOR||
     !G_Cod1EntityCapture(p,&player))return;

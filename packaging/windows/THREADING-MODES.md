@@ -72,3 +72,15 @@ Use **Play-Training-Single.cmd** or **Play-Training-Multi.cmd**, select the orig
 Run `mt_status` before and after comparable gameplay. Check actual `renderer active=1` and increasing `workerChunks` in multi mode. `created` alone does not prove worker participation. Save each `profile\main\rtcwconsole.log` before starting another run. R241/R29 detailed frame tracing supports non-SMP rendering only, so use single mode for those captures and keep tracing off for the ordinary mode comparison.
 
 This R30 source build still needs native Windows/game validation. No FPS or loading-time improvement has been measured, and the published 724A release archive has not been updated.
+
+## R47F — отдельный экспериментальный запуск без Training CFG
+
+В новой сборке из исходников запускайте `Play-Training-Native.cmd` (single, для сопоставимого профилирования). Для контрольного запуска используйте `Play-Training-Single.cmd`. Новый режим использует отдельный каталог `profile-native`, те же параметры графики/звука из принятого CFG, но не выполняет CFG и не задаёт диагностические возможности GSC. В главном меню выберите новую игру. Не копируйте старый wolfconfig.cfg или autoexec.cfg в новый профиль. Оригинальные архивы остаются теми же.
+
+Для multi или просмотра итоговых аргументов (без запуска игры) используйте:
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Play-Training.ps1 -GameDirectory "C:\Games\Call of Duty" -CampaignMode native -ThreadMode multi -PrintArguments
+```
+
+Уберите `-PrintArguments` для реального запуска. Журнал нового режима: `profile-native\main\rtcwconsole.log`. Ищите `[Campaign R47E] native map profile=training` и затем аналогичную строку для us_intro. `[Campaign R47F] native profile not admitted` означает, что экспериментальный профиль не принят, в частности из-за оставшейся диагностической конфигурации. Не считайте появление карты подтверждением запуска GSC. Старый режим остаётся по умолчанию. Экспериментальная сборка ещё требует полноценного Windows-теста; архив 724A не обновлялся.

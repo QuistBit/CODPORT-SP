@@ -50,12 +50,11 @@ static int GscTestSaveBegin(char *error,size_t capacity) {
  * unrelated cvar mutations after their final read. Owner/time fences are
  * checked around each engine service. */
 static int GscTestSaveAdmission(const GscTestSaveScene *lease,int logical_ms,int completed,int server_time) {
-    static const char *names[6]={"g_cod1GscTest","g_cod1GscEntityTest","savegame_loading",
-        "g_cod1GscTest","savegame_loading","g_cod1GscEntityTest"};
+    static const unsigned keys[6]={C1CP47_F_ENABLE,C1CP47_F_MODE,C1CP47_K_SAVE,C1CP47_F_ENABLE,C1CP47_K_SAVE,C1CP47_F_MODE};
     int values[6]={1,lease->mode,0,1,0,lease->mode};int i,value;
     for(i=0;i<6;i++) {
         if(!GscTestSaveCurrent(lease,logical_ms,completed)||level.time!=server_time)return 0;
-        value=trap_Cvar_VariableIntegerValue(names[i]);
+        value=GscConfigInteger47(keys[i]);
         if(!GscTestSaveCurrent(lease,logical_ms,completed)||level.time!=server_time||value!=values[i])return 0;
     }
     return 1;

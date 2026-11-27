@@ -28,12 +28,11 @@ static int GscTestPrecacheStringCurrent(const GscTestPrecacheStringScene *p,int 
     return view.state==GSC_SESSION_PREPARED;
 }
 static int GscTestPrecacheStringAdmission(const GscTestPrecacheStringScene *p,int now,int running) {
-    static const char *names[6]={"g_cod1GscTest","g_cod1GscEntityTest","savegame_loading",
-        "g_cod1GscTest","savegame_loading","g_cod1GscEntityTest"};
+    static const unsigned keys[6]={C1CP47_F_ENABLE,C1CP47_F_MODE,C1CP47_K_SAVE,C1CP47_F_ENABLE,C1CP47_K_SAVE,C1CP47_F_MODE};
     int values[6]={1,p->mode,0,1,0,p->mode},i,value;
     for(i=0;i<6;++i) {
         if(!GscTestPrecacheStringCurrent(p,now,running))return 0;
-        value=trap_Cvar_VariableIntegerValue(names[i]);
+        value=GscConfigInteger47(keys[i]);
         if(!GscTestPrecacheStringCurrent(p,now,running) || value!=values[i])return 0;
         if((i==0 || i==5) && (!GscTestModuleReadCurrent() || !GscTestPrecacheStringCurrent(p,now,running)))return 0;
     }

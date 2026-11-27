@@ -113,7 +113,7 @@ try {
     Write-TestText (Join-Path $TestFixture 'tools/windows-headers.json') (@{old = @{'src/shared.h' = 'revisions/old/shared.h'}} | ConvertTo-Json -Depth 10)
     Write-TestText (Join-Path $TestFixture 'main/ui/menudef.h') 'test menu header'
     Write-TestText (Join-Path $TestFixture 'main/training_player.cfg') 'test training config'
-    foreach ($TestName in @('wolfconfig.cfg', 'Play-Training.cmd', 'Play-Training-Single.cmd', 'Play-Training-Multi.cmd', 'Play-Training.ps1', 'THREADING-MODES.md')) {
+    foreach ($TestName in @('wolfconfig.cfg', 'Play-Training.cmd', 'Play-Training-Single.cmd', 'Play-Training-Multi.cmd', 'Play-Training-Native.cmd', 'Play-Training.ps1', 'THREADING-MODES.md')) {
         Write-TestText (Join-Path $TestFixture ('packaging/windows/' + $TestName)) ('fixture ' + $TestName)
     }
     $TestPgd = Join-Path $TestTemporary 'profile input.pgd'
@@ -130,9 +130,11 @@ try {
     Assert-BuildTest ([IO.File]::ReadAllText((Join-Path $TestOutput 'obj/inputs/src/shared.h')) -eq "CURRENT`n") 'Builder did not restore current header.'
     Assert-BuildTest ([IO.File]::ReadAllText((Join-Path $TestOutput 'obj/game/training.pgd')) -eq 'profile-data') 'PGD copy differs.'
     Assert-BuildTest ([IO.File]::ReadAllText((Join-Path $TestOutput 'bin/soft_oal.dll')) -eq 'openal-data') 'OpenAL copy differs.'
-    foreach ($TestRelative in @('obj/support/support.lib','bin/gamex86.dll','profile/main/training_player.cfg','profile/main/wolfconfig.cfg','Play-Training-Single.cmd','Play-Training-Multi.cmd','Play-Training.ps1')) {
+    foreach ($TestRelative in @('obj/support/support.lib','bin/gamex86.dll','profile/main/training_player.cfg','profile/main/wolfconfig.cfg','profile-native/main/wolfconfig.cfg','Play-Training-Single.cmd','Play-Training-Multi.cmd','Play-Training-Native.cmd','Play-Training.ps1')) {
         Assert-BuildTest (Test-Path -LiteralPath (Join-Path $TestOutput $TestRelative)) ('Missing output: ' + $TestRelative)
     }
+    Assert-BuildTest (-not (Test-Path -LiteralPath (Join-Path $TestOutput 'profile-native/main/training_player.cfg'))) 'Native profile must not contain Training CFG.'
+    Assert-BuildTest ([IO.File]::ReadAllText((Join-Path $TestOutput 'profile-native/main/wolfconfig.cfg')) -eq [IO.File]::ReadAllText((Join-Path $TestOutput 'profile/main/wolfconfig.cfg'))) 'Native seed settings differ.'
     $TestCompileLog = [IO.File]::ReadAllText((Join-Path $TestOutput 'obj/support/compile-0.log'))
     Assert-BuildTest ($TestCompileLog -match 'fake native stdout' -and $TestCompileLog -match 'fake native stderr') 'Native streams are not both in build log.'
     Assert-BuildThrows { Invoke-WindowsBuild -Root $TestFixture -Build $TestOutput -GamePgd '' -OpenAL '' } 'empty|not empty|nonempty|already|exists'

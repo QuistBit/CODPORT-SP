@@ -29,13 +29,12 @@ static int GscTestSpawnerArraySame(GscSession *session,uint64_t id,uint64_t epoc
  * Repeated reads remain a bounded lease check, not an atomic cvar snapshot. */
 static int GscTestSpawnerArrayAdmission(GscSession *session,uint64_t id,uint64_t epoch,
     int now,int hostTime,int entityCount) {
-    static const char *names[6]={"g_cod1GscTest","g_cod1GscEntityTest","savegame_loading",
-        "g_cod1GscTest","savegame_loading","g_cod1GscEntityTest"};
+    static const unsigned keys[6]={C1CP47_F_ENABLE,C1CP47_F_MODE,C1CP47_K_SAVE,C1CP47_F_ENABLE,C1CP47_K_SAVE,C1CP47_F_MODE};
     static const int values[6]={1,31,0,1,0,31};
     int i,value,mode=gscTestEntityMode;
     for(i=0;i<6;++i) {
         if(mode!=gscTestEntityMode || !GscTestSpawnerArraySame(session,id,epoch,now,hostTime,entityCount))return 0;
-        value=trap_Cvar_VariableIntegerValue(names[i]);
+        value=GscConfigInteger47(keys[i]);
         if(mode!=gscTestEntityMode || !GscTestSpawnerArraySame(session,id,epoch,now,hostTime,entityCount) ||
            value!=((i==1 || i==5)?mode:values[i]))return 0;
     }

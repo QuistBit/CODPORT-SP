@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "gsc_host/g_cod1_campaign_features47.h"
-/* R47B: typed live legacy read; map-owned native admission is not active. */
+/* Typed feature read: live legacy or explicitly admitted map-owned lane. */
 int G_Cod1GscFeature47(c1cp47Feature feature);
 struct gentity_s;
 /* DATA receipt for the exact current early compiled Session; no entry permit. */
