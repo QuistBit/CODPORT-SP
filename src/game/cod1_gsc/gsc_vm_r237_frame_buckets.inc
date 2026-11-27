@@ -26,27 +26,7 @@ int gsc_runtime_r237_frame_view(const GscRuntime *r,GscR237FrameView *out){
  memset(&v,0,sizeof(v));v.host_now_ms=r->now_ms;v.vm_bucket_ms=r237_bucket(r);
  v.frame_open=r->r237_frame_open;v.frame_generation=r->r237_frame_generation;*out=v;return 1;
 }
-static int r237_queue_available(GscRuntime *r,int count,int line){
- if(!r237_owner_current(r,r237_owner_stamp(r)))return rfail(r,line,"R237 required time-root unavailable");
- if(count<0||!r237_insertion_next(r)||r237_bucket(r)<0||r237_bucket(r)>INT32_C(0xffffff)||
- (uint64_t)count>UINT64_MAX-r237_insertion_next(r))return rfail(r,line,"R237 bucket insertion identity/domain exhausted");
- return 1;
-}
-static int r237_queue_offer(GscRuntime *r,Task *t,int key,int line){
- uint64_t stamp=r237_owner_stamp(r),insertion;int member=!r243_time_root_required(r);
- if(!r237_owner_current(r,stamp))return rfail(r,line,"R237 queue time-root retired");
- if(!member)member=task_member(r,t);
- if(!member)return rfail(r,line,"R237 queue Task belongs to another namespace");
- if(key<r237_bucket(r)||key>INT32_C(0xffffff))return rfail(r,line,"R237 queue key outside nonwrapping cursor domain");
- if(t->r237_enqueued){
-  /* Native GetVariable(existing key) does not relink the child. */
-  if(t->r243_time_root_incarnation!=stamp||t->wake_ms!=key||!t->r237_insertion)return rfail(r,line,"R237 task already owns another queue key");
-  return 1;
- }
- if(!r237_queue_available(r,1,line))return 0;
- insertion=r237_insertion_claim(r,line);if(!insertion)return 0;
- t->wake_ms=key;t->r237_insertion=insertion;t->r243_time_root_incarnation=stamp;t->r237_enqueued=1;return 1;
-}
+#include "gsc_vm_r237_queue_admission.inc"
 /* Original wait_value4645F3: nonnegative float seconds must be strictly
  * below FLOAT16777 at55B8C8. FMUL1000 stores FLOAT32, then PC53 adds2^-30
  * before nearest-even FISTP. Animation cadence's <=1-second domain is not a
