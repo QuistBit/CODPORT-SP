@@ -13,7 +13,9 @@ extract() {
  copy {print}
  ' "$1"
 }
-extract "$src" > "$tmp/clone.inc"
+# Historical allocator baseline, before R45C changed its representation.
+git show 0487557ca3d97b1a3e1887d0bd4fb2c1cbf22c24:"$src" > "$tmp/r45a.inc"
+extract "$tmp/r45a.inc" > "$tmp/clone.inc"
 test -s "$tmp/clone.inc"
 git show 8f92680c078b717f61aa762ef9a5c93e10eb99cb:"$src" > "$tmp/r40.inc"
 extract "$tmp/r40.inc" > "$tmp/reference.inc"

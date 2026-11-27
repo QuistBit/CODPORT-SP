@@ -43,42 +43,7 @@ static const c1ar14Root_t*ActorFaceRoot(unsigned);
 static const c1ab14Clip_t*ActorFaceBody(unsigned);
 static int ActorFaceFrameCanMutate(const C1GARecord*,int,int);
 static int ActorRunnerFaceOwner(const C1GARecord*);
-/* Main-thread GAME transactions clone the same two fixed-size arrays.
- * Keep two released pairs. Every checkout overwrites both arrays in full. */
-typedef struct {
- c1atl14Node_t *nodes;
- C1GANotifyState *notify;C1GANameEntry *names;
-} ActorCloneStorage;
-static ActorCloneStorage actorClonePool[2];
-static void ActorClonePoolClear(void){
- unsigned i;
- for(i=0;i<2;i++){free(actorClonePool[i].nodes);free(actorClonePool[i].notify);free(actorClonePool[i].names);}
- memset(actorClonePool,0,sizeof(actorClonePool));
-}
-static void ActorGenericFreeOwned(C1GARecord*r){
- unsigned i;
- if(r->nodes && r->notify && r->names){
-  for(i=0;i<2;i++)if(!actorClonePool[i].nodes){
-   actorClonePool[i].nodes=r->nodes;actorClonePool[i].notify=r->notify;actorClonePool[i].names=r->names;
-   r->nodes=NULL;r->notify=NULL;r->names=NULL;return;
-  }
- }
- free(r->nodes);free(r->notify);free(r->names);r->nodes=NULL;r->notify=NULL;r->names=NULL;
-}
-static int ActorGenericClone(C1GARecord*stage,const C1GARecord*old){
- unsigned i;
- *stage=*old;stage->nodes=NULL;stage->notify=NULL;stage->names=NULL;
- if(!old->nodes||!old->notify||!old->names||old->notify->nameCount>C1GA_COUNT)return 0;
- for(i=0;i<2;i++)if(actorClonePool[i].nodes){
-  stage->nodes=actorClonePool[i].nodes;stage->notify=actorClonePool[i].notify;stage->names=actorClonePool[i].names;
-  actorClonePool[i].nodes=NULL;actorClonePool[i].notify=NULL;actorClonePool[i].names=NULL;break;
- }
- if(!stage->nodes){
-  stage->nodes=malloc(C1GA_COUNT*sizeof(*stage->nodes));stage->notify=malloc(sizeof(*stage->notify));stage->names=malloc(C1GA_COUNT*sizeof(*stage->names));
- }
- if(!stage->nodes||!stage->notify||!stage->names){ActorGenericFreeOwned(stage);return 0;}
- memcpy(stage->nodes,old->nodes,C1GA_COUNT*sizeof(*stage->nodes));memcpy(stage->notify,old->notify,sizeof(*stage->notify));memcpy(stage->names,old->names,(size_t)old->notify->nameCount*sizeof(*stage->names));return 1;
-}
+#include "g_cod1_actor_clone_storage45.h"
 static int ActorGenericNamedActive(const C1GARecord*);
 static int ActorGenericNamedPending(const C1GARecord*);
 static int ActorGenericNamedAdvance(C1GARecord*,unsigned,const c1ar14Root_t*,float,int);
@@ -243,7 +208,7 @@ static int ActorGenericFresh(C1GARecord *r,const cod1ActorLease_t *lease,uint64_
  known[0]=s->active;memcpy(known+1,s->target,12);known[4]=s->cell01ec;known[5]=s->cell01f0;
  memcpy(known+6,&s->parameter,4);known[7]=s->animnodesReady;memcpy(known+8,s->yawLimits,8);
  if(!C1AL14_Fresh(known,&look)||cod1GenericNotifyIdentity==UINT64_MAX)return 0;
- r->nodes=calloc(C1GA_COUNT,sizeof(*r->nodes));r->notify=calloc(1,sizeof(*r->notify));r->names=malloc(C1GA_COUNT*sizeof(*r->names));if(!r->nodes||!r->notify||!r->names){ActorGenericFreeOwned(r);return 0;}
+ if(!ActorGenericAllocateBlock45(r,1))return 0;
  for(i=0;i<C1GA_COUNT;i++)r->notify->flags[i].cursor=-1;
  r->notify->ownerIdentity=++cod1GenericNotifyIdentity;
  for(i=0;i<C1GA_COUNT;i++)r->nodes[i].rate=1;
