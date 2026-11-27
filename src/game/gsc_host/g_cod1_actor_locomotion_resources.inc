@@ -242,9 +242,7 @@ static int ActorLocomotionMutate(C1GARecord*r,const GscActorAnimationRequest*q){
   if(ok)for(i=0;i<C1GA_COUNT;i++)if(C1AGT14_Descendant(cod1GenericDefinitions,i,n)){r->notify->flags[i].token=0;r->notify->flags[i].cursor=-1;}
  }
  if(!ok)return 0;
- for(i=0;i<C1GA_COUNT;i++)if(!r->notify->flags[i].token){
-  if(!ActorGenericNameSet(r,i,NULL,0))return 0;r->notify->generation[i]=r->notify->pending[i]=0;r->notify->pendingTick[i]=0;
- }
+ if(!ActorGenericClearUnnamed(r))return 0;
  if(named){if(!ActorGenericNameSet(r,n,q->notify,(size_t)(end-q->notify)))return 0;r->notify->generation[n]=++r->notify->serial;r->notify->pending[n]=0;r->notify->pendingTick[n]=0;}
  return ActorLocomotionClosure(r);
 }

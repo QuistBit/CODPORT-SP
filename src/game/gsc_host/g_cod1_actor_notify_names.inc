@@ -31,3 +31,27 @@ static int ActorGenericNamesEqual(const C1GARecord *a,const C1GARecord *b){
 static int ActorGenericNamesPrivate(const void*p,size_t n,const C1GARecord*r){
  return r&&r->names&&ActorOverlap(p,n,r->names,C1GA_COUNT*sizeof(*r->names));
 }
+/* Clear tokenless notification cells in ordinal order. The sparse name
+ * prefix is checked before using a forward cursor; malformed prefixes keep
+ * the old per-ordinal search and its exact failure/partial-write behavior.
+ * No callbacks run here. Keep the same memmove for each actual removal,
+ * including the otherwise unspecified bytes beyond the initialized prefix. */
+static int ActorGenericClearUnnamed(C1GARecord *r){
+ unsigned i,at=0,count=r->notify->nameCount;
+ int ordered=r->names&&count<=C1GA_COUNT;
+ if(ordered)for(i=0;i<count;i++)if(r->names[i].ordinal>=C1GA_COUNT||
+    (i&&r->names[i-1].ordinal>=r->names[i].ordinal)){ordered=0;break;}
+ for(i=0;i<C1GA_COUNT;i++){
+  if(r->notify->flags[i].token){
+   if(ordered&&at<count&&r->names[at].ordinal==i)at++;
+   continue;
+  }
+  if(!ordered){if(!ActorGenericNameSet(r,i,NULL,0))return 0;}
+  else if(at<count&&r->names[at].ordinal==i){
+   memmove(r->names+at,r->names+at+1,(count-at-1)*sizeof(*r->names));
+   r->notify->nameCount=--count;
+  }
+  r->notify->generation[i]=r->notify->pending[i]=0;r->notify->pendingTick[i]=0;
+ }
+ return 1;
+}
