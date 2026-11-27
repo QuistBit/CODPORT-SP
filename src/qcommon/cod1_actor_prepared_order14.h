@@ -24,11 +24,17 @@ static int C1AGO14_Prepare(c1ago14Prepared_t *p,const c1agt14Definition_t *d,
  p->epoch=epoch;p->receipt=receipt;p->count=count;p->ready=1;
  return 1;
 }
+/* Current identity only. A borrow is allowed solely in a synchronous
+ * callback-free scope, never stored in an actor or carried across a fence. */
+static int C1AGO14_Matches(const c1ago14Prepared_t *p,unsigned count,
+ uint64_t epoch,uint64_t receipt){
+ return p->ready&&epoch&&receipt&&count&&count<=C1AGO14_PREPARED_CAPACITY&&
+    p->epoch==epoch&&p->receipt==receipt&&p->count==count;
+}
 /* Caller owns disjoint writable scratch; no output touched on a miss. */
 static int C1AGO14_Copy(const c1ago14Prepared_t *p,unsigned count,
  uint64_t epoch,uint64_t receipt,int *first,int *next,unsigned *order,unsigned *frontier){
- if(!p->ready||!epoch||!receipt||!count||count>C1AGO14_PREPARED_CAPACITY||
-    p->epoch!=epoch||p->receipt!=receipt||p->count!=count)return 0;
+ if(!C1AGO14_Matches(p,count,epoch,receipt))return 0;
  memcpy(first,p->first,count*sizeof(*first));
  memcpy(next,p->next,count*sizeof(*next));
  memcpy(order,p->order,count*sizeof(*order));

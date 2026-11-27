@@ -5,17 +5,25 @@
  * children contiguously before recursing. This map repeats that actual order,
  * not global reverse-source numbering. No runtime node pointer is invented. */
 typedef struct {
+    int first[C1GA_COUNT],next[C1GA_COUNT];unsigned order[C1GA_COUNT],frontier;
+} C1ActorRootOrderScratch;
+typedef struct {
     GscEntityRef owner;cod1ActorLease_t lease;C1GARecord generic;
     cod1ActorRecord_t actor;gentity_t entity;C1TRecord gun;C1TARecord mg;
     c1atl14Node_t original[C1GA_COUNT],working[C1GA_COUNT];
-    int first[C1GA_COUNT],next[C1GA_COUNT];unsigned order[C1GA_COUNT],frontier;
+    C1ActorRootOrderScratch scratch;
     unsigned mgMap[2][25],source[128],leafSource[82],count,leaves;
     c1arc14Node_t nodes[128];const c1ar14Root_t *roots[82];const c1ab14Clip_t *bodies[82];
     uint64_t epoch,receipt,lookRevision,faceRevision,scriptedRevision;int now,gunIndex;
 } C1ActorCurrentRoot;
-static int ActorCurrentRootOrder(C1ActorCurrentRoot *v) {
-    if(cod1EntityActive&&cod1EntityEpoch==cod1GenericEpoch&&
+static const c1ago14Prepared_t *ActorCurrentRootPrepared(void) {
+    return cod1EntityActive&&cod1EntityEpoch==cod1GenericEpoch&&
        cod1TurretAnimationReceipt==cod1GenericReceipt&&
+       C1AGO14_Matches(&cod1GenericSourceOrder,C1GA_COUNT,cod1GenericEpoch,cod1GenericReceipt)
+       ? &cod1GenericSourceOrder : NULL;
+}
+static int ActorCurrentRootOrder(C1ActorRootOrderScratch *v) {
+    if(ActorCurrentRootPrepared()&&
        C1AGO14_Copy(&cod1GenericSourceOrder,C1GA_COUNT,cod1GenericEpoch,cod1GenericReceipt,
                     v->first,v->next,v->order,&v->frontier))return 1;
     return C1AGO14_Build(cod1GenericDefinitions,C1GA_COUNT,v->first,v->next,v->order,&v->frontier);
@@ -37,12 +45,13 @@ static int ActorCurrentRootResource(const C1ActorCurrentRoot *v,unsigned ordinal
         (*root)->fps==(*body)->fps&&(*root)->intervals==(*body)->intervals&&
         (*root)->intervals==(*root)->frames-1+((*root)->flags&1u)&&(*root)->fps&&(*root)->fps<=120;
 }
-static int ActorCurrentRootCollect(C1ActorCurrentRoot *v,unsigned source,int parent,unsigned depth) {
+static int ActorCurrentRootCollect(C1ActorCurrentRoot *v,unsigned source,int parent,unsigned depth,
+    const int *first,const int *next,const unsigned *order) {
     const c1atl14Node_t *live;const c1ar14Root_t *root;const c1ab14Clip_t *body;
     c1arc14Node_t *n;unsigned here,leaf;int child;
     if(source>=C1GA_COUNT||depth>32||v->count>=128)return 0;
     here=v->count++;n=v->nodes+here;memset(n,0,sizeof(*n));live=v->working+source;
-    v->source[here]=source;n->ordinal=v->order[source];n->parent=parent;n->leaf=-1;
+    v->source[here]=source;n->ordinal=order[source];n->parent=parent;n->leaf=-1;
     n->definition_children=cod1GenericDefinitions[source].children;
     n->phase=live->phase;n->goalWeight=live->goalWeight;n->currentWeight=live->currentWeight;
     /* Native selected composites do not consult their own slot. For a visited
@@ -60,13 +69,22 @@ static int ActorCurrentRootCollect(C1ActorCurrentRoot *v,unsigned source,int par
         leaf=v->leaves++;n->leaf=(int)leaf;v->roots[leaf]=root;v->bodies[leaf]=body;v->leafSource[leaf]=source;
         return 1;
     }
-    for(child=v->first[source];child>=0;child=v->next[child]){
+    for(child=first[source];child>=0;child=next[child]){
         /* Exhaustively inspect EVERY actual definition child. Omit only its
          * genuine zero goal; unknown positive resources are never an identity. */
         if(v->working[child].goalWeight>0&&
-           !ActorCurrentRootCollect(v,(unsigned)child,(int)here,depth+1))return 0;
+           !ActorCurrentRootCollect(v,(unsigned)child,(int)here,depth+1,first,next,order))return 0;
     }
     return 1;
+}
+/* Enter only after the current callback, full actor/resource fence and
+ * mutable tree validation. Collect calls only synchronous resource readers;
+ * neither the topology pointer nor a view is stored in the stage. */
+static int ActorCurrentRootProject(C1ActorCurrentRoot *v,unsigned source) {
+    const c1ago14Prepared_t *p=ActorCurrentRootPrepared();
+    if(p)return ActorCurrentRootCollect(v,source,-1,0,p->first,p->next,p->order);
+    if(!ActorCurrentRootOrder(&v->scratch))return 0;
+    return ActorCurrentRootCollect(v,source,-1,0,v->scratch.first,v->scratch.next,v->scratch.order);
 }
 static int ActorCurrentRootFence(const C1ActorCurrentRoot *v,const GscEntityRef *input) {
     cod1ActorLease_t lease;
@@ -117,7 +135,7 @@ int G_Cod1ActorRootCurrent(const GscEntityRef *input,int now,unsigned sourceOrdi
     cod1GenericOperation.stage=v;cod1GenericOperation.bytes=sizeof(*v);
     if(current(context)!=1||!ActorCurrentRootFence(v,input)||
        !C1AGT14_Valid(cod1GenericDefinitions,v->working,C1GA_COUNT)||
-       !ActorCurrentRootOrder(v)||!ActorCurrentRootCollect(v,sourceOrdinal,-1,0)||
+       !ActorCurrentRootProject(v,sourceOrdinal)||
        !C1ARC14_Current(v->roots,v->leaves,v->nodes,v->count,0,&result))goto unlock;
     if(current(context)!=1||!ActorCurrentRootFence(v,input))goto unlock;
     for(i=0;i<v->leaves;i++)if(!ActorCurrentRootResource(v,v->leafSource[i],&root,&body)||

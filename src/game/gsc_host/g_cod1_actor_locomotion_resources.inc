@@ -135,7 +135,7 @@ static int ActorAimFaceActive(const C1GARecord*r){
 static int ActorOrdinaryClockOwner(const C1GARecord*);
 static int ActorGeneralClockActive(const C1GARecord*r){return ActorOrdinaryClockOwner(r)||ActorLocomotionActive(r)||ActorAimActive(r)||ActorAimFaceActive(r)||ActorProneTreeActive(r)||ActorRestActive(r)||ActorTraverseActive(r)||ActorMovementActive(r);}
 static int ActorLocomotionLoad(void){
- C1LocoResources*r=&cod1LocoResources,*v=NULL;C1ActorCurrentRoot*order=NULL;
+ C1LocoResources*r=&cod1LocoResources,*v=NULL;C1ActorRootOrderScratch*order=NULL;
  uint64_t epoch=cod1EntityEpoch,revision=r->revision;unsigned root,i;int ok=0;char path[128]="topology";
  if(ActorLocomotionReady(epoch))return 1;
  if(!epoch||!level.spawning||level.restarted||!cod1EntityActive||r->epoch||r->busy||cod1LocoStage||revision==UINT64_MAX||!ActorGenericBuild()||!ActorRestCatalog()||!ActorTraverseCatalog()||!ActorMovementCatalog())return 0;
