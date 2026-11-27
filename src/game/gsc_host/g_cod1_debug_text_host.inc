@@ -35,13 +35,13 @@ static int GscTestDebugTextTime(const GscTestDebugTextScene *lease,int ms) {
         snapshot.state==GSC_SESSION_RUNNING && !snapshot.error[0] && snapshot.logical_ms==ms;
 }
 static int GscTestDebugTextAdmission(const GscTestDebugTextScene *lease,int ms,int running) {
-    static const char *names[6]={"g_cod1GscTest","g_cod1GscEntityTest","savegame_loading",
-        "g_cod1GscTest","savegame_loading","g_cod1GscEntityTest"};
+    static const unsigned keys[6]={C1CP47_F_ENABLE,C1CP47_F_MODE,C1CP47_K_SAVE,
+        C1CP47_F_ENABLE,C1CP47_K_SAVE,C1CP47_F_MODE};
     int values[6]={1,0,0,1,0,0};int i,value;
     values[1]=values[5]=lease->mode;
     for(i=0;i<6;++i) {
         if(!(running?GscTestDebugTextTime(lease,ms):GscTestDebugTextCurrent(lease))) return 0;
-        value=trap_Cvar_VariableIntegerValue(names[i]);
+        value=GscConfigInteger47(keys[i]);
         if(!(running?GscTestDebugTextTime(lease,ms):GscTestDebugTextCurrent(lease)) || value!=values[i]) return 0;
     }
     return 1;

@@ -2,7 +2,7 @@
 static unsigned gscTestNamespaceStartOriginQueries;
 static int GscTestNamespaceStartOriginScope(const GscStartOriginRequest *request) {
     GscSessionSnapshot snapshot;
-    return request && (gscTestEntityMode==47 || (gscTestEntityMode==43 && trap_Cvar_VariableIntegerValue("g_cod1GscTrainingRigs")==1)) && gscTestBusy &&
+    return request && (gscTestEntityMode==47 || (gscTestEntityMode==43 && G_Cod1GscFeature47(C1CP47_F_RIGS)==1)) && gscTestBusy &&
         gscTestSession && gscTestId && !gscTestCompleted && GscTestModuleReadCurrent() &&
         gsc_session_snapshot(gscTestSession,&snapshot) && snapshot.busy &&
         snapshot.state==GSC_SESSION_RUNNING && snapshot.session_id==gscTestId &&

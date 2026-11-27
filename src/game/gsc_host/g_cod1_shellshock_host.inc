@@ -51,13 +51,13 @@ static int GscTestShellshockTime(const GscTestShellshockScene *lease,int ms) {
 }
 static int GscTestShellshockAdmission(const GscTestShellshockScene *lease,
     int ms,int running) {
-    static const char *names[6]={"g_cod1GscTest","g_cod1GscEntityTest",
-        "savegame_loading","g_cod1GscTest","savegame_loading","g_cod1GscEntityTest"};
+    static const unsigned keys[6]={C1CP47_F_ENABLE,C1CP47_F_MODE,C1CP47_K_SAVE,
+        C1CP47_F_ENABLE,C1CP47_K_SAVE,C1CP47_F_MODE};
     int values[6]={1,0,0,1,0,0};int i,v;
     values[1]=values[5]=lease->mode;
     for(i=0;i<6;++i) {
         if(!(running?GscTestShellshockTime(lease,ms):GscTestShellshockCurrent(lease))) return 0;
-        v=trap_Cvar_VariableIntegerValue(names[i]);
+        v=GscConfigInteger47(keys[i]);
         if(!(running?GscTestShellshockTime(lease,ms):GscTestShellshockCurrent(lease)) || v!=values[i]) return 0;
     }
     return 1;

@@ -39,15 +39,14 @@ static int GscTestFxTimeCurrent(const GscTestFxScene *lease,int logical_ms) {
         snapshot.logical_ms==logical_ms;
 }
 static int GscTestFxAdmission(const GscTestFxScene *lease) {
-    static const char *names[6]={"g_cod1GscTest","g_cod1GscEntityTest",
-        "savegame_loading","g_cod1GscTest","savegame_loading",
-        "g_cod1GscEntityTest"};
+    static const unsigned keys[6]={C1CP47_F_ENABLE,C1CP47_F_MODE,C1CP47_K_SAVE,
+        C1CP47_F_ENABLE,C1CP47_K_SAVE,C1CP47_F_MODE};
     int values[6]={1,0,0,1,0,0};
     int n,value;
     values[1]=values[5]=lease->mode;
     for(n=0;n<6;++n) {
         if(!GscTestFxCurrent(lease)) return 0;
-        value=trap_Cvar_VariableIntegerValue(names[n]);
+        value=GscConfigInteger47(keys[n]);
         if(!GscTestFxCurrent(lease) || value!=values[n]) return 0;
     }
     return 1;
