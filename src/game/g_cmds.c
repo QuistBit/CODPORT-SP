@@ -32,6 +32,7 @@ If you have questions concerning this license or the applicable additional terms
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
 #include "g_cod1_entity_host.h"
 #include "g_cod1_gsc_test.h"
+#include "g_cod1_campaign_api47.h"
 #endif
 
 /*

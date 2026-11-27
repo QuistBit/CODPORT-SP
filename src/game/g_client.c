@@ -28,6 +28,7 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "g_local.h"
 #include "g_cod1_gsc_test.h"
+#include "g_cod1_campaign_api47.h"
 #include "g_cod1_body_reserve.inc"
 #include "g_cod1_entity_host.h"
 #include "g_cod1_player_lifetime.h"

@@ -14,6 +14,7 @@
 #endif
 #include "../g_local.h"
 #include "../g_cod1_gsc_test.h"
+#include "../g_cod1_campaign_api47.h"
 #include "../bg_cod1_direct_fog.h"
 #include "../cod1_gsc/gsc_session.h"
 #include "cod1_author_fog.h"
