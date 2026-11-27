@@ -7,6 +7,7 @@
  * require their own confirmed contracts. */
 #include "../g_local.h"
 #include "../g_cod1_entity_host.h"
+#include "../g_cod1_gsc_test.h"
 #include "../g_cod1_vehicle.h"
 #include "../g_cod1_turret_factory.h"
 #include "../g_cod1_player_lifetime.h"
@@ -145,7 +146,7 @@ static void AmmoCandidateRetire( const GscEntityRef *entity ) {
 }
 
 static int EntityDiagnosticsEnabled( void ) {
-    int mode = trap_Cvar_VariableIntegerValue( "g_cod1GscEntityTest" );
+    int mode = G_Cod1GscFeature47(C1CP47_F_MODE);
     return mode == 1 || mode == 2 || mode == 3 || mode == 5 || mode == 6 || mode == 7 || mode == 8 || mode == 9 || mode == 10 || mode == 11 || mode == 12 || mode == 13 || mode == 15 || mode == 16 || mode == 17 || mode == 18 || (mode == 19 || mode == 20);
 }
 
@@ -1194,7 +1195,7 @@ static int EntityCollectionMode( uint64_t epoch, int entityCount, int *capturedM
     /* Every trap is a possible lifecycle boundary. The final collection scan
      * runs after these callbacks, so no engine pointer crosses a callback. */
     if ( !EntityCollectionContext( epoch, entityCount ) ||
-         trap_Cvar_VariableIntegerValue( "g_cod1GscTest" ) != 1 ||
+         G_Cod1GscFeature47(C1CP47_F_ENABLE) != 1 ||
          !EntityCollectionContext( epoch, entityCount ) ||
          trap_Cvar_VariableIntegerValue( "savegame_loading" ) != 0 ||
          !EntityCollectionContext( epoch, entityCount ) ) {
@@ -1203,7 +1204,7 @@ static int EntityCollectionMode( uint64_t epoch, int entityCount, int *capturedM
     /* R193 FIX1: the shipped mode40 Session already supplies collections.
      * Admit that selected capability here too; keep every lifecycle check
      * and the two-sample mode fence. No blanket future-mode admission. */
-    mode = trap_Cvar_VariableIntegerValue( "g_cod1GscEntityTest" );
+    mode = G_Cod1GscFeature47(C1CP47_F_MODE);
     if ( !EntityCollectionContext( epoch, entityCount ) ||
          ( mode != 8 && mode != 9 && mode != 10 && mode != 11 && mode != 12 && mode != 13 && mode != 15 && mode != 16 && mode != 17 && mode != 18 && (mode != 19 && mode != 20) && mode != 30 && mode != 31 && mode != 40 && (mode!=41&&mode!=42&&mode!=43) ) ||
          ( *capturedMode && mode != *capturedMode ) ) return 0;

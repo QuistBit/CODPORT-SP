@@ -18,7 +18,7 @@ static int GscTestBriefingSelection(void){
  return !gscTestStopRequested&&((!strcmp(map,"us_intro")&&!strcmp(path,"maps/us_intro.gsc"))||(!strcmp(map,"pathfinder")&&!strcmp(path,"maps/pathfinder.gsc")));
 }
 static int GscTestClientStartupOptions(void){
- if(trap_Cvar_VariableIntegerValue("g_cod1GscGraphStartup")==1)return GscTestGraphClientOptions();
+ if(G_Cod1GscFeature47(C1CP47_F_GRAPH_STARTUP)==1)return GscTestGraphClientOptions();
  static const char*names[]={"g_cod1GscClientStartup","g_cod1GscTest","g_cod1GscEntityTest","savegame_loading","g_cod1GscActorPrefix","g_cod1GscAiArrays","g_cod1GscDeleteTransactions","g_cod1GscTrainingGrenades","g_cod1GscTrainingCarbine","g_cod1GscR232Turret","g_cod1GscSoundNotify","g_cod1GscStreamedVoice","g_cod1GscTrainingFinale"};
  static const int values[]={1,1,43,0,0,0,0,0,0,0,0,0,0};unsigned i;int briefing=GscTestBriefingSelection();char map[MAX_QPATH];
  trap_Cvar_VariableStringBuffer("mapname",map,sizeof(map));

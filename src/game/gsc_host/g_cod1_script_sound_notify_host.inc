@@ -70,7 +70,7 @@ static int GscSoundResolve(void *user,const char *alias) {
   * C1N_Begin owns its replacement policy and the mixer reports duration. */
  if(profile==2 && (c->argc==2 || (c->argc==3 && c->request.mode_valid && c->request.mode==1)) &&
     c->request.notify_valid &&
-    trap_Cvar_VariableIntegerValue("g_cod1GscLoadedCaptions")==1)
+    G_Cod1GscFeature47(C1CP47_F_CAPTIONS)==1)
   profile=COD1_SS_LOADED_CAPTION_PROFILE;
  status=Cod1ScriptSoundResolveSelected(&files,alias,c->map,&c->plan,&c->diag,profile);
  if(status==COD1_SS_RESOURCE_READY){unsigned i;if(c->argc==1&&gscSoundOwners[c->owner.slot].pending.pending&&(gscSoundOwners[c->owner.slot].voiced||gscSoundOwners[c->owner.slot].loadedCaption||c->plan.variants[0].streamed)&&!GscSoundIndependentVoice(c)&&!GscSoundPlainBody(c)){c->diag.reason=COD1_SS_REASON_UNSUPPORTED;return -1;}for(i=1;i<c->plan.count;i++)if(c->plan.variants[i].streamed!=c->plan.variants[0].streamed || !!c->plan.variants[i].subtitle[0]!=!!c->plan.variants[0].subtitle[0]){c->diag.reason=COD1_SS_REASON_UNSUPPORTED;return -1;}}

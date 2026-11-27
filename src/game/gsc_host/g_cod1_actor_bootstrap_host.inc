@@ -119,11 +119,11 @@ static void Cod1ActorPrefixBegin(void){
     if(cod1ActorPrefixSerial==UINT64_MAX||!epoch||!G_Cod1MapEntities()||g_gametype.integer!=GT_SINGLE_PLAYER)return;
     cod1ActorPrefix.epoch=epoch;cod1ActorPrefix.receipt=++cod1ActorPrefixSerial;
     if(!G_Cod1EntitySelectActorDeleteOwner(epoch,&deleteOwner)){cod1ActorPrefix.invalid=1;return;}
-    enabled=trap_Cvar_VariableIntegerValue("g_cod1GscTest");
+    enabled=G_Cod1GscFeature47(C1CP47_F_ENABLE);
     if(epoch!=G_Cod1EntityMapEpoch()||enabled!=1)return;
-    mode=trap_Cvar_VariableIntegerValue("g_cod1GscEntityTest");
+    mode=G_Cod1GscFeature47(C1CP47_F_MODE);
     if(epoch!=G_Cod1EntityMapEpoch()||mode!=43)return;
-    feature=trap_Cvar_VariableIntegerValue("g_cod1GscActorPrefix");
+    feature=G_Cod1GscFeature47(C1CP47_F_ACTOR_PREFIX);
     if(epoch!=G_Cod1EntityMapEpoch()||feature!=1)return;
     cod1ActorPrefix.enabled=1;bytes=trap_FS_FOpenFile("radiant/keys.txt",&file,FS_READ);
     if(bytes>0&&bytes<=COD1_BSP_DECLARATION_TEXT_MAX&&file&&epoch==G_Cod1EntityMapEpoch()) {
@@ -706,10 +706,10 @@ const GscSessionActorBootstrapHost *G_Cod1ActorBspBootstrapHost(void){
  host.map_certificate.receipt=cod1ActorPrefix.receipt;host.map_certificate.current=Cod1ActorBspCohortCurrent;
  host.access=*G_Cod1ActorConstructorAccessHost();host.fields=*G_Cod1ActorTrainingFieldHost();host.methods=*G_Cod1ActorConstructorMethodHost();
  host.spawner_team=*G_Cod1SpawnerTeamMethodHost();host.attachments=*G_Cod1ActorAttachmentQueryHost();host.run=Cod1ActorPrefixRun;host.construct=Cod1ActorPrefixAdoptBsp;
- if(trap_Cvar_VariableIntegerValue("g_cod1GscGraphStartup")==1||trap_Cvar_VariableIntegerValue("g_cod1GscGraphStartup")==2){host.node_target=Cod1ActorPrefixNodeTarget;host.node_target_end=Cod1ActorPrefixNodeTargetEnd;}
-  host.placed_init_initial=host.node_target&&trap_Cvar_VariableIntegerValue("g_cod1GscPlacedInit")==1;
-  host.placed_init_return=host.placed_init_initial&&trap_Cvar_VariableIntegerValue("g_cod1GscPlacedCurrentState")==1?G_Cod1ActorPlacedInitReturn:NULL;
-  host.placed_cohort=host.placed_init_return&&trap_Cvar_VariableIntegerValue("g_cod1GscPlacedCohort")==1;
+ if(G_Cod1GscFeature47(C1CP47_F_GRAPH_STARTUP)==1||G_Cod1GscFeature47(C1CP47_F_GRAPH_STARTUP)==2){host.node_target=Cod1ActorPrefixNodeTarget;host.node_target_end=Cod1ActorPrefixNodeTargetEnd;}
+  host.placed_init_initial=host.node_target&&G_Cod1GscFeature47(C1CP47_F_PLACED_INIT)==1;
+  host.placed_init_return=host.placed_init_initial&&G_Cod1GscFeature47(C1CP47_F_PLACED_STATE)==1?G_Cod1ActorPlacedInitReturn:NULL;
+  host.placed_cohort=host.placed_init_return&&G_Cod1GscFeature47(C1CP47_F_PLACED_COHORT)==1;
  cod1ActorPrefix.resourceCount=host.module_count;cod1ActorPrefixHost=host;cod1ActorPrefix.selected=1;return &cod1ActorPrefixHost;
 }
 const GscSessionActorBootstrapHost *G_Cod1ActorBootstrapHost(void){
@@ -735,10 +735,10 @@ const GscSessionActorBootstrapHost *G_Cod1ActorBootstrapHost(void){
     host.access=*G_Cod1ActorConstructorAccessHost();host.fields=*G_Cod1ActorTrainingFieldHost();
     host.methods=*G_Cod1ActorConstructorMethodHost();host.spawner_team=*G_Cod1SpawnerTeamMethodHost();
     host.attachments=*G_Cod1ActorAttachmentQueryHost();host.run=Cod1ActorPrefixRun;host.construct=Cod1ActorPrefixConstruct;
-    if(trap_Cvar_VariableIntegerValue("g_cod1GscGraphStartup")==1||trap_Cvar_VariableIntegerValue("g_cod1GscGraphStartup")==2){host.node_target=Cod1ActorPrefixNodeTarget;host.node_target_end=Cod1ActorPrefixNodeTargetEnd;}
-  host.placed_init_initial=host.node_target&&trap_Cvar_VariableIntegerValue("g_cod1GscPlacedInit")==1;
-  host.placed_init_return=host.placed_init_initial&&trap_Cvar_VariableIntegerValue("g_cod1GscPlacedCurrentState")==1?G_Cod1ActorPlacedInitReturn:NULL;
-  host.placed_cohort=host.placed_init_return&&trap_Cvar_VariableIntegerValue("g_cod1GscPlacedCohort")==1;
+    if(G_Cod1GscFeature47(C1CP47_F_GRAPH_STARTUP)==1||G_Cod1GscFeature47(C1CP47_F_GRAPH_STARTUP)==2){host.node_target=Cod1ActorPrefixNodeTarget;host.node_target_end=Cod1ActorPrefixNodeTargetEnd;}
+  host.placed_init_initial=host.node_target&&G_Cod1GscFeature47(C1CP47_F_PLACED_INIT)==1;
+  host.placed_init_return=host.placed_init_initial&&G_Cod1GscFeature47(C1CP47_F_PLACED_STATE)==1?G_Cod1ActorPlacedInitReturn:NULL;
+  host.placed_cohort=host.placed_init_return&&G_Cod1GscFeature47(C1CP47_F_PLACED_COHORT)==1;
     cod1ActorPrefix.resourceCount=host.module_count;cod1ActorPrefixHost=host;cod1ActorPrefix.selected=1;return &cod1ActorPrefixHost;
 }
 int G_Cod1ActorBootstrapRead(cod1ActorBootstrapSnapshot_t *out,char *error,size_t size){

@@ -74,7 +74,7 @@ static int GscTestNativeFrameAdvance(int now,int*advanced,int (*expired)(void),c
    if(gscTestTurret.nativeThreads)return GscTestNativeFrameError(error,cap,"native thread selection lost frame capability");
    return gsc_session_advance(gscTestSession,gscTestId,(int64_t)now,error,cap);
   }
-  if(!gscTestTurret.nativeThreads||trap_Cvar_VariableIntegerValue("g_cod1GscNativeThreads")!=1||
+  if(!gscTestTurret.nativeThreads||G_Cod1GscFeature47(C1CP47_F_NATIVE_THREADS)!=1||
      !GscTestEarlyCurrent()||gscTestStopRequested||level.restarted||
      !gsc_session_snapshot(gscTestSession,&s)||s.session_id!=gscTestId||s.busy||s.error[0]||
      !gsc_session_r237_frame_view(gscTestSession,gscTestId,&view)||view.frame_open||s.origin_host_ms<0||

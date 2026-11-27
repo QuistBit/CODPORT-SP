@@ -11,7 +11,7 @@ static int Cod1EarlyTurretCurrent(void*user,uint64_t epoch,uint64_t receipt){
  if(cod1EarlyTurretResources.busy){cod1EarlyTurretResources.cancelled=1;return 0;}
  prepass=cod1EarlyTurretResources.prepass;if(!Cod1EarlyTurretScope(epoch,prepass))return 0;
  cod1EarlyTurretResources.busy=1;
- feature=trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret");
+ feature=G_Cod1GscFeature47(C1CP47_F_TURRET);
  developer=trap_Cvar_VariableIntegerValue("developer_script");
  ok=feature==1&&developer==cod1EarlyTurretResources.developer&&
   epoch==cod1EarlyTurretResources.epoch&&receipt==cod1EarlyTurretResources.receipt&&
@@ -36,7 +36,7 @@ static int Cod1EarlyTurretLoad(void){
  if(!Cod1EarlyTurretScope(epoch,prepass)||!level.spawning||cod1ActorPrefix.placedRows||
     cod1EarlyTurretResources.ready||cod1EarlyTurretResources.busy||cod1EarlyTurretResources.cancelled||cod1EarlyTurretSerial==UINT64_MAX)return 0;
  cod1EarlyTurretResources.busy=1;
- feature=trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret");
+ feature=G_Cod1GscFeature47(C1CP47_F_TURRET);
  if(!Cod1EarlyTurretLoading(epoch,prepass))goto done;
  if(feature==0){ok=1;goto done;}if(feature!=1)goto done;
  developer=trap_Cvar_VariableIntegerValue("developer_script");
@@ -50,7 +50,7 @@ static int Cod1EarlyTurretLoad(void){
   c=gsc_animation_catalog_parse(names[n],bytes[n],sizes[n],why,sizeof(why));if(!c||!gsc_animation_catalog_count(c))goto done;
   gsc_animation_catalog_free(c);c=NULL;
  }
- if(trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")!=1||
+ if(G_Cod1GscFeature47(C1CP47_F_TURRET)!=1||
     trap_Cvar_VariableIntegerValue("developer_script")!=developer||!Cod1EarlyTurretLoading(epoch,prepass))goto done;
  for(n=0;n<2;n++){
   memcpy(cod1EarlyTurretResources.bytes[n],bytes[n],sizes[n]);memcpy(cod1EarlyTurretResources.reference[n],bytes[n],sizes[n]);cod1EarlyTurretResources.sizes[n]=sizes[n];

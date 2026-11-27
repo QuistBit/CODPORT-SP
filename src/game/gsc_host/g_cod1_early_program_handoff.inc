@@ -12,8 +12,8 @@ static struct {
  char values[sizeof(gscEarlyNames)/sizeof(gscEarlyNames[0])][MAX_CVAR_VALUE_STRING],path[MAX_CVAR_VALUE_STRING];
 } gscTestEarlyProgram;
 static int GscTestEarlySelected(void){
- return trap_Cvar_VariableIntegerValue("g_cod1GscTest")==1&&
-  GscTestEntityModeValue()==43&&trap_Cvar_VariableIntegerValue("g_cod1GscActorPrefix")==1;
+ return G_Cod1GscFeature47(C1CP47_F_ENABLE)==1&&
+  GscTestEntityModeValue()==43&&G_Cod1GscFeature47(C1CP47_F_ACTOR_PREFIX)==1;
 }
 static int GscTestEarlyOwner(void){
  return gscTestEarlyProgram.attempted&&gscTestEarlyProgram.epoch==G_Cod1EntityMapEpoch()&&
@@ -47,7 +47,7 @@ static int GscTestEarlyCapture(void){
 
 static int GscTestEarlyConsume(const GscSessionSnapshot*s,uint64_t id,int spawning,int restarted){
  if(!s||!gscTestEarlyProgram.prepared||gscTestEarlyProgram.consumed||spawning||restarted||
-    !GscTestEarlyCurrent()||s->state!=GSC_SESSION_COMPILED||s->busy||!s->has_program||(s->has_runtime&&trap_Cvar_VariableIntegerValue("g_cod1GscBspConstruct")!=1)||
+    !GscTestEarlyCurrent()||s->state!=GSC_SESSION_COMPILED||s->busy||!s->has_program||(s->has_runtime&&G_Cod1GscFeature47(C1CP47_F_BSP_CONSTRUCT)!=1)||
     s->session_id!=gscTestEarlyProgram.id||id!=gscTestEarlyProgram.id||!id){
   gscTestEarlyProgram.cancelled=1;return 0;
  }
