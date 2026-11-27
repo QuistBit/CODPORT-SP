@@ -81,25 +81,29 @@ static int C1AGT14_Active(const c1agt14Definition_t*d,const c1atl14Node_t*n,unsi
   for(p=i;p!=root;p=d[p].parent)if(n[p].currentWeight==0)break;if(p==root)return 1;
  }return 0;
 }
+#include "cod1_actor_active_paths37.h"
 static int C1AGT14_ClearInner(const c1agt14Definition_t*d,c1atl14Node_t*n,unsigned count,unsigned target,float fade){
  c1atl14Node_t*stage;unsigned i,depth,maxDepth=0,p;int ok=0;
- unsigned first[65],last[65],next[4096];
+ unsigned first[65],last[65],next[4096];unsigned char active[4096];
  if(target>=count||!C1ATL14_Finite(fade)||fade<0||!C1AGT14_Valid(d,n,count))return 0;
  stage=(c1atl14Node_t*)malloc(count*sizeof(*stage));if(!stage)return 0;memcpy(stage,n,count*sizeof(*stage));
  /* Native recursion processes the parent before its children. Current weights
   * can change on an inactive path, so preserve this order for every level. */
  /* Valid has checked every parent and the depth<=64 bound. Build only
   * integer topology here, with no callbacks or mutation. Each depth retains
-  * ascending original ordinals, including trees with forward parent indices.
-  * Active is still evaluated against the current stage at the original point. */
+  * ascending original ordinals, including trees with forward parent indices. */
  memset(first,0xff,sizeof(first));memset(last,0xff,sizeof(last));
  for(i=0;i<count;i++){
   for(p=i,depth=0;p;p=d[p].parent)depth++;if(depth>maxDepth)maxDepth=depth;
   if(!C1AGT14_Descendant(d,i,target))continue;
   next[i]=~0u;if(last[depth]!=~0u)next[last[depth]]=i;else first[depth]=i;last[depth]=i;
  }
+ /* Only the current-weight reachability is precomputed. Every ClearGoal
+  * still runs at the same depth/ordinal position, including inactive nodes. */
+ if(d[target].children)C1AGT37_ActivePaths(d,stage,count,active);
+ else active[target]=(unsigned char)C1AGT14_Active(d,stage,count,target);
  for(depth=0;depth<=maxDepth;depth++)for(i=first[depth];i!=~0u;i=next[i])
-  if(!C1ATL14_ClearGoal(&stage[i],fade,C1AGT14_Active(d,stage,count,i)))goto done;
+  if(!C1ATL14_ClearGoal(&stage[i],fade,active[i]))goto done;
  memcpy(n,stage,count*sizeof(*n));ok=1;
 done:free(stage);return ok;
 }
