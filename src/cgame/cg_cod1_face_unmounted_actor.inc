@@ -20,8 +20,8 @@ static int CGFA4_ValidWire(const entityState_t *actor,int now) {
 }
 static void CGFA4_FreeClips(cgfa4Clips_t*b){C1AFU14_Free(b);}
 static c1ab14Clip_t *cgJumperClip;
-static cgfa4Resource_t cgJumperResource;
-static void CGFA4_Reset(void){unsigned i;for(i=0;i<C1ASP14_RESOURCES;i++){C1AB14_Free(cgSourcePoseClips[i]);cgSourcePoseClips[i]=NULL;}C1AD14_Free(cgJumperResource.resource);memset(&cgJumperResource,0,sizeof(cgJumperResource));C1AB14_Free(cgJumperClip);cgJumperClip=NULL;if(!++cgfa4Revision)++cgfa4Revision;for(i=0;i<CGTA_CACHE;i++){C1AD14_Free(cgfa4Resources[i].resource);memset(cgfa4Resources+i,0,sizeof(cgfa4Resources[i]));}for(i=0;i<5;i++){C1AB14_Free(entryClips[i]);entryClips[i]=NULL;}C1AB14_Free(foleyWalk);foleyWalk=NULL;C1AB14_Free(rifleCrouchRun);rifleCrouchRun=NULL;C1AB14_Free(rifleCrouchRun1);rifleCrouchRun1=NULL;C1AB14_Free(rifleCrouchRun3);rifleCrouchRun3=NULL;C1AB14_Free(rifleCrouchRun4);rifleCrouchRun4=NULL;C1AB14_Free(wallDive);wallDive=NULL;C1AB14_Free(proneCrawl);proneCrawl=NULL;C1AB14_Free(precombatRun);precombatRun=NULL;for(i=0;i<4;i++){C1AB14_Free(ladderClips[i]);ladderClips[i]=NULL;C1AB14_Free(restClips[i]);restClips[i]=NULL;}for(i=0;i<3;i++){C1AB14_Free(courseWalk[i]);courseWalk[i]=NULL;}C1ASB14_Free(&scriptedClips);CGFA4_FreeClips(&cgfa4Clips);cgfa4Ready=0;}
+#include "cg_cod1_recyclable_resource40.inc"
+static void CGFA4_Reset(void){unsigned i;for(i=0;i<C1ASP14_RESOURCES;i++){C1AB14_Free(cgSourcePoseClips[i]);cgSourcePoseClips[i]=NULL;}CGFA4_RecyclableReset();C1AB14_Free(cgJumperClip);cgJumperClip=NULL;if(!++cgfa4Revision)++cgfa4Revision;for(i=0;i<CGTA_CACHE;i++){C1AD14_Free(cgfa4Resources[i].resource);memset(cgfa4Resources+i,0,sizeof(cgfa4Resources[i]));}for(i=0;i<5;i++){C1AB14_Free(entryClips[i]);entryClips[i]=NULL;}C1AB14_Free(foleyWalk);foleyWalk=NULL;C1AB14_Free(rifleCrouchRun);rifleCrouchRun=NULL;C1AB14_Free(rifleCrouchRun1);rifleCrouchRun1=NULL;C1AB14_Free(rifleCrouchRun3);rifleCrouchRun3=NULL;C1AB14_Free(rifleCrouchRun4);rifleCrouchRun4=NULL;C1AB14_Free(wallDive);wallDive=NULL;C1AB14_Free(proneCrawl);proneCrawl=NULL;C1AB14_Free(precombatRun);precombatRun=NULL;for(i=0;i<4;i++){C1AB14_Free(ladderClips[i]);ladderClips[i]=NULL;C1AB14_Free(restClips[i]);restClips[i]=NULL;}for(i=0;i<3;i++){C1AB14_Free(courseWalk[i]);courseWalk[i]=NULL;}C1ASB14_Free(&scriptedClips);CGFA4_FreeClips(&cgfa4Clips);cgfa4Ready=0;}
 static int CGFA4_Current(const cgfa4Lease_t*l){int i,actors=0;if(!l||l->revision!=cgfa4Revision||!cgs.cod1MapEntities||(!l->snapshot||(cg.snap!=l->snapshot&&cg.nextSnap!=l->snapshot))||!CGFA4_ValidWire(&l->actor,l->snapshot->serverTime))return 0;for(i=0;i<l->snapshot->numEntities;i++)if(l->snapshot->entities[i].number==l->actor.number){if(memcmp(l->snapshot->entities+i,&l->actor,sizeof(l->actor)))return 0;actors++;}return actors==1&&!strcmp(CG_ConfigString(l->actor.cod1TurretActorConfig),l->config)&&l->revision==cgfa4Revision&&(cg.snap==l->snapshot||cg.nextSnap==l->snapshot);}
 static void*CGFA4_Read(const cgfa4Lease_t*l,const char*path,int*size){fileHandle_t f=0;void*data=NULL;int n=trap_FS_FOpenFile(path,&f,FS_READ);if(!CGFA4_Current(l)||n<1||n>16*1024*1024||!f)goto done;data=malloc(n);if(!data)goto done;memset(data,0,n);trap_FS_Read(data,n,f);if(!CGFA4_Current(l)){free(data);data=NULL;}else *size=n;done:if(f)trap_FS_FCloseFile(f);if(!CGFA4_Current(l)){free(data);data=NULL;}return data;}
 static int CGFA4_LoadClips(const cgfa4Lease_t*l){cgfa4Clips_t staged;unsigned i;int n,ok=0;void*data=NULL;char path[128];if(cgfa4Ready)return CGFA4_Current(l);memset(&staged,0,sizeof(staged));for(i=0;i<47;i++){snprintf(path,sizeof(path),"xanim/%s",C1AFU14_Name(i));data=CGFA4_Read(l,path,&n);if(!data||!C1AFU14_Add(&staged,i,data,n))goto done;free(data);data=NULL;}if(!CGFA4_Current(l)||!C1AFU14_Ready(&staged))goto done;cgfa4Clips=staged;memset(&staged,0,sizeof(staged));cgfa4Ready=1;ok=1;done:free(data);CGFA4_FreeClips(&staged);return ok;}
@@ -44,35 +44,7 @@ static int CGFA4_BuildBank(const cgfa4Lease_t *lease,cgfa4Resource_t *resource) 
     }
     return C1ASB14_Bank(resource->resource,&cgfa4Clips,&scriptedClips,&resource->bank);
 }
-static cgfa4Resource_t*CGFA4_Resource(const cgfa4Lease_t*l){cgfa4Resource_t staged,*slot=NULL;cod1TurretActorResourceState_t def;c1at14Input_t inputs[8];void*models[8]={0},*parts[8]={0};char names[8][128],path[128];unsigned i;int n,ok=0;
- const char *composition=l->config;
- if(l->actor.cod1TurretActorConfig==CS_COD1_JUMPER){
-    char prefix[64];
-    int count=snprintf(prefix,sizeof(prefix),"j:%u:%u:%u:%u|",(unsigned)l->actor.cod1TurretEpochLo,
-        (unsigned)l->actor.cod1TurretEpochHi,(unsigned)l->actor.number,(unsigned)l->actor.cod1TurretActorGeneration);
-    if(count<=0||(size_t)count>=sizeof(prefix)||strncmp(composition,prefix,count))return NULL;
-    composition+=count;
-    slot=&cgJumperResource;
- }
- if(!C1TAW_Composition(composition,&def)||!CGFA4_LoadClips(l))return NULL;
- if(slot){
-    if(slot->handle && slot->version==(l->actor.cod1TurretActorVersion==COD1_SOURCE_POSE_WIRE_VERSION?COD1_SCRIPTED_ACTOR_WIRE_VERSION:l->actor.cod1TurretActorVersion) &&
-       !memcmp(&slot->definition,&def,sizeof(def)))return slot;
- }else{
-    for(i=0;i<CGTA_CACHE;i++){
-        if(cgfa4Resources[i].handle&&cgfa4Resources[i].version==(l->actor.cod1TurretActorVersion==COD1_SOURCE_POSE_WIRE_VERSION?COD1_SCRIPTED_ACTOR_WIRE_VERSION:l->actor.cod1TurretActorVersion)&&
-           !memcmp(&cgfa4Resources[i].definition,&def,sizeof(def)))return cgfa4Resources+i;
-        if(!cgfa4Resources[i].resource&&!slot)slot=cgfa4Resources+i;
-    }
-    if(!slot){static int shown; if(!shown++){CG_Printf("[378 cache full] owner=%d version=%d slots=%d\n",l->actor.number,l->actor.cod1TurretActorVersion,CGTA_CACHE);}return NULL;}
- }
- memset(&staged,0,sizeof(staged));memset(inputs,0,sizeof(inputs));staged.definition=def;
- for(i=0;i<(unsigned)def.partCount;i++){c1mrModelHeader_t model;snprintf(path,sizeof(path),"xmodel/%s",def.model[i]);models[i]=CGFA4_Read(l,path,&n);if(!models[i]||!C1MR_DecodeModel(models[i],n,&model)||!C1TAW_Name(model.lodName[0]))goto done;inputs[i].model=models[i];inputs[i].modelBytes=n;inputs[i].modelName=def.model[i];strcpy(names[i],model.lodName[0]);inputs[i].partsName=names[i];inputs[i].tag=def.tag[i];snprintf(path,sizeof(path),"xmodelparts/%s",names[i]);parts[i]=CGFA4_Read(l,path,&n);if(!parts[i])goto done;inputs[i].parts=parts[i];inputs[i].partsBytes=n;}
- if(!C1AD14_Create(inputs,def.partCount,&staged.resource)||!CGFA4_BuildBank(l,&staged)||!CGFA4_Current(l))goto done;
- staged.handle=trap_R_RegisterCod1TurretActor(&def);if(!staged.handle||!CGFA4_Current(l)||(slot!=&cgJumperResource&&slot->resource))goto done;
- C1AD14_Free(slot->resource);*slot=staged;staged.resource=NULL;ok=1;
- done:for(i=0;i<8;i++){free(models[i]);free(parts[i]);}C1AD14_Free(staged.resource);return ok?slot:NULL;
-}
+#include "cg_cod1_face_resource40.inc"
 #include "cg_cod1_anim_profile32.inc"
 #include "cg_cod1_source_pose.inc"
 /* Layer the authored pelvis/leg tracks before hierarchy composition. Hands,
