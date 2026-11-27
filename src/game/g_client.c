@@ -2076,7 +2076,7 @@ void ClientSpawn( gentity_t *ent ) {
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP
 	/* Selected native SP playerinit component, before any script shot can run.
 	 * A failed lease is explicit; no missing sentient is inferred to be allied. */
-	if (trap_Cvar_VariableIntegerValue("g_cod1GscR232Turret")==1 &&
+	if (G_Cod1GscFeature47(C1CP47_F_TURRET)==1 &&
 	    G_Cod1MapEntities() && g_gametype.integer==GT_SINGLE_PLAYER &&
 	    ent==&g_entities[0] && client->pers.connected==CON_CONNECTED) {
 		GscEntityRef player;

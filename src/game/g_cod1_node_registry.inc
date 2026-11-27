@@ -102,7 +102,7 @@ static void Cod1NodeRegistryBegin(void){
     uint64_t owner,epoch;int enabled,mode;cod1NavigationRequest_t q;cod1NavigationResource_t resource;
     G_Cod1NodeRegistryClear();if(cod1NodeEpoch==UINT64_MAX)return;++cod1NodeEpoch;
     owner=G_Cod1EntityMapEpoch();if(!owner||!G_Cod1MapEntities()||g_gametype.integer!=GT_SINGLE_PLAYER)return;
-    enabled=trap_Cvar_VariableIntegerValue("g_cod1GscTest");mode=trap_Cvar_VariableIntegerValue("g_cod1GscEntityTest");
+    enabled=G_Cod1GscFeature47(C1CP47_F_ENABLE);mode=G_Cod1GscFeature47(C1CP47_F_MODE);
     if(owner!=G_Cod1EntityMapEpoch()||!G_Cod1MapEntities()||g_gametype.integer!=GT_SINGLE_PLAYER)return;
     cod1NodeOwnerEpoch=owner;cod1NodeConsume=enabled==1&&(mode==42||mode==43);
     epoch=cod1NodeEpoch;memset(&q,0,sizeof(q));q.version=COD1_NAV_RESOURCE_VERSION;q.bytes=sizeof(q);q.operation=COD1_NAV_DESCRIBE;
@@ -308,7 +308,7 @@ static int Cod1NodeValuePolicy(const Cod1NodeRecord *record,const char *field,Gs
         if(placed){out->kind=GSC_NODE_VALUE_VECTOR;return 1;}
     }
     if(!strcmp(field,"origin")&&record->type==15 && Cod1NodeRaw(record,"targetname") && !strcmp(Cod1NodeRaw(record,"targetname"),"jumpnode") &&
-       trap_Cvar_VariableIntegerValue("g_cod1GscTrainingRigs")==1){
+       G_Cod1GscFeature47(C1CP47_F_RIGS)==1){
         if(!TrainingRigNodePosition(record,out->vector))return Cod1NodeError(error,size,"training jump node placement unavailable");
         out->kind=GSC_NODE_VALUE_VECTOR;return 1;
     }

@@ -59,7 +59,7 @@
 #include "../g_cod1_entity_host.h"
 #include "g_cod1_frame_profile35.h"
 #include "g_cod1_campaign_config47.h"
-#include "g_cod1_campaign_owner47.h"
+#include "g_cod1_campaign_lane47.h"
 #include "../g_cod1_player_lifetime.h"
 #include "../bg_cod1_direct_fog.h"
 #include "../cod1_gsc/gsc_session.h"
@@ -100,25 +100,44 @@ static int GscTestCarbineStorageProtected(const void *,size_t);
 static int GscTestTurretStorageProtected(const void *,size_t);
 #endif
 
-/* Legacy lane still reads the original cvar once at each call. A later
- * map-owned capability lane must not bypass independent lifetime gates. */
-int G_Cod1GscFeature47(c1cp47Feature feature){
- return C1CP47_ReadLegacy(feature,trap_Cvar_VariableIntegerValue);
+/* Native profile belongs to one map; the old lane retains each exact live
+ * read. No runtime cvar toggle can switch an existing Session's lane. */
+static c1cp47Owner gscCampaignOwner47;
+static int GscCampaignLane47(void){
+ if(!gscCampaignOwner47.native)return -1;
+ return C1CP47_Lane(&gscCampaignOwner47,G_Cod1EntityMapEpoch(),
+  g_gametype.integer==GT_SINGLE_PLAYER,G_Cod1MapEntities(),level.restarted);
 }
-
-/* String configuration receipts preserve the original raw spelling and
- * truncation. The legacy path does not normalize numeric strings. */
+int G_Cod1GscFeature47(c1cp47Feature feature){
+ return C1CP47_LaneInteger(GscCampaignLane47(),gscCampaignOwner47.profile,feature,trap_Cvar_VariableIntegerValue);
+}
 static void GscConfigString47(unsigned key,char *out,int cap){
- C1CP47_ReadLegacyString(key,out,cap,trap_Cvar_VariableStringBuffer);
+ C1CP47_LaneString(C1CP47_MapOwnedKey(key)?GscCampaignLane47():-1,
+  gscCampaignOwner47.profile,key,out,cap,trap_Cvar_VariableStringBuffer);
+}
+/* Live map/save validation at native init and frame admission, not on
+ * each immutable feature read. Do not retire a newly created epoch. */
+static int GscCampaignNativeLive47(void){
+ uint64_t epoch;char map[MAX_QPATH];int save;
+ if(!gscCampaignOwner47.native)return 1;
+ epoch=gscCampaignOwner47.epoch;
+ if(GscCampaignLane47()!=1)goto revoked;
+ memset(map,0,sizeof(map));trap_Cvar_VariableStringBuffer("mapname",map,sizeof(map));
+ if(GscCampaignLane47()!=1||gscCampaignOwner47.epoch!=epoch)goto revoked;
+ save=trap_Cvar_VariableIntegerValue("savegame_loading");
+ if(gscCampaignOwner47.epoch==epoch&&GscCampaignLane47()==1&&memchr(map,0,sizeof(map))&&
+    C1CP47_OwnerCurrent(&gscCampaignOwner47,epoch,map,g_gametype.integer==GT_SINGLE_PLAYER,
+      G_Cod1MapEntities(),level.restarted,save))return 1;
+ revoked:
+ if(gscCampaignOwner47.epoch==epoch&&gscCampaignOwner47.native)C1CP47_OwnerRetire(&gscCampaignOwner47);
+ return 0;
 }
 static int GscConfigInteger47(unsigned key){
  if(key<C1CP47_F_COUNT)return G_Cod1GscFeature47((c1cp47Feature)key);
  return key==C1CP47_K_SAVE?trap_Cvar_VariableIntegerValue("savegame_loading"):0;
 }
 
-/* R47D observes the prospective normal lane at a real map boundary.
- * Do not use this candidate to answer the legacy gateway yet. */
-static c1cp47Owner gscCampaignOwner47;
+/* R47E enables the candidate only on explicit request at map admission. */
 void G_Cod1GscCampaignRetire47(void){C1CP47_OwnerRetire(&gscCampaignOwner47);}
 void G_Cod1GscCampaignBegin47(int restart){
  (void)C1CP47_OwnerArm(&gscCampaignOwner47,G_Cod1EntityMapEpoch(),restart);
@@ -129,7 +148,7 @@ static int GscCampaignPending47(uint64_t epoch){
 void G_Cod1GscCampaignObserve47(const char *probed){
  uint64_t epoch=G_Cod1EntityMapEpoch();
  char value[MAX_CVAR_VALUE_STRING],live[MAX_QPATH];
- unsigned i;int save,dedicated,legacy=0;
+ unsigned i;int save,dedicated,requested,legacy=0;
  if(!GscCampaignPending47(epoch))return;
  if(!probed||!G_Cod1MapEntities()||g_gametype.integer!=GT_SINGLE_PLAYER||
     level.restarted||gscTestSession||gscTestBusy||
@@ -151,6 +170,8 @@ void G_Cod1GscCampaignObserve47(const char *probed){
   if(!GscCampaignPending47(epoch))return;
   legacy=!memchr(value,0,sizeof(value))||!C1CP47_DefaultRootString(value);
  }
+ requested=trap_Cvar_VariableIntegerValue("g_cod1CampaignProfile");
+ if(!GscCampaignPending47(epoch))return;
  dedicated=trap_Cvar_VariableIntegerValue("dedicated");
  if(!GscCampaignPending47(epoch))return;
  save=trap_Cvar_VariableIntegerValue("savegame_loading");
@@ -161,8 +182,12 @@ void G_Cod1GscCampaignObserve47(const char *probed){
  if(C1CP47_OwnerAdmit(&gscCampaignOwner47,epoch,probed,memchr(live,0,sizeof(live))?live:NULL,
     g_gametype.integer==GT_SINGLE_PLAYER,G_Cod1MapEntities(),level.restarted,
     save,dedicated,legacy,gscTestSession!=NULL||gscTestBusy)&&
-    C1CP47_OwnerCurrent(&gscCampaignOwner47,epoch,live,g_gametype.integer==GT_SINGLE_PLAYER,G_Cod1MapEntities(),level.restarted,save))
-  G_DPrintf("[Campaign R47D] prospective profile map=%s epoch=%llu (not activated)\n",live,(unsigned long long)epoch);
+    C1CP47_OwnerCurrent(&gscCampaignOwner47,epoch,live,g_gametype.integer==GT_SINGLE_PLAYER,G_Cod1MapEntities(),level.restarted,save)){
+  if(C1CP47_OwnerActivate(&gscCampaignOwner47,epoch,live,g_gametype.integer==GT_SINGLE_PLAYER,
+       G_Cod1MapEntities(),level.restarted,save,requested))
+   G_Printf("[Campaign R47E] native map profile=%s epoch=%llu\n",live,(unsigned long long)epoch);
+  else G_DPrintf("[Campaign R47E] prospective profile map=%s epoch=%llu (not activated)\n",live,(unsigned long long)epoch);
+ }
 }
 
 static int GscTestEntityModeValue( void ) {
@@ -1222,7 +1247,7 @@ static void GscTestInitPhase( int levelTime,int early ) {
     GscTestMissionReset();
     GscTestObjectiveReset();
     GscTestDrop(); /* also handles map_restart without an earlier shutdown */
-    if (gscTestSession) { GscTestLeave(); return; }
+    if (gscTestSession||!GscCampaignNativeLive47()) { GscTestLeave(); return; }
     /* Not archived: deliberately opt-in each test installation/session. */
     trap_Cvar_Register(&gscTestEnabled, "g_cod1GscTest", "0", 0);
     trap_Cvar_Register(&gscTestScript, "g_cod1GscTestScript", GSC_TEST_DEFAULT, 0);
@@ -2056,6 +2081,7 @@ int G_Cod1GscTestPreparePlacedResources(void){
 }
 #include "g_cod1_native_thread_frame.inc"
 static int GscTestFrameSelectionRetired(void){
+    if(!GscCampaignNativeLive47())return 1;
     return (gscSoundStreamedSelected&&G_Cod1GscFeature47(C1CP47_F_VOICE)!=1)||(gscTestFinaleSelected&&G_Cod1GscFeature47(C1CP47_F_FINALE)!=1)||(gscTestCarbine.opening&&G_Cod1GscFeature47(C1CP47_F_OPENING)!=1)||(gscSoundNotifySelected&&G_Cod1GscFeature47(C1CP47_F_SOUND_NOTIFY)!=1)||(gscTestCarbine.selected && G_Cod1GscFeature47(C1CP47_F_CARBINE)!=1) || (gscTestDeleteTransactionsSelected && G_Cod1GscFeature47(C1CP47_F_DELETE)!=1) ||
         (gscTestActorPrefixEpoch && G_Cod1GscFeature47(C1CP47_F_ACTOR_PREFIX)!=1) ||
         G_Cod1GscFeature47(C1CP47_F_ENABLE) != 1 ||

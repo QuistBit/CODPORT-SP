@@ -5,14 +5,14 @@
 /* One prospective map profile, never a Session or a capability grant.
  * The epoch remains as a high-water mark on refusal and retirement. */
 enum { C1CP47_O_EMPTY, C1CP47_O_ARMED, C1CP47_O_CANDIDATE,
- C1CP47_O_REFUSED, C1CP47_O_RETIRED };
-typedef struct {uint64_t epoch;unsigned phase;c1cp47Profile profile;} c1cp47Owner;
+ C1CP47_O_REFUSED, C1CP47_O_RETIRED, C1CP47_O_ACTIVE };
+typedef struct {uint64_t epoch;unsigned phase,native;c1cp47Profile profile;} c1cp47Owner;
 static inline void C1CP47_OwnerRetire(c1cp47Owner *o){
  if(o){o->phase=C1CP47_O_RETIRED;o->profile=(c1cp47Profile)0;}
 }
 static inline int C1CP47_OwnerArm(c1cp47Owner *o,uint64_t epoch,int restart){
  if(!o||!epoch||epoch==UINT64_MAX||epoch<=o->epoch)return 0;
- o->epoch=epoch;o->profile=(c1cp47Profile)0;
+ o->epoch=epoch;o->profile=(c1cp47Profile)0;o->native=0;
  o->phase=restart?C1CP47_O_REFUSED:C1CP47_O_ARMED;
  return o->phase==C1CP47_O_ARMED;
 }
@@ -45,7 +45,7 @@ static inline int C1CP47_OwnerAdmit(c1cp47Owner *o,uint64_t epoch,
 static inline int C1CP47_OwnerCurrent(const c1cp47Owner *o,uint64_t epoch,
  const char *live,int singlePlayer,int bsp59,int restarted,int saveLoading){
  const char *map;
- return o&&epoch&&o->epoch==epoch&&o->phase==C1CP47_O_CANDIDATE&&
+ return o&&epoch&&o->epoch==epoch&&(o->phase==C1CP47_O_CANDIDATE||o->phase==C1CP47_O_ACTIVE)&&
   singlePlayer&&bsp59&&!restarted&&!saveLoading&&live&&
   (map=C1CP47_ProfileMap(o->profile))!=NULL&&!strcmp(map,live);
 }

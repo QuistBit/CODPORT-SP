@@ -95,12 +95,12 @@ static int G_Cod1UseSelectionCurrent(gentity_t *player) {
     if (!G_Cod1UseSelectionStable(player) || !G_Cod1UsePlayerEligible(player) ||
         !G_Cod1GscTestUseSelectionActive() || !G_Cod1MapEntities() ||
         g_gametype.integer != GT_SINGLE_PLAYER) return 0;
-    mode = trap_Cvar_VariableIntegerValue("g_cod1GscEntityTest");
+    mode = G_Cod1GscFeature47(C1CP47_F_MODE);
     if (!G_Cod1UseSelectionStable(player) ||
         !G_Cod1GscTestUseSelectionModeCurrent(mode)) return 0;
     enabled = G_Cod1GscTestEntityEventsEnabled();
     if (!G_Cod1UseSelectionStable(player) || !enabled) return 0;
-    mode = trap_Cvar_VariableIntegerValue("g_cod1GscEntityTest");
+    mode = G_Cod1GscFeature47(C1CP47_F_MODE);
     return G_Cod1UseSelectionStable(player) && G_Cod1UsePlayerEligible(player) &&
         G_Cod1GscTestUseSelectionModeCurrent(mode);
 }

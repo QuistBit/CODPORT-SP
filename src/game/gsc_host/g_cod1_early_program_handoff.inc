@@ -36,8 +36,8 @@ static int GscTestEarlySelected(void){
 }
 static int GscTestEarlyOwner(void){
  return gscTestEarlyProgram.attempted&&gscTestEarlyProgram.epoch==G_Cod1EntityMapEpoch()&&
-  !gscTestEarlyProgram.cancelled&&gscTestEarlyProgram.current&&
-  gscTestEarlyProgram.current(gscTestEarlyProgram.user,gscTestEarlyProgram.epoch,gscTestEarlyProgram.receipt)==1;
+  !gscTestEarlyProgram.cancelled&&gscTestEarlyProgram.current&&GscCampaignLane47()!=0&&
+  gscTestEarlyProgram.current(gscTestEarlyProgram.user,gscTestEarlyProgram.epoch,gscTestEarlyProgram.receipt)==1&&GscCampaignLane47()!=0;
 }
 static int GscTestEarlyCurrent(void){
  char value[MAX_CVAR_VALUE_STRING];unsigned i;int ok=1;

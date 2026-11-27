@@ -52,7 +52,9 @@ static int GscChangeFrame(void){
  trap_Cvar_Set("g_reloading","2");if(!GscChangeOwned(&p))return 0;
  /* Map entry selection is configuration for the NEXT load. Its script comes
   * from VFS unchanged and must independently pass ordinary load/admission. */
- trap_Cvar_Set("g_cod1GscTestScript",va("maps/%s.gsc",p.target));if(!GscChangeOwned(&p))return 0;
+ /* The native lane derives its next root from the next BSP identity. */
+ if(!gscCampaignOwner47.native)trap_Cvar_Set("g_cod1GscTestScript",va("maps/%s.gsc",p.target));
+ if(!GscChangeOwned(&p))return 0;
  snprintf(command,sizeof(command),"%s %s\n",cheats?"spdevmap":"spmap",p.target);
  p.phase=3;p.last=now;gscChangeLevel=p;
  trap_SendConsoleCommand(EXEC_APPEND,command);

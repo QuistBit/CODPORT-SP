@@ -28,7 +28,7 @@ static int VehicleAvailable(void){return VehicleOwner()&&vehicleReady&&!vehicleI
 static void VehicleBegin(void){
  uint64_t owner;int enabled,mode;G_Cod1VehicleNodesClear();owner=G_Cod1EntityMapEpoch();
  if(!owner||vehicleEpoch==UINT64_MAX||!G_Cod1MapEntities()||g_gametype.integer!=GT_SINGLE_PLAYER)return;
- enabled=trap_Cvar_VariableIntegerValue("g_cod1GscTest");mode=trap_Cvar_VariableIntegerValue("g_cod1GscEntityTest");
+ enabled=G_Cod1GscFeature47(C1CP47_F_ENABLE);mode=G_Cod1GscFeature47(C1CP47_F_MODE);
  if(owner!=G_Cod1EntityMapEpoch()||!G_Cod1MapEntities()||g_gametype.integer!=GT_SINGLE_PLAYER)return;
  vehicleOwner=owner;vehicleConsume=enabled==1&&(mode==42||mode==43);
 }

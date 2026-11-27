@@ -91,7 +91,7 @@ void G_Cod1PrepareTrainingGoals(void) {
     unsigned i,seen=0,invalid=0;
     if (trainingGoals.busy) {trainingGoals.cancelled=1;return;}
     if (!cod1NodeConsume || !Cod1NodeAvailable() || trainingGoals.epoch==cod1NodeEpoch ||
-        trap_Cvar_VariableIntegerValue("g_cod1GscTrainingOpening")!=1) return;
+        G_Cod1GscFeature47(C1CP47_F_OPENING)!=1) return;
     memset(&trainingGoals,0,sizeof(trainingGoals));
     trainingGoals.busy=1;
     trainingGoals.epoch=cod1NodeEpoch;
