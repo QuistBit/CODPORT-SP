@@ -49,7 +49,7 @@ static int ActorNormalLeafSample(unsigned source,unsigned native,const c1atl14No
  return C1ARC14_Current(bank,1,&node,1,0,out);
 }
 static int ActorNormalNativeOrdinal(unsigned source,unsigned*out){
- C1ActorCurrentRoot*map;int ok=0;if(!out||source>=C1GA_COUNT)return 0;
+ C1ActorRootOrderScratch*map;int ok=0;if(!out||source>=C1GA_COUNT)return 0;
  map=calloc(1,sizeof(*map));if(!map)return 0;
  if(ActorCurrentRootOrder(map)){*out=map->order[source];ok=1;}free(map);return ok;
 }

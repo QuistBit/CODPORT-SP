@@ -392,6 +392,7 @@ struct GscRuntime { GscDeveloperScriptSelection developer_admission;int develope
                     ArrayContainer arrays[GSC_ARRAY_CONTAINER_CAPACITY];
                     ArrayEntry array_entries[GSC_ARRAY_ENTRY_CAPACITY]; int bsp_construction_only,bsp_promoted; };
 
+static int r237_busy(const GscRuntime *);
 static int r237_queue_available(GscRuntime *,int,int);
 static int r237_queue_offer(GscRuntime *,Task *,int,int);
 static int r237_timed_wait(GscRuntime *,Task *,const Value *,int);
@@ -407,6 +408,9 @@ enum { B_RET_VOID=-1, B_EFFECT_PURE, B_EFFECT_EXP_FOG, B_EFFECT_CULL_FOG };
 #define B_VALUE(kind) (1u << (kind))
 static int rfail(GscRuntime*,int,const char*,...);
 static void configured_precache_close(GscRuntime*);
+static int Cod1ModelStringOverlap(const void *,size_t,const void *,size_t);
+static int entity_ref_equal(const GscEntityRef *,const GscEntityRef *);
+static int actor_animation_binding(GscRuntime *,const Value *,int,GscAnimationLengthRequest *);
 #if defined(_MSC_VER)
 #define GSC_STATE_INLINE __forceinline
 #else
@@ -2681,7 +2685,6 @@ static int valid_module_path(const char *path) {
     return component;
 }
 
-static int Cod1ModelStringOverlap(const void *,size_t,const void *,size_t);
 int gsc_program_select_module_float_arithmetic(GscProgram *g,const char *module,const GscModuleFloatArithmeticProfile *input) {
     GscModuleFloatArithmeticProfile profile;char canonical[MAX_MODULE_PATH];
     if(!g||!module||!input||g->invalid||g->linked||g->float_arithmetic_selected||!g->dynamic_randomfloat_syntax||

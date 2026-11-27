@@ -165,9 +165,9 @@ static void EntityError( char *error, size_t size, const char *text ) {
 #include "g_cod1_actor_scripted_queue.inc"
 #include "g_cod1_actor_presence.inc"
 #include "g_cod1_actor_goal.inc"
+static int EntityValidate(void *user,const GscEntityRef *ref);
 #include "g_cod1_actor_postinit_position.inc"
 #include "g_cod1_actor_postinit_placed_target.inc"
-static int EntityValidate(void *user,const GscEntityRef *ref);
 #include "g_cod1_entity_native_static.inc"
 #include "g_cod1_placed_actor_intake.inc"
 #include "g_cod1_actor_spatial.inc"

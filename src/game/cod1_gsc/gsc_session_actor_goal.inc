@@ -74,8 +74,5 @@ int gsc_session_course_anim_entry(GscSession *s,uint64_t id,const GscEntityExecu
  entry.entity=owner->owner;strcpy(entry.module,startingRun?"animscripts/run":"animscripts/stop");strcpy(entry.function,"main");
  ok=gsc_execute_course_anim_entry(s->runtime,&entry,owner,startingRun,&result);
  if(!session_after_vm(s,ok,error,cap))return 0;
- if(startingRun)G_Printf("[376 run main] owner=%u task=%llu status=%d\n",owner->owner.slot,(unsigned long long)result.task_serial,result.status);
- 
-
  return result.task_serial && (result.status==GSC_ENTITY_ENTRY_WAITING||result.status==GSC_ENTITY_ENTRY_SLEEPING);
 }

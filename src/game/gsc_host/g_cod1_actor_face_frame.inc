@@ -142,6 +142,7 @@ static int ActorFaceInvoke(void*unused,const GscActorAnimationRequest*input,char
 }
 const GscActorAnimationHost*G_Cod1ActorFacialAnimationHost(void){static const GscActorAnimationHost host={NULL,ActorGenericValidate,ActorFaceInvoke};return &host;}
 extern int TrainingElderCurrent(const GscEntityRef*);
+extern const cod1TrainingRoute_t *TrainingCurrentRoute(const GscEntityRef*);
 /* This placed runner has already entered its scripted clock. Until it has a
  * body selection, its one facial channel has the original R237 single-leaf
  * ordering. Keep the clock, lease, notetrack receipts and wire identity. */

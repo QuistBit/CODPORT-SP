@@ -5,7 +5,7 @@
 #include "../../qcommon/cod1_actor_multi_named_clock14.h"
 static int ActorNormalNativeOrdinal(unsigned,unsigned*);
 static int ActorScriptedMap(C1FaceFrame*f){
- C1ActorCurrentRoot*map;unsigned marks[C1GA_COUNT]={0},i,k,n=0;int parent;
+ C1ActorRootOrderScratch*map;unsigned marks[C1GA_COUNT]={0},i,k,n=0;int parent;
  if(!ActorScriptedReady(cod1EntityEpoch))return 0;
  map=calloc(1,sizeof(*map));if(!map)return 0;
  if(!ActorCurrentRootOrder(map)){free(map);return 0;}
