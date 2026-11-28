@@ -374,7 +374,7 @@ static int array_lvalue_commit(GscRuntime *r,Task *task,Frame *f,const ArrayLval
         StateField field;memset(&field,0,sizeof(field));field.used=1;field.owner_kind=path->owner.kind;
         if(path->owner.kind==V_STRUCT||path->owner.kind==V_ANIM)field.struct_owner=path->owner.object;
         field.owner=path->owner.entity;str_copy(field.name,sizeof(field.name),root->name);field.value=root_value;
-        r->state_fields[state_index]=field;
+        state_field_publish(r,state_index,&field);
     }
     return 1;
 }
