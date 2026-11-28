@@ -91,8 +91,11 @@ static int r237_timed_wait(GscRuntime *r,Task *t,const Value *value,int line){
 static int r237_dispatch_task53(GscRuntime *r,Task *chosen,int *budget,uint64_t stamp,GscR237Profile53 *p){
  int ok;uint64_t t;
   chosen->r237_enqueued=0;chosen->r237_insertion=0;chosen->r243_time_root_incarnation=0;
-  if(!refresh_state_context(r,chosen)||!refresh_wait_owner(r,chosen))return 0;
-  if(!r237_owner_current(r,stamp))return rfail(r,0,"R237 time-root changed during queued certificate callbacks");
+  t=r237_profile_begin53(p);
+  ok=refresh_state_context(r,chosen)&&refresh_wait_owner(r,chosen);
+  if(ok&&!r237_owner_current(r,stamp))ok=rfail(r,0,"R237 time-root changed during queued certificate callbacks");
+  r237_profile_end53(p,GSC53_TASK_GUARD,t);
+  if(!ok)return 0;
   if(chosen->status!=TASK_DEAD){
    chosen->status=TASK_READY;
    if(chosen->event_scope==EVENT_ENTITY)clear_wait_owner(chosen);
