@@ -33,13 +33,16 @@ static int GscProfilePhase53(GscSession *s,uint64_t id,uint64_t generation,int e
   * print per task. Log outside the measured Session call. */
  if(elapsed>=hz/125||!ok||p.clock_failures||last[lane]<0||now<last[lane]||(int64_t)now-last[lane]>=1000){
   last[lane]=now;
-  G_Printf("[OPT_VM53] lane=%s epoch=%llu now=%d gen=%llu hz=%llu result=%d total=%llu scan=%llu dispatch=%llu source=%llu endon=%llu array=%llu scans=%llu examined=%llu tasks=%u dispatched=%llu budget_spent=%llu source_calls=%llu endon_calls=%llu array_calls=%llu clock_failures=%llu\n",
+  G_Printf("[OPT_VM53] lane=%s epoch=%llu now=%d gen=%llu hz=%llu result=%d total=%llu scan=%llu dispatch=%llu source=%llu endon=%llu array=%llu scans=%llu examined=%llu tasks=%u dispatched=%llu budget_spent=%llu source_calls=%llu endon_calls=%llu array_calls=%llu clock_failures=%llu session_admit=%llu session_pre=%llu session_post=%llu session_finish=%llu task_guard=%llu task_guard_calls=%llu\n",
    names[lane],(unsigned long long)e,now,(unsigned long long)generation,(unsigned long long)hz,ok,
    (unsigned long long)elapsed,(unsigned long long)p.ticks[GSC53_SCAN],(unsigned long long)p.ticks[GSC53_DISPATCH],
    (unsigned long long)p.ticks[GSC53_SOURCE],(unsigned long long)p.ticks[GSC53_ENDON],(unsigned long long)p.ticks[GSC53_ARRAY],
    (unsigned long long)p.scans,(unsigned long long)p.examined,p.max_tasks,(unsigned long long)p.dispatches,
    (unsigned long long)p.budget_spent,(unsigned long long)p.calls[GSC53_SOURCE],(unsigned long long)p.calls[GSC53_ENDON],
-   (unsigned long long)p.calls[GSC53_ARRAY],(unsigned long long)p.clock_failures);
+   (unsigned long long)p.calls[GSC53_ARRAY],(unsigned long long)p.clock_failures,
+   (unsigned long long)p.ticks[GSC53_SESSION_ADMIT],(unsigned long long)p.ticks[GSC53_SESSION_PRE],
+   (unsigned long long)p.ticks[GSC53_SESSION_POST],(unsigned long long)p.ticks[GSC53_SESSION_FINISH],
+   (unsigned long long)p.ticks[GSC53_TASK_GUARD],(unsigned long long)p.calls[GSC53_TASK_GUARD]);
  }
  return ok;
 }
