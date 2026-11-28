@@ -12,7 +12,7 @@ static int admission_target_push(const GscProgram *g,int target,unsigned char se
     if(target<0||target>=g->func_count)return 0;
     if(!seen[target]){if(*count>=MAX_FUNCS)return 0;seen[target]=1;stack[(*count)++]=target;}return 1;
 }
-static int function_admission_collect(const GscProgram *g,int first,const unsigned char *runtime_mask,unsigned char *collected,char *error,size_t size) {
+static int function_admission_collect_impl(const GscProgram *g,int first,const unsigned char *runtime_mask,unsigned char *collected,int merge,char *error,size_t size) {
     unsigned char seen[MAX_FUNCS];int stack[MAX_FUNCS],count=0,n,f,target,blocked=0;const Func *fn;
     if(!g||!g->function_admission_selected)return g!=NULL;
     if(g->func_count<1||g->func_count>MAX_FUNCS||!g->function_admission_token)return 0;
@@ -34,14 +34,30 @@ static int function_admission_collect(const GscProgram *g,int first,const unsign
             else if(e->kind==E_DYNAMIC_CALL&&e->a>=0&&e->a<g->expr_count&&g->expr[e->a].kind==E_FUNC_REF)target=g->expr[e->a].target;
             if(target>=0&&!admission_target_push(g,target,seen,stack,&count))return 0;
         }
-    }if(blocked)return 0;if(collected)memcpy(collected,seen,sizeof(seen));return 1;
+    }if(blocked)return 0;
+    if(collected){
+        if(merge){for(n=0;n<g->func_count;n++)if(seen[n])collected[n]=1;}
+        else memcpy(collected,seen,sizeof(seen));
+    }
+    return 1;
 }
+static int function_admission_collect(const GscProgram *g,int first,const unsigned char *runtime_mask,unsigned char *collected,char *error,size_t size){return function_admission_collect_impl(g,first,runtime_mask,collected,0,error,size);}
 static int function_admission_current_mask(const GscProgram *g,int first,const unsigned char *runtime_mask,char *error,size_t size){return function_admission_collect(g,first,runtime_mask,NULL,error,size);}
 static int function_admission_current(const GscProgram *g,int first,char *error,size_t size){return function_admission_current_mask(g,first,NULL,error,size);}
 static int function_admission_runtime_current(const GscRuntime *r,int first,char *error,size_t size){
     if(!r||!r->program)return 0;if(!r->program->function_admission_selected)return 1;
     return r->function_admission_token==r->program->function_admission_token&&
         function_admission_current_mask(r->program,first,r->function_admission,error,size);
+}
+/* The caller has already checked the immutable linked-runtime cache lane.
+ * Every visited function's complete outgoing closure is contained in the
+ * successful walk. Publish all those proofs, never any prefix on failure. */
+static int function_admission_runtime_cache(GscRuntime *r,int first,char *error,size_t size){
+    if(!r||!r->program)return 0;
+    if(!r->program->function_admission_selected)return 1;
+    return r->function_admission_token==r->program->function_admission_token&&
+        function_admission_collect_impl(r->program,first,r->function_admission,
+            r->verified_function_closure,1,error,size);
 }
 /* Parser-wide OR flags describe the retained whole corpus. A validation view
  * must instead derive its requirements from the unmasked IR, otherwise an

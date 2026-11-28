@@ -5240,9 +5240,9 @@ static int push_frame(GscRuntime *r,Task *task,int fn,const Value *args,int argc
             r->function_admission_token && r->function_admission_token==r->program->function_admission_token &&
             fn>=0 && fn<r->program->func_count && r->function_admission[fn];
         if(!reusable || !r->verified_function_closure[fn]){
-            if(!function_admission_runtime_current(r,fn,why,sizeof(why)))
+            if(!(reusable?function_admission_runtime_cache(r,fn,why,sizeof(why)):
+                          function_admission_runtime_current(r,fn,why,sizeof(why))))
                 return rfail(r,0,"callee admission refused before entry: %s",why);
-            if(reusable)r->verified_function_closure[fn]=1;
         }
     }
 
