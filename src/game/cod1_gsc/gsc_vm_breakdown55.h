@@ -3,7 +3,7 @@
 #include <stdint.h>
 /* Inclusive outermost time per category. Different categories can overlap;
  * recursion in one category is timed once. Counts include nested calls. */
-enum { R55B_GUARD, R55B_EVAL, R55B_NATIVE_EXPR, R55B_NATIVE_STMT, R55B_COUNT };
+enum { R55B_GUARD, R55B_EVAL, R55B_NATIVE_EXPR, R55B_NATIVE_STMT, R56A_SOUND, R55B_COUNT };
 typedef struct {
     uint64_t (*clock)(void);
     uint64_t ticks[R55B_COUNT],calls[R55B_COUNT],outer[R55B_COUNT],starts[R55B_COUNT];
