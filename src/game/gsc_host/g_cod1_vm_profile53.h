@@ -74,13 +74,14 @@ static int GscProfilePhase53(GscSession *s,uint64_t id,uint64_t generation,int e
   }
   if(source_breakdown&& (p.breakdown.sources||p.breakdown.legacy_sources)){
    const GscBreakdown55 *b=&p.breakdown;
-   G_Printf("[OPT_BREAK55] lane=%s epoch=%llu now=%d gen=%llu hz=%llu sources=%llu legacy=%llu failures=%llu guard=%llu guard_calls=%llu guard_outer=%llu eval=%llu eval_calls=%llu eval_outer=%llu native_expr=%llu native_expr_calls=%llu native_expr_outer=%llu native_stmt=%llu native_stmt_calls=%llu native_stmt_outer=%llu\n",
+   G_Printf("[OPT_BREAK55] lane=%s epoch=%llu now=%d gen=%llu hz=%llu sources=%llu legacy=%llu failures=%llu guard=%llu guard_calls=%llu guard_outer=%llu eval=%llu eval_calls=%llu eval_outer=%llu native_expr=%llu native_expr_calls=%llu native_expr_outer=%llu native_stmt=%llu native_stmt_calls=%llu native_stmt_outer=%llu sound=%llu sound_calls=%llu sound_outer=%llu\n",
     names[lane],(unsigned long long)e,now,(unsigned long long)generation,(unsigned long long)hz,
     (unsigned long long)b->sources,(unsigned long long)b->legacy_sources,(unsigned long long)b->failures,
     (unsigned long long)b->ticks[R55B_GUARD],(unsigned long long)b->calls[R55B_GUARD],(unsigned long long)b->outer[R55B_GUARD],
     (unsigned long long)b->ticks[R55B_EVAL],(unsigned long long)b->calls[R55B_EVAL],(unsigned long long)b->outer[R55B_EVAL],
     (unsigned long long)b->ticks[R55B_NATIVE_EXPR],(unsigned long long)b->calls[R55B_NATIVE_EXPR],(unsigned long long)b->outer[R55B_NATIVE_EXPR],
-    (unsigned long long)b->ticks[R55B_NATIVE_STMT],(unsigned long long)b->calls[R55B_NATIVE_STMT],(unsigned long long)b->outer[R55B_NATIVE_STMT]);
+    (unsigned long long)b->ticks[R55B_NATIVE_STMT],(unsigned long long)b->calls[R55B_NATIVE_STMT],(unsigned long long)b->outer[R55B_NATIVE_STMT],
+    (unsigned long long)b->ticks[R56A_SOUND],(unsigned long long)b->calls[R56A_SOUND],(unsigned long long)b->outer[R56A_SOUND]);
   }
   if(shadow)G_Printf("[OPT_QUEUE54] scope=epoch lane=%s epoch=%llu now=%d gen=%llu hz=%llu ticks=%llu checks=%llu matches=%llu mismatches=%llu skipped=%llu rows=%llu\n",
    names[lane],(unsigned long long)e,now,(unsigned long long)generation,(unsigned long long)hz,
