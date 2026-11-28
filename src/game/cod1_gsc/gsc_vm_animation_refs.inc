@@ -11,7 +11,7 @@ static int animation_references_current(GscRuntime *r,Task *task){GscMapExecutio
  if(task&&!r237_owner_current(r,time_root))return rfail(r,0,"time-root changed during animation references certificate");
  if(r->error[0]){return 0;}
  if(current!=0&&current!=1){return rfail(r,0,"invalid animation catalog certificate result");}
- if(!current&&task)entity_task_retire(task);
+ if(!current&&task){r54_dirty_mark_task(r,task);entity_task_retire(task);}
  return current;
 }
 int gsc_runtime_select_animation_references(GscRuntime *r,const GscAnimationCatalog *catalog,const GscMapExecutionCertificate *input){
