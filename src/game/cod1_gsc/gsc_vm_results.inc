@@ -806,12 +806,14 @@ static int results_mutation(GscRuntime *r,int lhs,int op,const Value *current,co
 /* Lvalue preparation, keys, current value and RHS are independently resumable.
  * The write occurs only at the final phase. Ancestor replacement while yielded
  * refuses rather than retargeting a captured nested array path. */
-static int results_assign(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int op,int line,int *budget) {
+static int results_assign(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int op,int line,int *budget,int entryChecked) {
     ResultsPending *p=&task->results->pending[task->depth-1];
     const Expr *e=&r->program->expr[lhs];int status,n,index;Value key,next,result;
     if(!p->assignment_active) {
         p->assignment_active=1;p->lhs=lhs;p->rhs=rhs;p->op=op;p->assign_phase=0;
         if(e->kind==E_INDEX) {
+            /* Fresh path preparation changes capture metadata. Recheck. */
+            entryChecked=0;
             if(!array_lvalue_valid(r->program,lhs))return rfail(r,line,"unsupported array lvalue");
             index=lhs;while(r->program->expr[index].kind==E_INDEX) {
                 p->chain[p->path.count++]=index;index=r->program->expr[index].a;
@@ -820,9 +822,13 @@ static int results_assign(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int 
         } else if(!flow_lvalue_valid(r->program,lhs))return rfail(r,line,"invalid assignment lvalue");
     }
     while(p->assign_phase<6) {
-        int entryRead=0;
+        int entryRead=entryChecked;
         const Expr *root=e->kind==E_INDEX?&r->program->expr[p->path.root]:e;
-        if(!flow_budget(r,budget,line)||!R55B_CALL(r,R55B_GUARD,results_guard_read(r,task,line,&entryRead)))return 0;
+        /* The caller's proof is valid only for this first phase. Later
+         * phases may observe a new capture, host effect or changed root. */
+        entryChecked=0;
+        if(!flow_budget(r,budget,line)||
+           (!entryRead&&!R55B_CALL(r,R55B_GUARD,results_guard_read(r,task,line,&entryRead))))return 0;
         if(p->assign_phase==0) {
             if(root->kind==E_FIELD) {
                 status=R55B_CALL(r,R55B_EVAL,results_eval_checked(r,task,f,root->a,&p->owner,line,budget,entryRead));
@@ -890,7 +896,7 @@ static int results_condition(GscRuntime *r,const Value *value,int line,int *pass
     if(value->kind>V_STRING)return rfail(r,line,"vector/entity condition semantics are unsupported");
     *passes=truth(*value);return 1;
 }
-static int results_loop(GscRuntime *r,Task *task,Frame *f,ResultsPending *p,int line,int *budget) {
+static int results_loop(GscRuntime *r,Task *task,Frame *f,ResultsPending *p,int line,int *budget,int entryChecked) {
     const GscProgram *g=r->program;int status,passes=1;
     if(p->stage==0) {
         if(p->boundary)p->loop=f->loops[f->loop_count-1];
@@ -913,7 +919,9 @@ static int results_loop(GscRuntime *r,Task *task,Frame *f,ResultsPending *p,int 
                     node->step_kind==FOR_DECREMENT?GSC_MUT_DEC:node->step_op;
             }
             if(lhs>=0) {
-                status=results_assign(r,task,f,lhs,rhs,op,line,budget);
+                status=results_assign(r,task,f,lhs,rhs,op,line,budget,entryChecked);
+                /* A completed assignment may change captured values. */
+                entryChecked=0;
                 if(status!=1)return status;
             }
         }
@@ -921,7 +929,9 @@ static int results_loop(GscRuntime *r,Task *task,Frame *f,ResultsPending *p,int 
     }
     if(p->stage==2) {
         if((p->boundary||p->loop.kind!=I_DO_WHILE)&&p->loop.cond>=0) {
-            status=results_eval(r,task,f,p->loop.cond,&p->value,line,budget);
+            status=entryChecked?
+                results_eval_first56(r,task,f,p->loop.cond,&p->value,line,budget,&entryChecked):
+                results_eval(r,task,f,p->loop.cond,&p->value,line,budget);
             if(status!=1)return status;
             if(!results_condition(r,&p->value,line,&passes))return 0;
         }
@@ -977,7 +987,7 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
             } else {int next_pc=developer_skip_region(g,f->pc);if(next_pc!=f->pc){f->pc=next_pc;continue;}p->active=1;p->instruction=f->pc++;}
         }
         i=&g->code[p->instruction];status=1;
-        if(p->boundary)status=results_loop(r,task,f,p,i->line,budget);
+        if(p->boundary)status=results_loop(r,task,f,p,i->line,budget,entryRead);
         else switch(i->kind) {
           case I_EMPTY:break;
           case I_SET:
@@ -985,14 +995,14 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
             if(status==1&&!assignment(r,f,i->name,p->value,i->line))return 0;
             break;
           case I_GAME_SET:case I_MUTATE:
-            status=results_assign(r,task,f,i->dest,i->expr,i->kind==I_MUTATE?i->op:0,i->line,budget);break;
+            status=results_assign(r,task,f,i->dest,i->expr,i->kind==I_MUTATE?i->op:0,i->line,budget,entryRead);break;
           case I_SWITCH:
             if(!r->scalar_switch_enabled)return rfail(r,i->line,"unsupported switch runtime semantics");
             status=R55B_CALL(r,R55B_EVAL,results_eval_checked(r,task,f,i->expr,&p->value,i->line,budget,entryRead));
             if(status==1&&!flow_switch_select(r,f,p->instruction,&p->value,i->line))return 0;
             break;
           case I_FOR:case I_WHILE:case I_DO_WHILE:
-            status=results_loop(r,task,f,p,i->line,budget);break;
+            status=results_loop(r,task,f,p,i->line,budget,entryRead);break;
           case I_RETURN:
             if(i->expr>=0)status=R55B_CALL(r,R55B_EVAL,results_eval_checked(r,task,f,i->expr,&p->value,i->line,budget,entryRead));
             if(status==1) {
