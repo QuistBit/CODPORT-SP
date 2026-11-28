@@ -272,7 +272,7 @@ struct GscRuntime { GscDeveloperScriptSelection developer_admission;int develope
                     int started, advancing, now_ms, task_count; uint64_t next_serial;
                     int bootstrap_started,bootstrap_returned,configured_main_attempted;
                     int r237_frame_buckets_enabled,r237_vm_bucket_ms,r237_frame_open,r237_frame_target_ms,r237_start_draining,r237_frame_budget;
-                     void *r54_dirty_scope; /* opt-in, synchronous drain scratch */
+                     void *r54_dirty_scope; size_t r54_dirty_scope_bytes; /* opt-in synchronous scratch */
                     uint64_t r237_next_insertion,r237_frame_generation,r237_frame_time_root;
                     R243TimeRoot*r243_time_root;int r243_time_root_teardown;
                     int r243_previous_host_ms,r243_actor_script_scope;
@@ -423,6 +423,7 @@ static GSC_STATE_INLINE int runtime_private_overlap(const GscRuntime*r,const voi
  if(!r||!bytes)return 0;
  if(r->state_arena_busy){rfail((GscRuntime*)r,0,"state arena allocator reentered");return 1;}
  return Cod1ModelStringOverlap(p,bytes,r,sizeof(*r))||
+  (r->r54_dirty_scope&&Cod1ModelStringOverlap(p,bytes,r->r54_dirty_scope,r->r54_dirty_scope_bytes))||
   (r->extra_tasks && Cod1ModelStringOverlap(p,bytes,r->extra_tasks,(size_t)r->extra_capacity*sizeof(*r->extra_tasks)))||
   (r->state_fields&&Cod1ModelStringOverlap(p,bytes,r->state_fields,(size_t)r->state_field_capacity*sizeof(*r->state_fields)))||
   (r->state_scratch&&Cod1ModelStringOverlap(p,bytes,r->state_scratch,r->state_scratch_bytes))||
