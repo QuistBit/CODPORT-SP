@@ -40,7 +40,7 @@ static int entity_certificate_current(GscRuntime *r,Task *task) {
         if(!r237_owner_current(r,time_root))return rfail(r,0,"time-root changed during map execution certificate");
         if(r->error[0])return 0;
         if(current!=0&&current!=1)return rfail(r,0,"invalid map execution certificate result");
-        if(!current){entity_task_retire(task);return 0;}
+        if(!current){r54_dirty_mark_task(r,task);entity_task_retire(task);return 0;}
     }
     if(!task->certificate.serial)return 1;
     if(task->status==TASK_DEAD)return 0;
@@ -52,7 +52,7 @@ static int entity_certificate_current(GscRuntime *r,Task *task) {
     if(!r237_owner_current(r,time_root))return rfail(r,0,"time-root changed during entity execution certificate");
     if(r->error[0])return 0;
     if(current!=0&&current!=1)return rfail(r,0,"invalid entity execution certificate result");
-    if(!current)entity_task_retire(task);
+    if(!current){r54_dirty_mark_task(r,task);entity_task_retire(task);}
     return current;
 }
 static int entity_task_current(GscRuntime *r) {
@@ -123,7 +123,7 @@ static int state_receiver(GscRuntime *r,const Value *receiver,int line) {
         if(r->native_readonly_scan && alive && owners && !r->error[0])return 1;
         if(!entity_certificate_current(r,task)||r->error[0])return 0;
         if(!alive)return rfail(r,line,"state receiver is stale or missing");
-        if(!owners)entity_task_retire(task);
+        if(!owners){r54_dirty_mark_task(r,task);entity_task_retire(task);}
         return 1;
     }
     alive=state_entity_live(r,&receiver->entity);
@@ -293,6 +293,6 @@ static int refresh_state_context(GscRuntime *r,Task *task) {
     }
     return 1;
 retired:
-    entity_task_retire(task);
+    r54_dirty_mark_task(r,task);entity_task_retire(task);
     return 1;
 }
