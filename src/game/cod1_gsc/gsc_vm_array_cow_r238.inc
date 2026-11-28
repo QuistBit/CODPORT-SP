@@ -370,7 +370,7 @@ static int r238_array_cow_commit(GscRuntime*r,Task*task,Frame*f,const ArrayLvalu
  else if(root->kind==E_VAR){if(local_index<0){local_index=f->local_count++;str_copy(f->locals[local_index].name,64,root->name);}f->locals[local_index].value=root_value;}
  else{StateField field;memset(&field,0,sizeof(field));field.used=1;field.owner_kind=path->owner.kind;
   if(path->owner.kind==V_STRUCT||path->owner.kind==V_ANIM)field.struct_owner=path->owner.object;
-  field.owner=path->owner.entity;str_copy(field.name,sizeof(field.name),root->name);field.value=root_value;r->state_fields[state_index]=field;}
+  field.owner=path->owner.entity;str_copy(field.name,sizeof(field.name),root->name);field.value=root_value;state_field_publish(r,state_index,&field);}
  ok=1;
 done:r->state_scratch=NULL;r->state_scratch_bytes=0;return ok&&!r->error[0];
 }
