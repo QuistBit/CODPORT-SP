@@ -156,11 +156,30 @@ refused:GSC_RUNTIME_FREE(staged);return 0;
 static int animation_namespace_select(GscRuntime*r,const GscAnimationNamespaceSelection*input,const GscAnimationCatalog*wire){return animation_namespace_select_full(r,input,wire,NULL);}
 int gsc_runtime_select_map_animation_namespace(GscRuntime*r,const GscMapAnimationNamespaceSelection*input){return animation_namespace_select_full(r,NULL,NULL,input);}
 
+/* Whole-program selection appends atoms in increasing expression order.
+ * Scoped admission uses two passes and may be unsorted; preserve its
+ * first-match scan. Neither path bypasses the resource certificate. */
+static int animation_namespace_atom_find56(const AnimationNamespace *space,int expression,int sorted){
+    int n;
+    if(sorted){
+        int lo=0,hi=space->atom_count;
+        while(lo<hi){
+            int mid=lo+(hi-lo)/2;
+            if(space->atoms[mid].expr<expression)lo=mid+1;
+            else hi=mid;
+        }
+        return lo<space->atom_count&&space->atoms[lo].expr==expression?lo:-1;
+    }
+    for(n=0;n<space->atom_count;++n)if(space->atoms[n].expr==expression)return n;
+    return -1;
+}
 static int animation_namespace_reference_value(GscRuntime *r,const Expr *e,int expression,int line,Value *out){
     int n;Value value;
     if(!e||!out||!animation_namespace_scope(r)||(e->kind!=E_ANIM_REF&&e->kind!=E_ANIMTREE_VALUE))return rfail(r,line,"animation namespace metadata authority unavailable");
     if(!anim_data_current(r,r->executing_task))return 0;
-    for(n=0;n<r->animation_namespace.atom_count;++n)if(r->animation_namespace.atoms[n].expr==expression){
+    n=animation_namespace_atom_find56(&r->animation_namespace,expression,
+        !(r->program->function_admission_selected&&r->program->turret_animations_selected));
+    if(n>=0){
         memset(&value,0,sizeof(value));value.kind=r->animation_namespace.atoms[n].kind;
         value.object=r->animation_namespace.atoms[n].object;value.object_token=r->animation_namespace.identity;*out=value;return 1;
     }
