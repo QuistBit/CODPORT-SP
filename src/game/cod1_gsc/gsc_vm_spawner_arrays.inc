@@ -72,7 +72,7 @@ static int spawner_array_call(GscRuntime *r,int kind,const Value *args,int argc,
         ArrayEntry entry;memset(&entry,0,sizeof(entry));entry.owner=(int)result.array;
         entry.key.kind=V_NUMBER;entry.key.number=(int)n;
         entry.value.kind=V_ENTITY;entry.value.entity=refs[n];
-        r->array_entries[r->array_entry_count++]=entry;
+        array_entry_append55(r,&entry);
     }
     r->arrays[result.array-1].count=r->arrays[result.array-1].numeric_count=(int)count;
     /* Publication remains private until every full identity and task lease is
@@ -87,5 +87,5 @@ static int spawner_array_call(GscRuntime *r,int kind,const Value *args,int argc,
 rollback:
     memset(&r->arrays[old_arrays],0,(size_t)(r->array_count-old_arrays)*sizeof(r->arrays[0]));
     memset(&r->array_entries[old_entries],0,(size_t)(r->array_entry_count-old_entries)*sizeof(r->array_entries[0]));
-    r->array_count=old_arrays;r->array_entry_count=old_entries;return 0;
+    r->array_count=old_arrays;r->array_entry_count=old_entries;array_index_rebuild55(r);return 0;
 }
