@@ -61,7 +61,7 @@ static int GscVehicleSessionAdvance(int now,int*advanced,char*error,size_t cap){
  if(decision==C1_NATIVE_FRAME_SAME){*advanced=0;return 1;}
  memset(&c,0,sizeof(c));c.session=gscTestSession;c.id=gscTestId;c.epoch=gscVehicleBankEpoch;c.now=now;
  if(!gsc_session_r237_frame_begin(c.session,c.id,now,&c.generation,error,cap)||!GscVehicleSessionCurrent(&c)||!GscVehicleFrames(now,GscVehicleSessionCurrent,&c,GscVehicleSessionNote,&c)||!GscTurretFactoryFrames(now,GscVehicleSessionCurrent,&c))return GscTestNativeFrameError(error,cap,"vehicle firstthink/frame/world boundary refused");
- return gsc_session_r237_run_current_bucket(c.session,c.id,c.generation,error,cap)&&gsc_session_r237_advance_exclusive(c.session,c.id,c.generation,error,cap);
+ return GscProfilePhase53(c.session,c.id,c.generation,0,NULL,error,cap,GSC53_CURRENT)&&GscProfilePhase53(c.session,c.id,c.generation,1,NULL,error,cap,GSC53_EXCLUSIVE);
 }
 enum { NATIVE_BEGIN,NATIVE_GOALS,NATIVE_RIG,NATIVE_JUMPER_BEGIN,NATIVE_MOODY_BEGIN,
        NATIVE_COURSE,NATIVE_MOODY_END,NATIVE_JUMPER_END,NATIVE_CURRENT,NATIVE_EXCLUSIVE };
@@ -106,8 +106,9 @@ static int GscTestNativeFrameAdvance(int now,int*advanced,int (*expired)(void),c
    case NATIVE_JUMPER_END: result=!!TrainingJumperClock(now,generation,0,GscTestTurretCurrent,NULL);break;
    case NATIVE_CURRENT:
    case NATIVE_EXCLUSIVE:
-    result=gsc_session_r237_frame_phase_slice(gscTestSession,gscTestId,generation,
-              gscFrameCursor.nativeStage==NATIVE_EXCLUSIVE,expired,error,cap);
+    result=GscProfilePhase53(gscTestSession,gscTestId,generation,
+              gscFrameCursor.nativeStage==NATIVE_EXCLUSIVE,expired,error,cap,
+              gscFrameCursor.nativeStage==NATIVE_EXCLUSIVE?GSC53_EXCLUSIVE:GSC53_CURRENT);
     break;
    default:return GscTestNativeFrameError(error,cap,"invalid native frame phase");
   }
