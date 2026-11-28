@@ -51,12 +51,7 @@ static int array_key(GscRuntime *r,const Value *value,int line,ArrayKey *out) {
 static int array_key_equal(const ArrayKey *a,const ArrayKey *b) {
     return a->kind==b->kind&&(a->kind==V_NUMBER?a->number==b->number:!strcmp(a->string,b->string));
 }
-static int array_entry_find(const GscRuntime *r,uint32_t owner,const ArrayKey *key) {
-    int n;
-    for(n=0;n<r->array_entry_count;n++)if(r->array_entries[n].owner==(int)owner&&
-       array_key_equal(&r->array_entries[n].key,key))return n;
-    return -1;
-}
+#include "gsc_vm_array_lookup55.inc"
 static int array_read_key(GscRuntime *r,uint32_t owner,const ArrayKey *key,int line,Value *out) {
     int index;
     if(!array_value_valid(r,owner))return rfail(r,line,"invalid array handle");
@@ -225,7 +220,7 @@ static int array_owned_numeric_delete(GscRuntime*r,Frame*f,const ArrayLvalue*pat
    if(r->arrays[owner-1].count<=0||r->arrays[owner-1].numeric_count<=0)return rfail(r,line,"owned numeric deletion count invariant failed");
    r->arrays[owner-1].count--;r->arrays[owner-1].numeric_count--;
    memmove(r->array_entries+index,r->array_entries+index+1,(size_t)(r->array_entry_count-index-1)*sizeof(*r->array_entries));
-   r->array_entry_count--;memset(r->array_entries+r->array_entry_count,0,sizeof(*r->array_entries));return 1;
+   r->array_entry_count--;memset(r->array_entries+r->array_entry_count,0,sizeof(*r->array_entries));array_index_rebuild55(r);return 1;
   }
   if(index<0)return rfail(r,line,"owned numeric deletion missing intermediate parent");current=r->array_entries[index].value;
  }
@@ -362,7 +357,7 @@ static int array_lvalue_commit(GscRuntime *r,Task *task,Frame *f,const ArrayLval
             r->arrays[entry.owner-1].count++;
             if(entry.key.kind==V_NUMBER)r->arrays[entry.owner-1].numeric_count++;
         }
-        r->array_entries[r->array_entry_count++]=entry;
+        array_entry_append55(r,&entry);
     }
     if(existing_final>=0)r->array_entries[existing_final].value=*value;
     if(root->kind==E_VAR) {
@@ -445,7 +440,7 @@ static int array_getentarray(GscRuntime *r,const Value *args,int argc,int line,V
     for(n=0;n<count;n++) {
         ArrayEntry entry;memset(&entry,0,sizeof(entry));entry.owner=(int)result.array;
         entry.key.kind=V_NUMBER;entry.key.number=(int)n;entry.value.kind=V_ENTITY;entry.value.entity=refs[n];
-        r->array_entries[r->array_entry_count++]=entry;
+        array_entry_append55(r,&entry);
     }
     r->arrays[result.array-1].count=r->arrays[result.array-1].numeric_count=(int)count;
     /* No result reaches script state before this second full validation. */
@@ -462,7 +457,7 @@ invalid:
 retired:
     memset(&r->arrays[old_arrays],0,(size_t)(r->array_count-old_arrays)*sizeof(r->arrays[0]));
     memset(&r->array_entries[old_entries],0,(size_t)(r->array_entry_count-old_entries)*sizeof(r->array_entries[0]));
-    r->array_count=old_arrays;r->array_entry_count=old_entries;return 0;
+    r->array_count=old_arrays;r->array_entry_count=old_entries;array_index_rebuild55(r);return 0;
 }
 static int array_preflight_error(char *error,size_t size,int line,const char *why) {
     if(error&&size)snprintf(error,size,"line %d: %s",line,why);
