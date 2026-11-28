@@ -136,7 +136,7 @@ static int entity_method_invoke(GscRuntime *r,const Value *receiver,int descript
     }
     if(descriptor==ENTITY_METHOD_SCRIPT_STATE)return r243_script_state_invoke(r,receiver,args,argc,line);
     if(descriptor==ENTITY_METHOD_PLAYLOOPSOUND||descriptor==ENTITY_METHOD_STOPLOOPSOUND)return loop_sound_invoke(r,receiver,descriptor,args,argc,line);
-    if(descriptor==ENTITY_METHOD_PLAYSOUND)return script_sound_invoke(r,receiver,args,argc,line);
+    if(descriptor==ENTITY_METHOD_PLAYSOUND)return R55B_CALL(r,R56A_SOUND,script_sound_invoke(r,receiver,args,argc,line));
     if(descriptor>=ENTITY_METHOD_SETANIMKNOB&&descriptor<=ENTITY_METHOD_SETFLAGGEDANIMKNOBALL)return animation_method_invoke(r,receiver,descriptor,args,argc,line);
     if(descriptor>=ENTITY_METHOD_ENTERCRITICAL&&descriptor<=ENTITY_METHOD_ISCRITICAL)
         return actor_critical_invoke(r,receiver,descriptor,args,argc,line,NULL);
