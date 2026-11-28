@@ -117,6 +117,8 @@ static int r237_dispatch_task53(GscRuntime *r,Task *chosen,int *budget,uint64_t 
  return 1;
 }
 static int r237_dispatch_task(GscRuntime *r,Task *chosen,int *budget,uint64_t stamp){return r237_dispatch_task53(r,chosen,budget,stamp,NULL);}
+#include "gsc_r237_queue_sync54.h"
+#include "gsc_vm_r237_queue_shadow54.inc"
 static int r237_drain_bucket_slice53(GscRuntime *r,int *budget,int (*expired)(void),int *next_pending,GscR237Profile53 *p){
  Task *chosen;int n,bucket,next,ok,before;uint64_t stamp=r237_owner_stamp(r),timer53;R237QueueView39 view;
  while(!r->error[0]){
@@ -137,6 +139,11 @@ static int r237_drain_bucket_slice53(GscRuntime *r,int *budget,int (*expired)(vo
   }
   if(p)p->examined+=(uint64_t)n;
   r237_profile_end53(p,GSC53_SCAN,timer53);
+  if(p&&p->queue_shadow){
+   timer53=r237_profile_begin53(p);
+   r237_shadow_compare54(r,stamp,bucket,chosen,next,p);
+   r237_profile_end53(p,GSC53_QUEUE_SHADOW,timer53);
+  }
   if(!chosen){if(next_pending)*next_pending=next;return 1;}
   before=p?*budget:0;timer53=r237_profile_begin53(p);
   ok=r237_dispatch_task53(r,chosen,budget,stamp,p);
