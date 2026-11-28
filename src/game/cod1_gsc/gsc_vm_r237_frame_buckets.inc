@@ -90,6 +90,7 @@ static int r237_timed_wait(GscRuntime *r,Task *t,const Value *value,int line){
 }
 static int r237_dispatch_task53(GscRuntime *r,Task *chosen,int *budget,uint64_t stamp,GscR237Profile53 *p){
  int ok;uint64_t t;
+  r54_dirty_mark_task(r,chosen);
   chosen->r237_enqueued=0;chosen->r237_insertion=0;chosen->r243_time_root_incarnation=0;
   t=r237_profile_begin53(p);
   ok=refresh_state_context(r,chosen)&&refresh_wait_owner(r,chosen);
@@ -119,7 +120,8 @@ static int r237_dispatch_task53(GscRuntime *r,Task *chosen,int *budget,uint64_t 
 static int r237_dispatch_task(GscRuntime *r,Task *chosen,int *budget,uint64_t stamp){return r237_dispatch_task53(r,chosen,budget,stamp,NULL);}
 #include "gsc_r237_queue_sync54.h"
 #include "gsc_vm_r237_queue_shadow54.inc"
-static int r237_drain_bucket_slice53(GscRuntime *r,int *budget,int (*expired)(void),int *next_pending,GscR237Profile53 *p){
+#include "gsc_vm_r237_dirty_audit54.inc"
+static int r237_drain_bucket_core54(GscRuntime *r,int *budget,int (*expired)(void),int *next_pending,GscR237Profile53 *p){
  Task *chosen;int n,bucket,next,ok,before;uint64_t stamp=r237_owner_stamp(r),timer53;R237QueueView39 view;
  while(!r->error[0]){
   if(!r237_queue_view39(r,&view)||view.stamp!=stamp)return rfail(r,0,"R237 drain time-root retired");
@@ -144,6 +146,11 @@ static int r237_drain_bucket_slice53(GscRuntime *r,int *budget,int (*expired)(vo
    r237_shadow_compare54(r,stamp,bucket,chosen,next,p);
    r237_profile_end53(p,GSC53_QUEUE_SHADOW,timer53);
   }
+  if(p&&r->r54_dirty_scope){
+   timer53=r237_profile_begin53(p);
+   r54_dirty_audit(r,stamp,bucket,chosen,next,p);
+   r237_profile_end53(p,GSC53_QUEUE_DIRTY,timer53);
+  }
   if(!chosen){if(next_pending)*next_pending=next;return 1;}
   before=p?*budget:0;timer53=r237_profile_begin53(p);
   ok=r237_dispatch_task53(r,chosen,budget,stamp,p);
@@ -154,6 +161,7 @@ static int r237_drain_bucket_slice53(GscRuntime *r,int *budget,int (*expired)(vo
  }
  return 0;
 }
+#include "gsc_vm_r237_dirty_drain54.inc"
 static int r237_drain_bucket(GscRuntime *r,int *budget){
  return r237_drain_bucket_slice53(r,budget,NULL,NULL,NULL);
 }
