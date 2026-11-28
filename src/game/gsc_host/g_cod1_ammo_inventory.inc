@@ -42,7 +42,7 @@ static int AmmoInventoryProject(const GscEntityRef *ref,
     const cod1AmmoRegistryReceipt_t *registry,cod1AmmoPickupInventorySnapshot_t *out) {
     const playerState_t *ps;
     int ammoCell[COD1_AMMO_PICKUP_CELLS],clipCell[COD1_AMMO_PICKUP_CELLS];
-    int ammoPool[MAX_WEAPONS],clipPool[MAX_WEAPONS];
+    int ammoPool[MAX_WEAPONS],clipPool[MAX_WEAPONS],weaponRoots[WP_NUM_WEAPONS];
     uint32_t allowed[2]={0,0};
     int i,w,chosen,ac,cc,spawn;
     if(!AmmoInventoryPoolSafe() || !PlayerNativePlayer(ref) || !registry ||
@@ -67,11 +67,15 @@ static int AmmoInventoryProject(const GscEntityRef *ref,
     for(i=0;i<registry->ammoCount;++i)out->inventory.maxAmmo[i]=registry->ammo[i].limit;
     for(i=0;i<registry->clipCount;++i)out->inventory.maxClip[i]=registry->clip[i].limit;
     for(i=0;i<registry->sharedCapCount;++i)out->inventory.sharedCap[i]=registry->sharedCap[i].limit;
+    /* Pure registry projection: resolve each physical weapon root once,
+     * instead of repeating name lookups for every definition. Duplicate
+     * family mapping rejection below remains unchanged. */
+    for(w=1;w<WP_NUM_WEAPONS;++w)weaponRoots[w]=CW_WeaponRoot(w);
     for(i=1;i<=registry->weaponCount;++i) {
         const cod1AmmoRegistryWeapon_t *weapon=&registry->weapons[i];
         const cod1AmmoPickupWeapon_t *pickup=&weapon->pickup;
         chosen=-1;
-        for(w=1;w<WP_NUM_WEAPONS;++w)if(CW_WeaponRoot(w)==weapon->familyRoot) {
+        for(w=1;w<WP_NUM_WEAPONS;++w)if(weaponRoots[w]==weapon->familyRoot) {
             if(chosen>=0)return 0;
             chosen=w;
         }

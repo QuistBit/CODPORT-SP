@@ -13,7 +13,9 @@ typedef struct {
 } GscTestItemScene;
 static GscTestItemScene gscTestItem;
 static int gscTestItemBusy,gscTestItemInitialization;
-static int GscTestItemIdentity(const GscTestItemScene *lease) {
+/* A caller with an immediately proved CAR receipt can reuse its descriptor
+ * fingerprint. Other callers retain the original independent full hash. */
+static int GscTestItemIdentityChecked(const GscTestItemScene *lease,int validated,uint32_t fingerprint) {
     return lease && lease->owned && gscTestItem.owned && CI_Generation(lease->epoch) &&
         CI_Generation(lease->epoch)!=UINT32_MAX &&
         (lease->module_ready?CI_Epoch(lease->epoch):!CI_Module(lease->epoch)) &&
@@ -23,15 +25,21 @@ static int GscTestItemIdentity(const GscTestItemScene *lease) {
         lease->map_epoch && lease->map_epoch==gscTestItem.map_epoch && lease->map_epoch==G_Cod1EntityMapEpoch() &&
         lease->session && lease->session==gscTestItem.session && lease->session==gscTestSession &&
         lease->id && lease->id==gscTestItem.id && lease->id==gscTestId &&
-        lease->fingerprint==gscTestItem.fingerprint && lease->fingerprint==CI_Fingerprint();
+        lease->fingerprint==gscTestItem.fingerprint && lease->fingerprint==(validated?fingerprint:CI_Fingerprint());
 }
-static int GscTestItemCurrent(const GscTestItemScene *lease) {
+static int GscTestItemIdentity(const GscTestItemScene *lease) {
+    return GscTestItemIdentityChecked(lease,0,0);
+}
+static int GscTestItemCurrentChecked(const GscTestItemScene *lease,int validated,uint32_t fingerprint) {
     GscSessionSnapshot snapshot;
-    return GscTestItemIdentity(lease) && !gscTestItem.failed && (lease->mode==28 || (lease->mode==29 || (lease->mode==30 || (lease->mode==31 || (lease->mode==32 || (lease->mode==33 || (lease->mode==34 || lease->mode==35 || lease->mode==36 || lease->mode==37 || lease->mode==38 || lease->mode==39 || (lease->mode==40||(lease->mode==41||(lease->mode==42||lease->mode==43)))))))))) &&
+    return GscTestItemIdentityChecked(lease,validated,fingerprint) && !gscTestItem.failed && (lease->mode==28 || (lease->mode==29 || (lease->mode==30 || (lease->mode==31 || (lease->mode==32 || (lease->mode==33 || (lease->mode==34 || lease->mode==35 || lease->mode==36 || lease->mode==37 || lease->mode==38 || lease->mode==39 || (lease->mode==40||(lease->mode==41||(lease->mode==42||lease->mode==43)))))))))) &&
         gscTestEntityMode==lease->mode && !gscTestCompleted && !gscTestStopRequested &&
         !level.restarted && G_Cod1MapEntities() && g_gametype.integer==GT_SINGLE_PLAYER &&
         gsc_session_snapshot(lease->session,&snapshot) && snapshot.session_id==lease->id &&
         !snapshot.error[0] && (snapshot.state==GSC_SESSION_PREPARED || snapshot.state==GSC_SESSION_RUNNING);
+}
+static int GscTestItemCurrent(const GscTestItemScene *lease) {
+    return GscTestItemCurrentChecked(lease,0,0);
 }
 static int GscTestItemTime(const GscTestItemScene *lease,int logical_ms) {
     GscSessionSnapshot snapshot;

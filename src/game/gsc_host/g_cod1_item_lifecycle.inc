@@ -569,16 +569,28 @@ done:LiveItemEnd();
 refuse:if(!ok&&!acquired)LiveItemError(error,size,"R216 item pickup lost current world, player or registration");return ok;
 }
 void G_Cod1ItemLifecycleTouch(gentity_t *item,gentity_t *player,trace_t *trace) {
-    GscEntityRef i,p;int32_t accepted;char error[256];int activated,spawn;gclient_t *client;
+    GscEntityRef i,p;int32_t accepted=0;char error[256]={0};int activated,spawn,ok;gclient_t *client;
+    uint32_t started=0,elapsed=0;static uint64_t refusalEpoch;
     (void)trace;
     if(!item||!player||!player->client||!G_Cod1EntityCapture(item,&i)||
        !G_Cod1EntityCapture(player,&p))return;
     client=player->client;spawn=client->ps.persistant[PERS_SPAWN_COUNT];
     activated=client->pers.autoActivate==PICKUP_FORCE;
-    (void)G_Cod1ItemLifecyclePickup(&i,&p,activated,&accepted,error,sizeof(error));
+    /* A weapon touch without explicit activation cannot acquire anything.
+     * Preserve reentrant guard cancellation; skip only an idle transaction. */
+    if(!activated&&!cod1LiveItemGuard.active&&G_Cod1ItemLifecycleOwns(&i)&&cod1LiveItems.rows[i.slot].descriptor.type==1)return;
+    if(activated)started=(uint32_t)trap_Milliseconds();
+    ok=G_Cod1ItemLifecyclePickup(&i,&p,activated,&accepted,error,sizeof(error));
+    if(activated)elapsed=(uint32_t)trap_Milliseconds()-started;
     if(PlayerNativePlayer(&p)&&player->client==client&&
        client->ps.persistant[PERS_SPAWN_COUNT]==spawn&&client->pers.autoActivate==PICKUP_FORCE)
         client->pers.autoActivate=PICKUP_ACTIVATE;
+    /* At most one refusal per map; successful explicit pickups only. */
+    if(activated&&accepted>0)G_Printf("[OPT_PICKUP] item=%u accepted=%d elapsed_ms=%u\n",(unsigned)i.slot,(int)accepted,(unsigned)elapsed);
+    else if(activated&&!ok&&i.epoch&&refusalEpoch!=i.epoch){
+        refusalEpoch=i.epoch;
+        G_Printf("[R216] ITEM_PICKUP_REFUSED item=%u elapsed_ms=%u: %s\n",(unsigned)i.slot,(unsigned)elapsed,error[0]?error:"admission denied");
+    }
 }
 void G_Cod1ItemLifecycleUse(gentity_t *item,gentity_t *other,gentity_t *activator) {
     GscEntityRef ref;(void)other;(void)activator;

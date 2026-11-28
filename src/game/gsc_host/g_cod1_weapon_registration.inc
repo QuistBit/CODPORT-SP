@@ -56,10 +56,11 @@ static int WeaponRegistrationScope(const WeaponRegistrationLease *lease) {
     GscSessionSnapshot snapshot;
     return weaponRegistrationGuard.active && !weaponRegistrationGuard.cancelled &&
         weaponRegistrationGuard.serial==lease->serial && !gscTestItemBusy &&
-        /* CAR first validates current CW token ownership before the older
-         * ItemCurrent fingerprint reads those strings. */
+        /* CAR validates every definition byte and its token ownership against
+         * the full projection. Reuse its exact descriptor fingerprint here;
+         * no callback intervenes before the scene identity check. */
         CAR_Current(&weaponRegistrationRegistry) &&
-        GscTestItemCurrent(&lease->scene) &&
+        GscTestItemCurrentChecked(&lease->scene,1,weaponRegistrationRegistry.descriptorFingerprint) &&
         lease->scene.registry_revision && lease->scene.registry_revision==gscTestItem.registry_revision &&
         lease->scene.registry_revision==CW_RegistryRevision() &&
         lease->scene.registry_revision==weaponRegistrationRegistry.registryRevision &&
@@ -77,11 +78,11 @@ static int WeaponRegistrationGet(const WeaponRegistrationLease *lease,int slot,c
     return WeaponRegistrationScope(lease) && memchr(text,0,size)!=NULL;
 }
 static int WeaponRegistrationMarker(const WeaponRegistrationLease *lease) {
-    static const char *names[6]={"g_cod1GscTest","g_cod1GscEntityTest","savegame_loading","g_cod1GscTest","savegame_loading","g_cod1GscEntityTest"};
+    static const unsigned keys[6]={C1CP47_F_ENABLE,C1CP47_F_MODE,C1CP47_K_SAVE,C1CP47_F_ENABLE,C1CP47_K_SAVE,C1CP47_F_MODE};
     int values[6]={1,lease->scene.mode,0,1,0,lease->scene.mode},i,value;char text[MAX_STRING_CHARS];
     for(i=0;i<6;++i) {
         if(!WeaponRegistrationScope(lease))return 0;
-        value=trap_Cvar_VariableIntegerValue(names[i]);
+        value=GscConfigInteger47(keys[i]);
         if(!WeaponRegistrationScope(lease)||value!=values[i])return 0;
         if(i==0||i==5) {
             value=trap_Cvar_VariableIntegerValue(COD1_AMBIENT_MODULE_CVAR);
@@ -158,7 +159,8 @@ static int WeaponRegistrationBegin(WeaponRegistrationLease *lease) {
     weaponRegistrationGuard.serial=++weaponRegistrationSerial;
     memset(lease,0,sizeof(*lease));lease->serial=weaponRegistrationSerial;
     lease->scene=gscTestItem;lease->server_time=level.time;
-    if(!CAR_Current(&weaponRegistrationRegistry) || !GscTestItemCurrent(&lease->scene) ||
+    if(!CAR_Current(&weaponRegistrationRegistry) ||
+       !GscTestItemCurrentChecked(&lease->scene,1,weaponRegistrationRegistry.descriptorFingerprint) ||
        !gsc_session_snapshot(gscTestSession,&snapshot))return 0;
     lease->logical_ms=snapshot.logical_ms;return WeaponRegistrationScope(lease);
 }
