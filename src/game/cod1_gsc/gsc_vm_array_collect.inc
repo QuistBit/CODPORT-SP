@@ -158,7 +158,7 @@ static int array_collect_at_boundary(GscRuntime *r,Task *root) {
     for(n=1;n<=old_arrays;n++)if(c.map[n])r->arrays[c.map[n]-1]=r->arrays[n-1];
     memset(r->arrays+live,0,(size_t)(old_arrays-live)*sizeof(r->arrays[0]));
     memset(r->array_entries+entries,0,(size_t)(old_entries-entries)*sizeof(r->array_entries[0]));
-    r->array_count=live;r->array_entry_count=entries;
+    r->array_count=live;r->array_entry_count=entries;array_index_rebuild55(r);
     return 1;
 }
 
