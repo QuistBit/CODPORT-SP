@@ -68,7 +68,7 @@ static int prepare_entity_entry_phase(GscRuntime *r,const GscPreparedEntityEntry
     if(accepted!=1||r->error[0]) {
         inherited_entry_error(error,size,r->error[0]?r->error:why[0]?why:"initial field commit refused");goto done;
     }
-    for(i=0;i<request.field_count;++i)r->state_fields[slots[i]]=staged[i];
+    for(i=0;i<request.field_count;++i)state_field_publish(r,slots[i],&staged[i]);
     result.stage=GSC_PREPARED_ENTRY_FIELDS;result.fields=request.field_count;
     r->entity_inheritance_busy=0;
     memset(why,0,sizeof(why));memset(&produced,0,sizeof(produced));borrowed=request.entry;r->entity_prepare_busy=1;
