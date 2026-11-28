@@ -1,0 +1,27 @@
+# OPT R52 — integrated source candidate and measurement gate
+
+Accepted gameplay control R47L 2febee854737531f55e70d95cbd0103c4edefa4d. Integrated source head before R52: 45272cced49e64a6df692d2c2d8bb73d75650e43. The compare API reports ten linear commits ahead of R47L, covering R48A/B/C, R49A/B/C, R50A/B, R51A/B. No change to master or gameplay settings. R52 adds an offline comparison helper and an aggregate isolated-test driver; no new runtime code.
+
+## Source integration review
+
+- Windows recipe: tools/windows-x86.json builds current gsc_fixture.c, gsc_session.c, g_cod1_entity_host.c and g_cod1_gsc_test.c in the current GAME group. The 609A g_syscalls.c group includes the new standalone current cod1_model_configstring_r50.h; no new enum member is required in the historical g_public.h. Server dispatch includes its provider, vm_local.h declares currentVM, and VM_Call sets the active VM. Existing explicitly assigned GAME IDs 1000..1029 and private path-world ID 1030 reviewed; new ID 1050 is distinct from those. No claim of a native link test. Older EXE does not recognize this new trap: rebuild EXE, GAME and CGAME together.
+- Session clock declaration is in its own current header; the provider is in gsc_session.c, registration consumes it after the item scene include. No project source-list addition required. CGAME main and native syscall wrappers are already in the build. R51A uses existing CG_MILLISECONDS and CG_CVAR_VARIABLESTRINGBUFFER.
+- Reviewed 541A/572A generic-tree header overlays and current GAME actor host include order. The server mutation code uses current tree and ancestor-knob headers; do not globally replace the historical overlays used for collision and presentation.
+- Retained R47L native campaign activation, item ownership, original map source and Hunk capacity. No save/load acceptance or whole campaign claim.
+
+## Actual verification this pass
+
+Local environment contains the exact previously tested fragments/fixtures for R49B, R49C, R50A, R50B, R51A (two suites), R51B. Compared 14 full source/header/test blob IDs at integrated head to local files, and 11 extracted production ranges (length/FNV-1a) to local tested ranges: all match. Recompiled those seven suites with GCC and Clang C11 O2 strict (existing compact indentation warning disabled as needed, frounding-math for actor tests) and Clang ASan/UBSan O1 with leak detection. All 21 runs passed: 4002,8002,10007,28691,24,5120,16001 comparisons per compiler group = 71847 per group, 215541 total. Allocation failure and extra negative checks retained. Earlier R48A/B/C and R49A fixtures were not available locally to rerun this pass; prior isolated results are documented in their commits. Aggregate driver tools/tests/run_opt_r52_regressions.sh requires a complete Git checkout with the baseline history and cc; not executed here. Container cannot resolve github.com for git clone; no full checkout, MSVC, actual Windows link, or integrated gameplay run was available. This is a candidate ready for the user's build/test, not integrated native acceptance.
+
+## Control and log comparison
+
+User's R47L rtcwconsole.log, 23209 lines, SHA256 eeef9bd5f791bef9045adbf8dc809c19fd460db2dd3959dc35387dd81bda2708. Native training start at 750 ms, five accepted grenade pickups 121/74/40/39/50 ms, native us_intro start at 175100 ms. CGAME 27.52 / 29.49 s. After GSC start, 694 training GSC timing windows, P95 of window maxima 43.779 ms, max 80.695 ms, 252 windows exceeding 16.67 ms. Actor max 49.172 ms, course 44.512 ms, current VM 76.164 ms. Inclusive server times, NOT presentation frame time. Hunk 256 MiB.
+
+Optional offline tool: python tools/opt_r52_compare.py baseline.log candidate.log. Tested on actual R47L log against itself and synthetic repeat visits, startup exclusion, positive pickups, detailed load stages, missing map and invalid timer tests. Python compile passed. It reports map occurrence, native and startup markers, positive pickup durations, completed window counts/P95 of maxima/max/over-budget counts, and R51A detailed CGAME stages if present. It does not certify gameplay, equivalent workloads or FPS. Retain the existing R241 frame trace analysis for presentation metrics.
+
+## User acceptance
+
+1. Build all binaries from this exact revision in a new output directory, using Build-Windows.cmd -Output build_opt_r52 (no Python build dependency). Use original game assets and the same machine, graphics settings, resolution, VSync/FPS cap and single/multi-thread mode as the R47L comparison. Never mix EXE/DLLs from different builds.
+2. Use a clean native campaign profile or the same known-clean R47L profile. No +exec training_player.cfg, no raw GSC feature overrides. For a diagnostic run append: +set g_cod1FrameProfile 1 +set g_cod1AnimProfile 1 +set cg_cod1AnimProfile 1 +set com_cod1LoadProfile 1 +set logfile 1. Start New Game or spmap training (not ordinary map training).
+3. Confirm first task, all actors, obstacle course and second ladder, all five grenade pickups, complete Training, automatic us_intro and initial script behavior. Record full load time and actual FPS impressions; send complete rtcwconsole.log. Repeat on the same hardware/route if possible; compare a separate uninstrumented run for FPS. R51A extra diagnostic lines are opt-in. If compiler fails, send full compile log and keep R47L intact.
+4. Only after native validation call R52 accepted; merge to master only after user approval. Existing 60 FPS target is not yet verified.
