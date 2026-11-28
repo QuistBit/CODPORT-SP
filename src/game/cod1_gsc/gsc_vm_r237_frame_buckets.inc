@@ -88,6 +88,7 @@ static int r237_timed_wait(GscRuntime *r,Task *t,const Value *value,int line){
  if(bootstrap)r->training_tower_bootstrap_waited=1;
  return 1;
 }
+#include "gsc_vm_r237_source_profile55.inc"
 static int r237_dispatch_task53(GscRuntime *r,Task *chosen,int *budget,uint64_t stamp,GscR237Profile53 *p){
  int ok;uint64_t t;
   r54_dirty_mark_task(r,chosen);
@@ -103,9 +104,12 @@ static int r237_dispatch_task53(GscRuntime *r,Task *chosen,int *budget,uint64_t 
    r->executing_task=chosen;
    configured_precache_dispatch_begin(r,chosen);
    if(r->r238_array_value_cow_enabled)r->array_dispatch_root=chosen;
-   t=r237_profile_begin53(p);
-   ok=r->results_enabled?run_task_results(r,chosen,budget):run_task(r,chosen,budget);
-   r237_profile_end53(p,GSC53_SOURCE,t);
+   if(p&&p->source_detail)ok=r55_run_source(r,chosen,budget,p);
+   else {
+    t=r237_profile_begin53(p);
+    ok=r->results_enabled?run_task_results(r,chosen,budget):run_task(r,chosen,budget);
+    r237_profile_end53(p,GSC53_SOURCE,t);
+   }
    r->array_dispatch_root=NULL;r->array_next_scan=0;r->array_next_entry_scan=0;
    configured_precache_dispatch_end(r,chosen);
    r->executing_task=NULL;
