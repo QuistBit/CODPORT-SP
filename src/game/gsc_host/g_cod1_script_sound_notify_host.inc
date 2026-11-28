@@ -13,6 +13,8 @@ static char gscSoundIndices[256][128];
 static uint64_t gscSoundEpoch;
 static uint32_t gscSoundRandom=1;
 static int gscSoundStreamedSelected;
+/* GAME owner-thread scratch; reset with sound/session or map lifetime. */
+static Cod1SSAbsentCache56 gscSoundAbsence56;
 static int GscSoundCurrent(void *user) {
  GscSoundCall *c=user;
  return c&&GscTestQuakeCurrent(&c->scene)&&G_Cod1EntitySameAllocation(&c->owner)&&
@@ -72,7 +74,7 @@ static int GscSoundResolve(void *user,const char *alias) {
     c->request.notify_valid &&
     G_Cod1GscFeature47(C1CP47_F_CAPTIONS)==1)
   profile=COD1_SS_LOADED_CAPTION_PROFILE;
- status=Cod1ScriptSoundResolveSelected(&files,alias,c->map,&c->plan,&c->diag,profile);
+ status=Cod1ScriptSoundResolveModeCached56(&files,alias,c->map,&c->plan,&c->diag,profile,0,&gscSoundAbsence56);
  if(status==COD1_SS_RESOURCE_READY){unsigned i;if(c->argc==1&&gscSoundOwners[c->owner.slot].pending.pending&&(gscSoundOwners[c->owner.slot].voiced||gscSoundOwners[c->owner.slot].loadedCaption||c->plan.variants[0].streamed)&&!GscSoundIndependentVoice(c)&&!GscSoundPlainBody(c)){c->diag.reason=COD1_SS_REASON_UNSUPPORTED;return -1;}for(i=1;i<c->plan.count;i++)if(c->plan.variants[i].streamed!=c->plan.variants[0].streamed || !!c->plan.variants[i].subtitle[0]!=!!c->plan.variants[0].subtitle[0]){c->diag.reason=COD1_SS_REASON_UNSUPPORTED;return -1;}}
  return status==COD1_SS_RESOURCE_READY?1:status==COD1_SS_RESOURCE_NONE?0:-1;
 }
@@ -113,7 +115,7 @@ static int GscSoundNotifyQueue(void *user,const C1NIdentity *id,const char *name
 }
 static C1NOps GscSoundNotifyOps(void){C1NOps ops;memset(&ops,0,sizeof(ops));ops.current=GscSoundNotifyCurrent;ops.notify=GscSoundNotifyQueue;return ops;}
 static void GscSoundVoiceStop(GscSoundOwner *side){C1DReport report;char command[C1D_CAPACITY];C1NPacket packet;if(!side->voiceActive)return;packet=side->voicePacket;side->voiceActive=0;memset(&report,0,sizeof(report));report.identity=C1N_PacketIdentity(&packet);if(C1V_ControlEncode(command,sizeof(command),&report,'x'))trap_SendServerCommand(0,command);}
-static void GscSoundNotifyReset(void){unsigned i;gscSoundNotifySelected=0;gscSoundStreamedSelected=0;for(i=0;i<MAX_GENTITIES;i++)GscSoundVoiceStop(&gscSoundOwners[i]);memset(gscSoundOwners,0,sizeof(gscSoundOwners));memset(gscSoundEvents,0,sizeof(gscSoundEvents));gscSoundEventCount=0;}
+static void GscSoundNotifyReset(void){unsigned i;Cod1SS_AbsentReset56(&gscSoundAbsence56);gscSoundNotifySelected=0;gscSoundStreamedSelected=0;for(i=0;i<MAX_GENTITIES;i++)GscSoundVoiceStop(&gscSoundOwners[i]);memset(gscSoundOwners,0,sizeof(gscSoundOwners));memset(gscSoundEvents,0,sizeof(gscSoundEvents));gscSoundEventCount=0;}
 static int GscSoundNotifyFlush(int now,char *error,size_t cap){
  unsigned i,count;int awakened;C1NOps ops=GscSoundNotifyOps();GscSoundEvent event;
  for(i=0;i<MAX_GENTITIES;i++){
@@ -208,7 +210,7 @@ static int GscSoundInvokeSelected(void *user,const GscEntityRef *owner,const cha
     !GscTestQuakeCurrent(&c.scene)||!c.scene.marker_ready||!G_Cod1EntitySameAllocation(owner)||owner->slot>=MAX_GENTITIES)goto refuse;
  c.owner=*owner;strcpy(c.alias,alias);c.argc=argc;if(request)c.request=*request;
  if(!G_Cod1EntityCapture(&g_entities[0],&c.recipient)||!GscTestQuakePlayerCurrent(&c.recipient))goto refuse;
- if(gscSoundEpoch!=owner->epoch){gscSoundEpoch=owner->epoch;memset(gscSoundIndices,0,sizeof(gscSoundIndices));memset(gscSoundOwners,0,sizeof(gscSoundOwners));gscSoundRandom=1;}
+ if(gscSoundEpoch!=owner->epoch){Cod1SS_AbsentReset56(&gscSoundAbsence56);gscSoundEpoch=owner->epoch;memset(gscSoundIndices,0,sizeof(gscSoundIndices));memset(gscSoundOwners,0,sizeof(gscSoundOwners));gscSoundRandom=1;}
  trap_Cvar_VariableStringBuffer("mapname",c.map,sizeof(c.map));if(!GscSoundCurrent(&c))goto refuse;
  side=&gscSoundOwners[owner->slot];
  if(side->owner.epoch!=owner->epoch||side->owner.generation!=owner->generation){GscSoundVoiceStop(side);memset(side,0,sizeof(*side));side->owner=*owner;}
