@@ -82,10 +82,21 @@ static int C1AGT14_Active(const c1agt14Definition_t*d,const c1atl14Node_t*n,unsi
  }return 0;
 }
 #include "cod1_actor_active_paths37.h"
+/* Only a canonical, already-cleared inactive node is a no-op. The caller
+ * has validated the entire tree. Keep signed zeros and denormals on the
+ * original path, including unusual fade encodings. No phase/rate writes. */
+static int C1AGT49_ClearDormant(const c1atl14Node_t*n,int ordinaryFade,unsigned active){
+ uint32_t remaining,goal,current;
+ if(!ordinaryFade||active)return 0;
+ memcpy(&remaining,&n->remaining,4);memcpy(&goal,&n->goalWeight,4);memcpy(&current,&n->currentWeight,4);
+ return (remaining|goal|current)==0;
+}
 static int C1AGT14_ClearInner(const c1agt14Definition_t*d,c1atl14Node_t*n,unsigned count,unsigned target,float fade){
  c1atl14Node_t*stage;unsigned i,depth,maxDepth=0,p;int ok=0;
  unsigned first[65],last[65],next[4096];unsigned char active[4096];
+ uint32_t fadeBits;int ordinaryFade;
  if(target>=count||!C1ATL14_Finite(fade)||fade<0||!C1AGT14_Valid(d,n,count))return 0;
+ memcpy(&fadeBits,&fade,4);ordinaryFade=fadeBits==0||(fadeBits>=0x00800000u&&fadeBits<0x7f800000u);
  stage=(c1atl14Node_t*)malloc(count*sizeof(*stage));if(!stage)return 0;memcpy(stage,n,count*sizeof(*stage));
  /* Native recursion processes the parent before its children. Current weights
   * can change on an inactive path, so preserve this order for every level. */
@@ -98,12 +109,13 @@ static int C1AGT14_ClearInner(const c1agt14Definition_t*d,c1atl14Node_t*n,unsign
   if(!C1AGT14_Descendant(d,i,target))continue;
   next[i]=~0u;if(last[depth]!=~0u)next[last[depth]]=i;else first[depth]=i;last[depth]=i;
  }
- /* Only the current-weight reachability is precomputed. Every ClearGoal
-  * still runs at the same depth/ordinal position, including inactive nodes. */
+ /* Only the current-weight reachability is precomputed. Nontrivial
+  * ClearGoal calls retain the original depth/ordinal order. */
  if(d[target].children)C1AGT37_ActivePaths(d,stage,count,active);
  else active[target]=(unsigned char)C1AGT14_Active(d,stage,count,target);
  for(depth=0;depth<=maxDepth;depth++)for(i=first[depth];i!=~0u;i=next[i])
-  if(!C1ATL14_ClearGoal(&stage[i],fade,active[i]))goto done;
+  if(!C1AGT49_ClearDormant(&stage[i],ordinaryFade,active[i])&&
+     !C1ATL14_ClearGoal(&stage[i],fade,active[i]))goto done;
  memcpy(n,stage,count*sizeof(*n));ok=1;
 done:free(stage);return ok;
 }
