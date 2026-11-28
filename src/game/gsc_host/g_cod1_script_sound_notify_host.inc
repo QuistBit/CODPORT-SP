@@ -15,6 +15,8 @@ static uint32_t gscSoundRandom=1;
 static int gscSoundStreamedSelected;
 /* GAME owner-thread scratch; reset with sound/session or map lifetime. */
 static Cod1SSAbsentCache56 gscSoundAbsence56;
+#include "bg_cod1_sound_read56.inc"
+static Cod1SSReadBuffer56 gscSoundRead56;
 static int GscSoundCurrent(void *user) {
  GscSoundCall *c=user;
  return c&&GscTestQuakeCurrent(&c->scene)&&G_Cod1EntitySameAllocation(&c->owner)&&
@@ -26,13 +28,15 @@ static int GscSoundList(void *user,char *out,size_t cap) {
  return count>=COD1_SS_TABLES?-1:count;
 }
 static int GscSoundRead(void *user,const char *path,char **out,size_t *size) {
- fileHandle_t f=0;int len;char *p;(void)user;
+ fileHandle_t f=0;int len,got;char *p;(void)user;
  len=trap_FS_FOpenFile(path,&f,FS_READ);
- if(len<=0||len>(int)COD1_SS_TABLE_BYTES){if(f)trap_FS_FCloseFile(f);return 0;}
- p=malloc((size_t)len);if(!p){trap_FS_FCloseFile(f);return 0;}
- trap_FS_Read(p,len,f);trap_FS_FCloseFile(f);*out=p;*size=(size_t)len;return 1;
+ if(!f||len<=0||len>(int)COD1_SS_TABLE_BYTES){if(f)trap_FS_FCloseFile(f);return 0;}
+ p=Cod1SS_ReadAcquire56(&gscSoundRead56,(size_t)len);if(!p){trap_FS_FCloseFile(f);return 0;}
+ got=trap_FS_ReadCount(p,len,f);trap_FS_FCloseFile(f);
+ if(got!=len){Cod1SS_ReadRelease56(&gscSoundRead56,p);return 0;}
+ *out=p;*size=(size_t)len;return 1;
 }
-static void GscSoundRelease(void *user,char *data){(void)user;free(data);}
+static void GscSoundRelease(void *user,char *data){(void)user;Cod1SS_ReadRelease56(&gscSoundRead56,data);}
 static int GscSoundExists(void *user,const char *path) {
  fileHandle_t f=0;int len;(void)user;len=trap_FS_FOpenFile(path,&f,FS_READ);if(f)trap_FS_FCloseFile(f);return len>0;
 }
@@ -115,7 +119,7 @@ static int GscSoundNotifyQueue(void *user,const C1NIdentity *id,const char *name
 }
 static C1NOps GscSoundNotifyOps(void){C1NOps ops;memset(&ops,0,sizeof(ops));ops.current=GscSoundNotifyCurrent;ops.notify=GscSoundNotifyQueue;return ops;}
 static void GscSoundVoiceStop(GscSoundOwner *side){C1DReport report;char command[C1D_CAPACITY];C1NPacket packet;if(!side->voiceActive)return;packet=side->voicePacket;side->voiceActive=0;memset(&report,0,sizeof(report));report.identity=C1N_PacketIdentity(&packet);if(C1V_ControlEncode(command,sizeof(command),&report,'x'))trap_SendServerCommand(0,command);}
-static void GscSoundNotifyReset(void){unsigned i;Cod1SS_AbsentReset56(&gscSoundAbsence56);gscSoundNotifySelected=0;gscSoundStreamedSelected=0;for(i=0;i<MAX_GENTITIES;i++)GscSoundVoiceStop(&gscSoundOwners[i]);memset(gscSoundOwners,0,sizeof(gscSoundOwners));memset(gscSoundEvents,0,sizeof(gscSoundEvents));gscSoundEventCount=0;}
+static void GscSoundNotifyReset(void){unsigned i;Cod1SS_ReadReset56(&gscSoundRead56);Cod1SS_AbsentReset56(&gscSoundAbsence56);gscSoundNotifySelected=0;gscSoundStreamedSelected=0;for(i=0;i<MAX_GENTITIES;i++)GscSoundVoiceStop(&gscSoundOwners[i]);memset(gscSoundOwners,0,sizeof(gscSoundOwners));memset(gscSoundEvents,0,sizeof(gscSoundEvents));gscSoundEventCount=0;}
 static int GscSoundNotifyFlush(int now,char *error,size_t cap){
  unsigned i,count;int awakened;C1NOps ops=GscSoundNotifyOps();GscSoundEvent event;
  for(i=0;i<MAX_GENTITIES;i++){
@@ -210,7 +214,7 @@ static int GscSoundInvokeSelected(void *user,const GscEntityRef *owner,const cha
     !GscTestQuakeCurrent(&c.scene)||!c.scene.marker_ready||!G_Cod1EntitySameAllocation(owner)||owner->slot>=MAX_GENTITIES)goto refuse;
  c.owner=*owner;strcpy(c.alias,alias);c.argc=argc;if(request)c.request=*request;
  if(!G_Cod1EntityCapture(&g_entities[0],&c.recipient)||!GscTestQuakePlayerCurrent(&c.recipient))goto refuse;
- if(gscSoundEpoch!=owner->epoch){Cod1SS_AbsentReset56(&gscSoundAbsence56);gscSoundEpoch=owner->epoch;memset(gscSoundIndices,0,sizeof(gscSoundIndices));memset(gscSoundOwners,0,sizeof(gscSoundOwners));gscSoundRandom=1;}
+ if(gscSoundEpoch!=owner->epoch){Cod1SS_ReadReset56(&gscSoundRead56);Cod1SS_AbsentReset56(&gscSoundAbsence56);gscSoundEpoch=owner->epoch;memset(gscSoundIndices,0,sizeof(gscSoundIndices));memset(gscSoundOwners,0,sizeof(gscSoundOwners));gscSoundRandom=1;}
  trap_Cvar_VariableStringBuffer("mapname",c.map,sizeof(c.map));if(!GscSoundCurrent(&c))goto refuse;
  side=&gscSoundOwners[owner->slot];
  if(side->owner.epoch!=owner->epoch||side->owner.generation!=owner->generation){GscSoundVoiceStop(side);memset(side,0,sizeof(*side));side->owner=*owner;}
