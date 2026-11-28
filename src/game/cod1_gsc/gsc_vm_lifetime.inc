@@ -80,6 +80,7 @@ static Task *task_acquire(GscRuntime *r,int line) {
          * field. DEAD task memory cannot deliver a prior wait into a new birth. */
         task_results_clear(task);
     }
+    r54_dirty_mark_task(r,task);
     memset(task,0,sizeof(*task));
     if(r->frame_cadence_enabled){task->wake_ms=r->executing_task?r->cadence_drain_ms:r->now_ms;
         if(r->executing_task)task->cadence_event_resume=r->executing_task->cadence_event_resume;}
