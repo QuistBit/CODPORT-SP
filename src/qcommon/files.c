@@ -1999,6 +1999,8 @@ static int FS_ReturnPath( const char *zname, char *zpath, int *depth ) {
 	return len;
 }
 
+#include "fs_pack_list_match56.inc"
+
 /*
 ==================
 FS_AddFileToList
@@ -2084,7 +2086,6 @@ char **FS_ListFilteredFiles( const char *path, const char *extension, char *filt
 			buildBuffer = pak->buildBuffer;
 			for ( i = 0; i < pak->numfiles; i++ ) {
 				char    *name;
-				int zpathLen, depth;
 
 				// check for directory match
 				name = buildBuffer[i].name;
@@ -2098,22 +2099,10 @@ char **FS_ListFilteredFiles( const char *path, const char *extension, char *filt
 					nfiles = FS_AddFileToList( name, list, nfiles );
 				} else {
 
-					zpathLen = FS_ReturnPath( name, zpath, &depth );
-
-					if ( depth != pathDepth || pathLength > zpathLen ||
-					     (pathLength && name[pathLength] != '/') || Q_stricmpn( name, path, pathLength ) ) {
+					if ( !FS_PackListMatch56( name, path, pathLength, pathDepth, extension, extensionLength ) ) {
 						continue;
 					}
 
-					// check for extension match
-					length = strlen( name );
-					if ( length < extensionLength ) {
-						continue;
-					}
-
-					if ( Q_stricmp( name + length - extensionLength, extension ) ) {
-						continue;
-					}
 					// unique the match
 
 					temp = pathLength;
