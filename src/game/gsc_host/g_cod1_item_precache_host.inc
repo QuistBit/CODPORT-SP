@@ -3,6 +3,7 @@
  * refuse the operation. Client publication follows complete dependencies and
  * is not a renderer acknowledgement. R108 resource admission is unchanged. */
 #include "../bg_cod1_item_precache.h"
+#include "../cod1_gsc/gsc_session_clock_r50.h"
 typedef struct {
     GscSession *session;
     uint64_t id,map_epoch,epoch,incarnation,operation_id;
@@ -30,22 +31,26 @@ static int GscTestItemIdentityChecked(const GscTestItemScene *lease,int validate
 static int GscTestItemIdentity(const GscTestItemScene *lease) {
     return GscTestItemIdentityChecked(lease,0,0);
 }
-static int GscTestItemCurrentChecked(const GscTestItemScene *lease,int validated,uint32_t fingerprint) {
-    GscSessionSnapshot snapshot;
-    return GscTestItemIdentityChecked(lease,validated,fingerprint) && !gscTestItem.failed && (lease->mode==28 || (lease->mode==29 || (lease->mode==30 || (lease->mode==31 || (lease->mode==32 || (lease->mode==33 || (lease->mode==34 || lease->mode==35 || lease->mode==36 || lease->mode==37 || lease->mode==38 || lease->mode==39 || (lease->mode==40||(lease->mode==41||(lease->mode==42||lease->mode==43)))))))))) &&
+static int GscTestItemCurrentClockChecked(const GscTestItemScene *lease,int validated,uint32_t fingerprint,GscSessionClockR50 *out) {
+    GscSessionClockR50 clock;
+    if(!(GscTestItemIdentityChecked(lease,validated,fingerprint) && !gscTestItem.failed && (lease->mode==28 || (lease->mode==29 || (lease->mode==30 || (lease->mode==31 || (lease->mode==32 || (lease->mode==33 || (lease->mode==34 || lease->mode==35 || lease->mode==36 || lease->mode==37 || lease->mode==38 || lease->mode==39 || (lease->mode==40||(lease->mode==41||(lease->mode==42||lease->mode==43)))))))))) &&
         gscTestEntityMode==lease->mode && !gscTestCompleted && !gscTestStopRequested &&
-        !level.restarted && G_Cod1MapEntities() && g_gametype.integer==GT_SINGLE_PLAYER &&
-        gsc_session_snapshot(lease->session,&snapshot) && snapshot.session_id==lease->id &&
-        !snapshot.error[0] && (snapshot.state==GSC_SESSION_PREPARED || snapshot.state==GSC_SESSION_RUNNING);
+        !level.restarted && G_Cod1MapEntities() && g_gametype.integer==GT_SINGLE_PLAYER))return 0;
+    clock=gsc_session_clock_r50(lease->session,lease->id);
+    if(!clock.valid || (clock.state!=GSC_SESSION_PREPARED && clock.state!=GSC_SESSION_RUNNING))return 0;
+    if(out)*out=clock;
+    return 1;
+}
+static int GscTestItemCurrentChecked(const GscTestItemScene *lease,int validated,uint32_t fingerprint) {
+    return GscTestItemCurrentClockChecked(lease,validated,fingerprint,NULL);
 }
 static int GscTestItemCurrent(const GscTestItemScene *lease) {
     return GscTestItemCurrentChecked(lease,0,0);
 }
 static int GscTestItemTime(const GscTestItemScene *lease,int logical_ms) {
-    GscSessionSnapshot snapshot;
-    return logical_ms>=0 && gscTestItemInitialization && GscTestItemCurrent(lease) &&
-        gsc_session_snapshot(lease->session,&snapshot) && snapshot.session_id==lease->id &&
-        snapshot.state==GSC_SESSION_RUNNING && !snapshot.error[0] && snapshot.logical_ms==logical_ms;
+    GscSessionClockR50 clock;
+    return logical_ms>=0 && gscTestItemInitialization && GscTestItemCurrentClockChecked(lease,0,0,&clock) &&
+        clock.state==GSC_SESSION_RUNNING && clock.logical_ms==logical_ms;
 }
 static int GscTestItemAdmission(const GscTestItemScene *lease,int logical_ms,int running) {
     static const unsigned keys[6]={C1CP47_F_ENABLE,C1CP47_F_MODE,C1CP47_K_SAVE,

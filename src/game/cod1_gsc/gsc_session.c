@@ -1,4 +1,5 @@
 #include "gsc_session.h"
+#include "gsc_session_clock_r50.h"
 #include "gsc_script_roots.h"
 #include "stance-profile.h"
 #include "move-delta-profile.h"
@@ -2606,6 +2607,16 @@ int gsc_session_timing(const GscSession *s,GscSessionTiming *out) {
     value.state=s->view.state;value.busy=s->busy;
     value.logical_ms=s->view.logical_ms;value.has_error=s->view.error[0]!=0;
     *out=value;return 1;
+}
+/* Item registration needs only these three view fields. The full snapshot
+ * also scans tasks and copies diagnostic counters, none of which participate
+ * in this admission. Both paths read the same single-threaded Session view. */
+GscSessionClockR50 gsc_session_clock_r50(const GscSession *s,uint64_t id) {
+    GscSessionClockR50 clock={0,0,0};
+    if(s && s->view.session_id==id && !s->view.error[0]) {
+        clock.valid=1;clock.state=s->view.state;clock.logical_ms=s->view.logical_ms;
+    }
+    return clock;
 }
 int gsc_session_snapshot(const GscSession *s, GscSessionSnapshot *out) {
     if (!s || !out) return 0;

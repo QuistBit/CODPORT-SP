@@ -54,14 +54,14 @@ static int WeaponRegistrationBuffers(const cod1AmmoRegistryReceipt_t *registry,
         !CAR_Overlap(registry,sizeof(*registry),error,size) && !CAR_Overlap(out,sizeof(*out),error,size);
 }
 static int WeaponRegistrationScope(const WeaponRegistrationLease *lease) {
-    GscSessionSnapshot snapshot;
+    GscSessionClockR50 clock;
     return weaponRegistrationGuard.active && !weaponRegistrationGuard.cancelled &&
         weaponRegistrationGuard.serial==lease->serial && !gscTestItemBusy &&
         /* CAR validates every definition byte and its token ownership against
          * the full projection. Reuse its exact descriptor fingerprint here;
          * no callback intervenes before the scene identity check. */
         CAR_Current(&weaponRegistrationRegistry) &&
-        GscTestItemCurrentChecked(&lease->scene,1,weaponRegistrationRegistry.descriptorFingerprint) &&
+        GscTestItemCurrentClockChecked(&lease->scene,1,weaponRegistrationRegistry.descriptorFingerprint,&clock) &&
         lease->scene.registry_revision && lease->scene.registry_revision==gscTestItem.registry_revision &&
         lease->scene.registry_revision==CW_RegistryRevision() &&
         lease->scene.registry_revision==weaponRegistrationRegistry.registryRevision &&
@@ -70,8 +70,7 @@ static int WeaponRegistrationScope(const WeaponRegistrationLease *lease) {
         !memcmp(lease->scene.complete,gscTestItem.complete,sizeof(lease->scene.complete)) &&
         !memcmp(lease->scene.published,gscTestItem.published,sizeof(lease->scene.published)) &&
         level.time==lease->server_time &&
-        gsc_session_snapshot(gscTestSession,&snapshot) && snapshot.session_id==lease->scene.id &&
-        snapshot.state==GSC_SESSION_RUNNING && !snapshot.error[0] && snapshot.logical_ms==lease->logical_ms;
+        clock.state==GSC_SESSION_RUNNING && clock.logical_ms==lease->logical_ms;
 }
 static int WeaponRegistrationGet(const WeaponRegistrationLease *lease,int slot,char *text,size_t size) {
     if(!WeaponRegistrationScope(lease))return 0;
@@ -165,7 +164,7 @@ static int WeaponRegistrationProject(const WeaponRegistrationLease *lease,int se
     return WeaponRegistrationMarker(lease) && WeaponRegistrationScope(lease);
 }
 static int WeaponRegistrationBegin(WeaponRegistrationLease *lease) {
-    GscSessionSnapshot snapshot;
+    GscSessionClockR50 clock;
     if(weaponRegistrationGuard.active){weaponRegistrationGuard.cancelled=1;return 0;}
     if(weaponRegistrationSerial==UINT64_MAX)return 0;
     weaponRegistrationGuard.active=1;weaponRegistrationGuard.cancelled=0;
@@ -173,9 +172,8 @@ static int WeaponRegistrationBegin(WeaponRegistrationLease *lease) {
     memset(lease,0,sizeof(*lease));lease->serial=weaponRegistrationSerial;
     lease->scene=gscTestItem;lease->server_time=level.time;
     if(!CAR_Current(&weaponRegistrationRegistry) ||
-       !GscTestItemCurrentChecked(&lease->scene,1,weaponRegistrationRegistry.descriptorFingerprint) ||
-       !gsc_session_snapshot(gscTestSession,&snapshot))return 0;
-    lease->logical_ms=snapshot.logical_ms;return WeaponRegistrationScope(lease);
+       !GscTestItemCurrentClockChecked(&lease->scene,1,weaponRegistrationRegistry.descriptorFingerprint,&clock))return 0;
+    lease->logical_ms=clock.logical_ms;return WeaponRegistrationScope(lease);
 }
 static void WeaponRegistrationEnd(void) {weaponRegistrationGuard.active=0;weaponRegistrationGuard.cancelled=0;}
 int G_Cod1ReadWeaponRegistration(const cod1AmmoRegistryReceipt_t *input,int selected,
