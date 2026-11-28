@@ -12,7 +12,7 @@ static int GscProfilePhase53(GscSession *s,uint64_t id,uint64_t generation,int e
  static uint64_t epoch,hz;
  static int known,frame,enabled,shadow,dirty,last[GSC53_LANES];
  static struct {uint64_t ticks,checks,matches,mismatches,skipped,rows;} queueTotals[GSC53_LANES];
- static struct {uint64_t ticks,checks,matches,mismatches,skipped,feeds,rows,reseeds;} dirtyTotals[GSC53_LANES];
+ static struct {uint64_t ticks,checks,matches,mismatches,skipped,feeds,rows,reseeds,lookups,probes,map_rows,misses;} dirtyTotals[GSC53_LANES];
  static const char *names[GSC53_LANES]={"note","current","exclusive"};
  uint64_t e=G_Cod1EntityMapEpoch(),start,end,elapsed;
  int now=level.time,ok;
@@ -47,8 +47,10 @@ static int GscProfilePhase53(GscSession *s,uint64_t id,uint64_t generation,int e
   dirtyTotals[lane].matches+=p.dirty_matches;dirtyTotals[lane].mismatches+=p.dirty_mismatches;
   dirtyTotals[lane].skipped+=p.dirty_skipped;dirtyTotals[lane].feeds+=p.dirty_feeds;
   dirtyTotals[lane].rows+=p.dirty_audit_rows;dirtyTotals[lane].reseeds+=p.dirty_reseeds;
+  dirtyTotals[lane].lookups+=p.dirty_mark_lookups;dirtyTotals[lane].probes+=p.dirty_mark_probes;
+  dirtyTotals[lane].map_rows+=p.dirty_map_rows;dirtyTotals[lane].misses+=p.dirty_mark_misses;
  }
- if(elapsed>=hz/125||!ok||p.clock_failures||p.shadow_mismatches||p.dirty_mismatches||last[lane]<0||now<last[lane]||(int64_t)now-last[lane]>=1000){
+ if(elapsed>=hz/125||!ok||p.clock_failures||p.shadow_mismatches||p.dirty_mismatches||p.dirty_mark_misses||last[lane]<0||now<last[lane]||(int64_t)now-last[lane]>=1000){
   last[lane]=now;
   G_Printf("[OPT_VM53] lane=%s epoch=%llu now=%d gen=%llu hz=%llu result=%d total=%llu scan=%llu dispatch=%llu source=%llu endon=%llu array=%llu scans=%llu examined=%llu tasks=%u dispatched=%llu budget_spent=%llu source_calls=%llu endon_calls=%llu array_calls=%llu clock_failures=%llu session_admit=%llu session_pre=%llu session_post=%llu session_finish=%llu task_guard=%llu task_guard_calls=%llu\n",
    names[lane],(unsigned long long)e,now,(unsigned long long)generation,(unsigned long long)hz,ok,
@@ -64,12 +66,14 @@ static int GscProfilePhase53(GscSession *s,uint64_t id,uint64_t generation,int e
    names[lane],(unsigned long long)e,now,(unsigned long long)generation,(unsigned long long)hz,
    (unsigned long long)queueTotals[lane].ticks,(unsigned long long)queueTotals[lane].checks,(unsigned long long)queueTotals[lane].matches,
    (unsigned long long)queueTotals[lane].mismatches,(unsigned long long)queueTotals[lane].skipped,(unsigned long long)queueTotals[lane].rows);
-  if(dirty)G_Printf("[OPT_DIRTY54] scope=epoch lane=%s epoch=%llu now=%d gen=%llu hz=%llu ticks=%llu checks=%llu matches=%llu mismatches=%llu skipped=%llu feeds=%llu audit_rows=%llu reseeds=%llu\n",
+  if(dirty)G_Printf("[OPT_DIRTY54] scope=epoch lane=%s epoch=%llu now=%d gen=%llu hz=%llu ticks=%llu checks=%llu matches=%llu mismatches=%llu skipped=%llu feeds=%llu audit_rows=%llu reseeds=%llu mark_lookups=%llu mark_probes=%llu map_rows=%llu mark_misses=%llu\n",
    names[lane],(unsigned long long)e,now,(unsigned long long)generation,(unsigned long long)hz,
    (unsigned long long)dirtyTotals[lane].ticks,(unsigned long long)dirtyTotals[lane].checks,
    (unsigned long long)dirtyTotals[lane].matches,(unsigned long long)dirtyTotals[lane].mismatches,
    (unsigned long long)dirtyTotals[lane].skipped,(unsigned long long)dirtyTotals[lane].feeds,
-   (unsigned long long)dirtyTotals[lane].rows,(unsigned long long)dirtyTotals[lane].reseeds);
+   (unsigned long long)dirtyTotals[lane].rows,(unsigned long long)dirtyTotals[lane].reseeds,
+   (unsigned long long)dirtyTotals[lane].lookups,(unsigned long long)dirtyTotals[lane].probes,
+   (unsigned long long)dirtyTotals[lane].map_rows,(unsigned long long)dirtyTotals[lane].misses);
  }
  return ok;
 }
