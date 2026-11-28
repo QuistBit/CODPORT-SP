@@ -332,7 +332,12 @@ static int results_eval_checked(GscRuntime *r,Task *task,Frame *f,int expression
                 else
                 if(!r->scalar_switch_enabled||!scalar_cast(r,e->op,&node->a,line,&value))return 0;
             } else if(e->kind==E_UNARY) {
-                if(!results_operator(r,e,node->a,node->b,line,&value))return 0;
+                /* Exact integer negation uses no foreign type adapter.
+                 * Keep snapshots for all other unary operand families. */
+                if(e->op=='-'&&r->scalar_switch_enabled&&node->a.kind==V_NUMBER&&
+                   node->a.integer==1&&node->b.kind==V_UNDEFINED) {
+                    if(!scalar_unary(r,&node->a,line,&value))return 0;
+                } else if(!results_operator(r,e,node->a,node->b,line,&value))return 0;
                 localOnly=node->a.kind==V_NUMBER || e->op=='!';
             } else if(e->kind==E_FIELD) {
                 localOnly=node->a.kind==V_ARRAY || string_size_field(&node->a,e->name);
@@ -856,8 +861,11 @@ static int results_assign(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int 
             }
             p->assign_phase=4;
         } else if(p->assign_phase==4) {
-            result=p->value;
-            if(op&&!results_mutation(r,lhs,op,&p->current,&p->value,line,&result))return 0;
+            /* The mutation evaluator clears its separate output before
+             * dispatch; do not copy the RHS just to overwrite it. */
+            if(op) {
+                if(!results_mutation(r,lhs,op,&p->current,&p->value,line,&result))return 0;
+            } else result=p->value;
             if(!results_guard(r,task,line))return 0;
             if(!(e->kind==E_INDEX?array_lvalue_commit(r,task,f,&p->path,&result,array_assignment_clear(r->program,p->rhs,p->op),line):
                 e->kind==E_VAR?assignment(r,f,e->name,result,line):
