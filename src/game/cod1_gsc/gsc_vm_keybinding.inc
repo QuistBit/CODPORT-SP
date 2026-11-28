@@ -60,7 +60,7 @@ static int keybinding_call(GscRuntime *r,int kind,const Value *args,int argc,int
         if(n<2){entry.value.kind=V_STRING;memcpy(entry.value.str,n?reply.key2:reply.key1,sizeof(entry.value.str));}
         else {entry.value.kind=V_NUMBER;entry.value.integer=entry.value.integer_exact=1;
             entry.value.integer_value=reply.count;entry.value.number=(float)reply.count;}
-        r->array_entries[r->array_entry_count++]=entry;
+        array_entry_append55(r,&entry);
     }
     r->arrays[result.array-1].count=3;r->arrays[result.array-1].keybinding=1;
     validate=reply;validate.phase=COD1_KEYBINDING_PHASE_VALIDATE;request=validate;error[0]=0;
@@ -72,7 +72,7 @@ static int keybinding_call(GscRuntime *r,int kind,const Value *args,int argc,int
 rollback:
     memset(&r->arrays[old_arrays],0,(size_t)(r->array_count-old_arrays)*sizeof(r->arrays[0]));
     memset(&r->array_entries[old_entries],0,(size_t)(r->array_entry_count-old_entries)*sizeof(r->array_entries[0]));
-    r->array_count=old_arrays;r->array_entry_count=old_entries;
+    r->array_count=old_arrays;r->array_entry_count=old_entries;array_index_rebuild55(r);
 fail:
     r->keybinding_busy=0;return 0;
 }
