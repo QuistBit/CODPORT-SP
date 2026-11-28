@@ -30,10 +30,11 @@ static int r237_queue_offer(GscRuntime *r,Task *t,int key,int line){
  if(t->r237_enqueued){
   /* Native GetVariable(existing key) does not relink the child. */
   if(t->r243_time_root_incarnation!=v.stamp||t->wake_ms!=key||!t->r237_insertion)return rfail(r,line,"R237 task already owns another queue key");
-  return 1;
+  r54_dirty_mark_task(r,t);return 1;
  }
  /* Recheck availability and claim through the original commit gate. */
  if(!r237_queue_available(r,1,line))return 0;
  insertion=r237_insertion_claim(r,line);if(!insertion)return 0;
+ r54_dirty_mark_task(r,t);
  t->wake_ms=key;t->r237_insertion=insertion;t->r243_time_root_incarnation=v.stamp;t->r237_enqueued=1;return 1;
 }
