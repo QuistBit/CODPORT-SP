@@ -29,6 +29,7 @@ If you have questions concerning this license or the applicable additional terms
 // sv_game.c -- interface to the game dll
 
 #include "server.h"
+#include "sv_cod1_model_configstring_r50.h"
 
 #include "../qcommon/vm_local.h"
 #include "sv_cod1_navigation_owner.inc"
@@ -506,6 +507,10 @@ int SV_GameSystemCalls( int *args ) {
 	case G_GET_CONFIGSTRING:
 		SV_GetConfigstring( args[1], VMA( 2 ), args[3] );
 		return 0;
+	case G_COD1_FIND_MODEL_CONFIGSTRING_R50:
+		/* Native-only, callback-free read of the same model prefix. */
+		if(!gvm||!gvm->dllHandle||!gvm->entryPoint||currentVM!=gvm)return -1;
+		return C1R50_FindModelConfigstring(sv.configstrings+CS_MODELS,MAX_MODELS,VMA(1));
 	case G_SET_USERINFO:
 		SV_SetUserinfo( args[1], VMA( 2 ) );
 		return 0;

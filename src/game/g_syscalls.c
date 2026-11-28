@@ -29,6 +29,7 @@ If you have questions concerning this license or the applicable additional terms
 // Copyright (C) 1999-2000 Id Software, Inc.
 //
 #include "g_local.h"
+#include "../qcommon/cod1_model_configstring_r50.h"
 
 // this file is only included when building a dll
 // g_syscalls.asm is included instead when building a qvm
@@ -179,6 +180,10 @@ void trap_SetConfigstring( int num, const char *string ) {
 
 void trap_GetConfigstring( int num, char *buffer, int bufferSize ) {
 	syscall( G_GET_CONFIGSTRING, num, buffer, bufferSize );
+}
+
+int trap_Cod1FindModelConfigstringR50(const char *name){
+	return syscall(G_COD1_FIND_MODEL_CONFIGSTRING_R50,name);
 }
 
 void trap_GetUserinfo( int num, char *buffer, int bufferSize ) {

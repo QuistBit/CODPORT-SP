@@ -1,4 +1,5 @@
 #include "../g_cod1_weapon_registration.h"
+#include "../../qcommon/cod1_model_configstring_r50.h"
 #ifndef COD1_REGISTRATION_EXTRA_STORAGE
 #define COD1_REGISTRATION_EXTRA_STORAGE(p,n) 0
 #endif
@@ -93,16 +94,28 @@ static int WeaponRegistrationMarker(const WeaponRegistrationLease *lease) {
         WeaponRegistrationGet(lease,CS_COD1_ITEM_PRECACHE,text,sizeof(text)) &&
         !strcmp(text,lease->scene.published);
 }
+/* One callback-free server scan replaces a lease check around every slot.
+ * Keep both outer fences, and retain the original read path when the native
+ * provider reports that it is unavailable. No lookup result is cached. */
+static int WeaponRegistrationFindModelSlot(const WeaponRegistrationLease *lease,const char *name){
+    char text[MAX_STRING_CHARS];int slot;
+    if(!WeaponRegistrationScope(lease))return 0;
+    slot=trap_Cod1FindModelConfigstringR50(name);
+    if(!WeaponRegistrationScope(lease))return 0;
+    if(slot>=0)return slot<MAX_MODELS?slot:0;
+    for(slot=1;slot<MAX_MODELS;++slot){
+        if(!WeaponRegistrationGet(lease,CS_MODELS+slot,text,sizeof(text)))return 0;
+        if(!text[0])return 0;
+        if(!strcmp(text,name))return slot;
+    }
+    return 0;
+}
 static int WeaponRegistrationModel(const WeaponRegistrationLease *lease,const char *name,
     cod1WeaponRegistrationModel_t *out) {
     char text[MAX_STRING_CHARS];int slot;
     cod1ModelResourceReference_t request,result,validated;
-    for(slot=1;slot<MAX_MODELS;++slot) {
-        if(!WeaponRegistrationGet(lease,CS_MODELS+slot,text,sizeof(text)))return 0;
-        if(!text[0])return 0;
-        if(!strcmp(text,name))break;
-    }
-    if(slot==MAX_MODELS)return 0;
+    slot=WeaponRegistrationFindModelSlot(lease,name);
+    if(!slot)return 0;
     memset(&request,0,sizeof(request));request.version=COD1_MODEL_RESOURCE_REFERENCE_VERSION;
     request.bytes=sizeof(request);request.operation=COD1_MODEL_RESOURCE_QUERY;strcpy(request.name,name);
     if(!WeaponRegistrationScope(lease) || trap_Cod1ModelResourceReference(&request,&result)!=1 ||
