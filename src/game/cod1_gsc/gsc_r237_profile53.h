@@ -2,6 +2,7 @@
 #define GSC_R237_PROFILE53_H
 #include <stdint.h>
 #include <stddef.h>
+#include "gsc_source_profile55.h"
 struct GscRuntime;
 struct GscSession;
 enum { GSC53_SCAN, GSC53_DISPATCH, GSC53_SOURCE, GSC53_ENDON, GSC53_ARRAY,
@@ -23,6 +24,8 @@ typedef struct {
  uint64_t dirty_checks,dirty_matches,dirty_mismatches,dirty_skipped,dirty_feeds,dirty_audit_rows,dirty_reseeds;
  uint64_t dirty_mark_lookups,dirty_mark_probes,dirty_map_rows,dirty_mark_misses;
  uint64_t indexed_choices,indexed_fallbacks;
+ int source_detail;
+ GscSourceSample55 source_worst;
 } GscR237Profile53;
 int gsc_r237_frame_phase_profile53(struct GscRuntime *,uint64_t,int,int (*)(void),GscR237Profile53 *);
 int gsc_session_r237_frame_phase_profile53(struct GscSession *,uint64_t,uint64_t,int,int (*)(void),char *,size_t,GscR237Profile53 *);
