@@ -114,7 +114,7 @@ static int vehicle_node_query_call(GscRuntime *r,int kind,const Value *args,int 
             ArrayEntry entry;memset(&entry,0,sizeof(entry));entry.owner=(int)staged.array;
             entry.key.kind=V_NUMBER;entry.key.number=(int)n;
             memset(&member,0,sizeof(member));member.kind=V_VEHICLE_NODE;member.vehicle_node=refs[n];entry.value=member;
-            r->array_entries[r->array_entry_count++]=entry;
+            array_entry_append55(r,&entry);
         }
         r->arrays[staged.array-1].count=r->arrays[staged.array-1].numeric_count=(int)count;
     }
