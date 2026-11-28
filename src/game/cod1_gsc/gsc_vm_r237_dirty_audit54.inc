@@ -1,7 +1,8 @@
 /* Full audit is deliberately independent of the mutation marks. The reference
  * selector is authoritative, even if a notification was missed. */
 static void r54_dirty_audit(GscRuntime *r,uint64_t stamp,int bucket,const Task *chosen,int next,GscR237Profile53 *p){
-    R54Dirty *d=(R54Dirty*)r->r54_dirty_scope;
+    R54DirtyScope *s=(R54DirtyScope*)r->r54_dirty_scope;
+    R54Dirty *d=s?&s->journal:NULL;
     R54QEntry e={0};size_t slot;int n,has=0,deadline=INT32_MAX;
     if(!d)return;
     ++p->dirty_checks;
