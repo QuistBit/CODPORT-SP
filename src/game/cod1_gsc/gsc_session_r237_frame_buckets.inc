@@ -1,4 +1,5 @@
 /* Separate host time and original VM bucket cursor. No default activation. */
+#include "gsc_r237_profile53.h"
 static int session_r237_frame_private(const GscSession *s,const void *p,size_t n) {
     return session_animation_namespace_private(s,p,n)||
         (s&&s->runtime&&!gsc_runtime_storage_separate(s->runtime,p,n));
@@ -82,8 +83,8 @@ int gsc_session_resume_game_frame(GscSession *s,uint64_t id,int now,uint64_t gen
     s->busy=0;
     return valid;
 }
-int gsc_session_r237_frame_phase_slice(GscSession *s,uint64_t id,uint64_t generation,
-    int exclusive,int (*expired)(void),char *error,size_t cap) {
+static int session_r237_phase53(GscSession *s,uint64_t id,uint64_t generation,
+    int exclusive,int (*expired)(void),char *error,size_t cap,GscR237Profile53 *p) {
     GscR237FrameView frame;int ok;
     if((cap&&!error)||session_r237_frame_private(s,error,cap))return 0;
     if(!session_enter(s,error,cap))return 0;
@@ -98,7 +99,8 @@ int gsc_session_r237_frame_phase_slice(GscSession *s,uint64_t id,uint64_t genera
         return session_leave_rejected(s,"R237 unfinished frame phase differs",error,cap);
     if(!session_r237_frame_resources_current(s))
         return session_failed(s,"R237 frame resources retired before phase",error,cap);
-    ok=gsc_r237_frame_phase_slice(s->runtime,generation,exclusive,expired);
+    ok=p?gsc_r237_frame_phase_profile53(s->runtime,generation,exclusive,expired,p):
+        gsc_r237_frame_phase_slice(s->runtime,generation,exclusive,expired);
     if(ok==2 && !s->abort_requested){
         s->r237_suspended_phase=1+exclusive;s->busy=0;
         return 2;
@@ -107,6 +109,16 @@ int gsc_session_r237_frame_phase_slice(GscSession *s,uint64_t id,uint64_t genera
     if(ok&&!s->abort_requested&&!session_r237_frame_resources_current(s))
         return session_failed(s,"R237 frame resources retired during phase",error,cap);
     return session_after_vm(s,ok,error,cap);
+}
+int gsc_session_r237_frame_phase_slice(GscSession *s,uint64_t id,uint64_t generation,
+    int exclusive,int (*expired)(void),char *error,size_t cap) {
+    return session_r237_phase53(s,id,generation,exclusive,expired,error,cap,NULL);
+}
+int gsc_session_r237_frame_phase_profile53(GscSession *s,uint64_t id,uint64_t generation,
+    int exclusive,int (*expired)(void),char *error,size_t cap,GscR237Profile53 *p) {
+    if(!s||!p||session_r237_frame_private(s,p,sizeof(*p))||
+       session_animation_namespace_overlap(p,sizeof(*p),error,cap)||!p->clock||!p->hz)return 0;
+    return session_r237_phase53(s,id,generation,exclusive,expired,error,cap,p);
 }
 int gsc_session_r237_run_current_bucket(GscSession *s,uint64_t id,uint64_t generation,
     char *error,size_t cap) {
