@@ -53,6 +53,7 @@ static void endon_cancel_owner(GscRuntime *r,const GscEntityRef *owner,const cha
     for(n=0;n<r->task_count;n++) {
         Task *task=task_at(r,n);
         if(endon_matches_owner(r,task,owner,event,object)) {
+            r54_dirty_mark_task(r,task);
             task->status=TASK_DEAD;task->depth=0;task->context_retired=1;
             clear_wait_owner(task);task->blast_wait_serial=0;
             memset(task->endon,0,sizeof(task->endon));task->endon_count=0;
