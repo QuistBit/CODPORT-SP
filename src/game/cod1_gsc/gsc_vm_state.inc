@@ -132,8 +132,8 @@ static int state_receiver(GscRuntime *r,const Value *receiver,int line) {
     return 1;
 }
 static int state_field_index(GscRuntime *r,const Value *receiver,const char *name) {
-    int n;
-    for(n=0;n<r->state_field_capacity;n++) {
+    int n,end=state_fields_scan_end(r);
+    for(n=0;n<end;n++) {
         const StateField *field=&r->state_fields[n];
         /* Both predicates are pure reads of VM-owned storage. Compare the
          * complete owner first; other actors' fields need no name comparison.
@@ -205,7 +205,7 @@ static int state_field_write(GscRuntime *r,const Value *receiver,const char *nam
     if(index<0){if(!state_fields_reserve_free(r,1,line))return 0;
      for(n=0;n<r->state_field_capacity;n++)if(!r->state_fields[n].used){index=n;break;}
      if(index<0)return rfail(r,line,"state arena reserved slot unavailable");}
-    r->state_fields[index]=copy;return 1;
+    state_field_publish(r,index,&copy);return 1;
 }
 /* The event owner is a pending wait, not self. Keep both initial ownership and
  * temporary receiver-call contexts alive across sleep/events/frame unwinding.
