@@ -96,7 +96,7 @@ static int C1AGFL14_Select(const c1agt14Definition_t*d,c1atl14Node_t*n,c1afl14St
 static int C1AGFL14_SetInner(const c1agt14Definition_t*d,c1atl14Node_t*n,c1afl14State_t*f,
  const c1agf14Topology_t*t,const c1anm14Metadata_t*const*m,unsigned target,unsigned token,
  float weight,float time,float rate,int force,int knob){
- unsigned i,p,sync,count=t->count;float effective=weight,greatest=0,fade,delta;int ok=0;
+ unsigned i,p,sync,count=t->count;float effective=weight,greatest=0,fade,delta;int ok=0,useMask;unsigned char active[4096];
  c1atl14Node_t*stage=NULL;c1afl14State_t*flags=NULL;
  if(!target||target>=count||token>65535||!C1AGT14_Valid(d,n,count)||(knob!=0&&knob!=1)||
     !C1ATL14_Finite(weight)||weight<0||weight>1||(token&&weight==0)||!C1ATL14_Finite(time)||time<0||
@@ -115,8 +115,9 @@ static int C1AGFL14_SetInner(const c1agt14Definition_t*d,c1atl14Node_t*n,c1afl14
   p=d[target].parent;
   for(i=1;i<count;i++)if(d[i].parent==p){delta=i==target?(float)((double)effective-stage[i].currentWeight):stage[i].currentWeight;if(delta<0)delta=-delta;if(delta>greatest)greatest=delta;}
   fade=(float)((double)greatest*time);if(!C1ATL14_Finite(fade))goto done;
+  useMask=C1AGT49_SiblingPaths(d,stage,count,target,p,active);
   for(i=1;i<count;i++)if(i!=target&&d[i].parent==p){
-   if(!C1ATL14_ClearGoal(stage+i,fade,C1AGT14_Active(d,stage,count,i)))goto done;
+   if(!C1ATL14_ClearGoal(stage+i,fade,useMask?active[i]:C1AGT14_Active(d,stage,count,i)))goto done;
    flags[i].token=0;flags[i].cursor=-1;
   }
  }

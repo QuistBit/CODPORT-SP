@@ -11,7 +11,7 @@
  * Other leaves' positive cursors are preserved unless natively cancelled;
  * their metadata validation remains with their resource owner. */
 static int C1AFK14_Inner(const c1agt14Definition_t*d,c1atl14Node_t*n,c1afl14State_t*f,unsigned count,unsigned target,unsigned token,float weight,float time,float rate,int force,const c1anc14Note_t*notes,unsigned noteCount){
- c1atl14Node_t*stage=NULL;c1afl14State_t*flags=NULL;unsigned i,p;float epsilon,greatest=0,delta,fade,effective;const uint32_t epsBits=0x3a83126fu;int ok=0;
+ c1atl14Node_t*stage=NULL;c1afl14State_t*flags=NULL;unsigned i,p;float epsilon,greatest=0,delta,fade,effective;const uint32_t epsBits=0x3a83126fu;int ok=0,useMask;unsigned char active[4096];
  if(!d||!n||!f||!notes||!count||count>4096||!target||target>=count||!token||token>65535||!noteCount||noteCount>C1ANC14_MAX_NOTES||
     (force!=0&&force!=1)||!C1ATL14_Finite(weight)||weight<=0||weight>1||!C1ATL14_Finite(time)||time<0||!C1ATL14_Finite(rate)||rate<0||rate>100)return 0;
  if(C1ANC14_Overlap(d,count*sizeof(*d),n,count*sizeof(*n))||C1ANC14_Overlap(d,count*sizeof(*d),f,count*sizeof(*f))||
@@ -32,8 +32,9 @@ static int C1AFK14_Inner(const c1agt14Definition_t*d,c1atl14Node_t*n,c1afl14Stat
  p=d[target].parent;
  for(i=1;i<count;i++)if(d[i].parent==p){delta=i==target?(float)((double)effective-stage[i].currentWeight):stage[i].currentWeight;if(delta<0)delta=-delta;if(delta>greatest)greatest=delta;}
  fade=(float)((double)greatest*time);if(!C1ATL14_Finite(fade))goto done;
+ useMask=C1AGT49_SiblingPaths(d,stage,count,target,p,active);
  for(i=1;i<count;i++)if(i!=target&&d[i].parent==p){
-  if(!C1ATL14_ClearGoal(stage+i,fade,C1AGT14_Active(d,stage,count,i)))goto done;
+  if(!C1ATL14_ClearGoal(stage+i,fade,useMask?active[i]:C1AGT14_Active(d,stage,count,i)))goto done;
   flags[i].token=0;flags[i].cursor=-1;
  }
  /*47E5D0's conditional ancestors are promoted after the target goal and before

@@ -82,6 +82,25 @@ static int C1AGT14_Active(const c1agt14Definition_t*d,const c1atl14Node_t*n,unsi
  }return 0;
 }
 #include "cod1_actor_active_paths37.h"
+/* The sibling clears cannot change active-path membership: inactive clears
+ * only zero inactive weights, and active clears preserve currentWeight.
+ * Build a local mask only when at least two other siblings have nonzero
+ * weights. Exceptional weight encodings retain the original FP comparisons. */
+static int C1AGT49_SiblingPaths(const c1agt14Definition_t*d,const c1atl14Node_t*n,
+ unsigned count,unsigned target,unsigned parent,unsigned char*active){
+ unsigned i,positive=0;uint32_t bits;
+ if(d[parent].children<3)return 0;
+ for(i=1;i<count;i++)if(i!=target&&d[i].parent==parent){
+  memcpy(&bits,&n[i].currentWeight,4);
+  if(bits&&++positive==2)break;
+ }
+ if(positive<2)return 0;
+ for(i=0;i<count;i++){
+  memcpy(&bits,&n[i].currentWeight,4);
+  if(bits&&(bits<0x00800000u||bits>0x3f800000u))return 0;
+ }
+ C1AGT37_ActivePaths(d,n,count,active);return 1;
+}
 /* Only a canonical, already-cleared inactive node is a no-op. The caller
  * has validated the entire tree. Keep signed zeros and denormals on the
  * original path, including unusual fade encodings. No phase/rate writes. */
