@@ -6,7 +6,8 @@
  * Measure active work only, never elapsed waiting time between slices. */
 enum { C1FP35_GAME, C1FP35_GSC, C1FP35_ENTITIES, C1FP35_AI,
  C1FP35_GAME_POST, C1FP35_NATIVE, C1FP35_COURSE, C1FP35_VM_CURRENT,
- C1FP35_VM_EXCLUSIVE, C1FP35_NATIVE_OTHER, C1FP35_ACTORS, C1FP35_STAGES };
+ C1FP35_VM_EXCLUSIVE, C1FP35_NATIVE_OTHER, C1FP35_ACTORS,
+ C1FP35_BUCKET_ADMIT, C1FP35_BUCKET_VM, C1FP35_BUCKET_POST, C1FP35_STAGES };
 typedef struct {uint64_t stamp,epoch;int tick;} c1fp35Token;
 #if defined(COD1_GSC_TEST_WIP) && COD1_GSC_TEST_WIP && defined(_WIN32) && defined(_MSC_VER) && defined(_M_IX86)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -24,7 +25,7 @@ static struct {
  c1fp35Stage stage[C1FP35_STAGES];
 } c1fp35;
 static void C1FP35_Flush(void){
- static const char *names[C1FP35_STAGES]={"game","gsc","entities","ai","game_post","native","course","vm_current","vm_exclusive","native_other","actors"};
+ static const char *names[C1FP35_STAGES]={"game","gsc","entities","ai","game_post","native","course","vm_current","vm_exclusive","native_other","actors","bucket_admit","bucket_vm","bucket_post"};
  unsigned i;
  for(i=0;i<C1FP35_STAGES;i++)if(c1fp35.stage[i].calls){
   const c1fp35Stage *s=c1fp35.stage+i;
