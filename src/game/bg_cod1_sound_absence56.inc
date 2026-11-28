@@ -1,6 +1,7 @@
 /* Optional exact-byte cache of successful table misses only. A NONE result
  * has not parsed any eligible variant or performed numeric conversions.
- * Do not cache failures or READY plans. Live VFS callbacks remain mandatory. */
+ * Do not cache failures or READY plans. Live VFS callbacks remain mandatory.
+ * Successful complete parses also admit an exact-byte structural row index. */
 #define COD1_SS56_TABLES 16
 #define COD1_SS56_KEYS 32
 #define COD1_SS56_BYTES (8u*1024u*1024u)
@@ -9,13 +10,14 @@ typedef struct {
 } Cod1SSAbsentKey56;
 typedef struct {
  char path[COD1_SS_PATH_BYTES];char *bytes;size_t size;unsigned next;
- Cod1SSAbsentKey56 keys[COD1_SS56_KEYS];
+ Cod1SSAbsentKey56 keys[COD1_SS56_KEYS];Cod1SSRows56 index;
 } Cod1SSAbsentTable56;
 typedef struct {
- size_t used;Cod1SSAbsentTable56 tables[COD1_SS56_TABLES];
+ size_t used,index_used;Cod1SSAbsentTable56 tables[COD1_SS56_TABLES];
 } Cod1SSAbsentCache56;
 static void Cod1SS_AbsentDrop56(Cod1SSAbsentCache56 *cache,Cod1SSAbsentTable56 *t){
  if(t->bytes){int saved=errno;cache->used-=t->size;free(t->bytes);errno=saved;}
+ if(t->index.rows){int saved=errno;cache->index_used-=(size_t)t->index.count*sizeof(Cod1SSRow56);free(t->index.rows);errno=saved;}
  memset(t,0,sizeof(*t));
 }
 static void Cod1SS_AbsentReset56(Cod1SSAbsentCache56 *cache){
@@ -46,13 +48,14 @@ static Cod1SSResourceStatus Cod1SS_ParseCached56(Cod1SSAbsentCache56 *cache,cons
    return COD1_SS_RESOURCE_NONE;
   }
  }
- status=Cod1ScriptSoundParseTableMode(data,size,alias,map,out,diag,profile,loop);
- if(status!=COD1_SS_RESOURCE_NONE)return status;
+ status=Cod1ScriptSoundParseTableIndexed56(data,size,alias,map,out,diag,profile,loop,t?&t->index:NULL);
+ if(status==COD1_SS_RESOURCE_HELD)return status;
  if(!t&&empty&&size<=COD1_SS56_BYTES-cache->used){
   int saved=errno;char *copy=malloc(size);errno=saved;
   if(copy){memcpy(copy,data,size);t=empty;t->bytes=copy;t->size=size;strcpy(t->path,path);cache->used+=size;}
  }
- if(t){
+ if(t&&!t->index.ready)Cod1SS_RowBuild56(&t->index,t->bytes,t->size,&cache->index_used);
+ if(t&&status==COD1_SS_RESOURCE_NONE){
   Cod1SSAbsentKey56 *k=&t->keys[t->next];
   strcpy(k->alias,alias);strcpy(k->map,map);k->profile=profile;k->loop=loop;k->valid=1;
   t->next=(t->next+1)%COD1_SS56_KEYS;
