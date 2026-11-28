@@ -272,6 +272,7 @@ struct GscRuntime { GscDeveloperScriptSelection developer_admission;int develope
                     int started, advancing, now_ms, task_count; uint64_t next_serial;
                     int bootstrap_started,bootstrap_returned,configured_main_attempted;
                     int r237_frame_buckets_enabled,r237_vm_bucket_ms,r237_frame_open,r237_frame_target_ms,r237_start_draining,r237_frame_budget;
+                     void *r54_dirty_scope; /* opt-in, synchronous drain scratch */
                     uint64_t r237_next_insertion,r237_frame_generation,r237_frame_time_root;
                     R243TimeRoot*r243_time_root;int r243_time_root_teardown;
                     int r243_previous_host_ms,r243_actor_script_scope;
@@ -4653,6 +4654,7 @@ static int rfail(GscRuntime *r,int line,const char *fmt,...) {
     return 0;
 }
 static Task*task_at(const GscRuntime*,int);
+#include "gsc_vm_r237_dirty_scope54.inc"
 static int task_member(const GscRuntime*,const Task*);
 static int task_directory_limit(const GscRuntime *r){
     return r->lifetime_enabled?GSC_LIFETIME_TASK_CAPACITY+r->extra_capacity:MAX_THREADS;
@@ -5365,7 +5367,7 @@ static int refresh_wait_owner(GscRuntime *r,Task *task) {
     alive=event_owner_live(r,&task->event_owner);
     if(!entity_certificate_current(r,task))return !r->error[0];
     if(alive<0)return 0;
-    if(!alive) {task->depth=0;task->status=TASK_DEAD;clear_wait_owner(task);}
+    if(!alive) {r54_dirty_mark_task(r,task);task->depth=0;task->status=TASK_DEAD;clear_wait_owner(task);}
     return 1;
 }
 static int run_entity_event(GscRuntime *r,Task *task,int descriptor,const Value *receiver,
@@ -6991,6 +6993,7 @@ GscRuntime *gsc_runtime_new_with_keybinding(const GscProgram *program,GscFogCall
 
 void gsc_runtime_free(GscRuntime *runtime) {
     if(!runtime)return;
+    if(runtime->r54_dirty_scope){rfail(runtime,0,"runtime destruction during queue audit");return;}
     if(runtime->origin_method_busy){rfail(runtime,0,"GetOrigin runtime destruction during callback");return;}
     /* Program selection also covers certificate callbacks before Runtime
      * R243 enablement. Reject before any owner/storage teardown; pins only
