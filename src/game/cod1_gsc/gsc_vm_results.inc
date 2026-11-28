@@ -313,9 +313,11 @@ static int results_eval_checked(GscRuntime *r,Task *task,Frame *f,int expression
         if(continuationChecked){
             nativeRead=1;continuationChecked=0;
         }else if(!R55B_CALL(r,R55B_GUARD,results_guard_read(r,task,line,&nativeRead)))return 0;
-        memset(&value,0,sizeof(value));
+        /* Scratch is not a continuation root. Clear it only on paths that
+         * can produce a value; child pushes do not use or publish it. */
         switch(e->kind) {
           case E_NUMBER:case E_STRING:case E_LOCALIZED_STRING:case E_VAR:case E_EMPTY_ARRAY:case E_FUNC_REF:case E_ANIM_REF:case E_ANIMTREE_VALUE:
+            memset(&value,0,sizeof(value));
             if(!eval_inner(r,f,node->expression,0,&value,line,&localOnly))return 0;
             done=1;break;
           case E_UNARY:case E_CAST:case E_FIELD:case E_ISDEFINED:
@@ -323,6 +325,7 @@ static int results_eval_checked(GscRuntime *r,Task *task,Frame *f,int expression
             if(node->phase==0) {
                 node->phase=1;if(!results_node_push(r,task,frame,e->a,-1,line))return 0;continuationChecked=nativeRead;continue;
             }
+            memset(&value,0,sizeof(value));
             if(e->kind==E_CAST) {
                 if(e->float_arithmetic==2){if(!r232_source_float_cast(r,e->op,&node->a,line,&value))return 0;}
                 else if(e->float_arithmetic==1){if(!r->timed_arithmetic_enabled)return rfail(r,line,"selected module numeric casts are unsupported");if(!float_arithmetic_cast(r,e->op,&node->a,line,&value))return 0;}
@@ -348,11 +351,13 @@ static int results_eval_checked(GscRuntime *r,Task *task,Frame *f,int expression
                         return rfail(r,line,"vector/entity boolean semantics are unsupported");
                     if(e->float_arithmetic&&(e->op==T_AND||e->op==T_OR)&&node->a.kind==V_NUMBER&&!node->a.integer)return rfail(r,line,"selected module float boolean operation is unsupported");
                     if((e->op==T_AND&&!truth(node->a))||(e->op==T_OR&&truth(node->a))) {
+                        memset(&value,0,sizeof(value));
                         value.kind=V_NUMBER;value.integer=1;value.number=(float)(e->op==T_OR);localOnly=1;done=1;break;
                     }
                 }
                 node->phase=2;if(!results_node_push(r,task,frame,e->b,-2,line))return 0;continuationChecked=nativeRead;continue;
             }
+            memset(&value,0,sizeof(value));
             if(!(e->kind==E_INDEX?array_index_read(r,&node->a,&node->b,line,&value):
                 results_binary56(r,e,&node->a,&node->b,line,&value)))return 0;
             /* Index lookup reads the VM's own values. Both int32 operands
@@ -367,7 +372,7 @@ static int results_eval_checked(GscRuntime *r,Task *task,Frame *f,int expression
              * same evaluation order as the other script calls below. */
           case E_DYNAMIC_CALL:
             if((e->kind==E_DYNAMIC_CALL || e->op==GSC_THREAD_EXPR_COMPUTED) && !r->function_refs_enabled)return rfail(r,line,"computed call mode is unavailable");
-            if(node->phase==RESULTS_CALL_READY){value=node->a;done=1;break;}
+            if(node->phase==RESULTS_CALL_READY){memset(&value,0,sizeof(value));value=node->a;done=1;break;}
             if(node->phase==RESULTS_CALL_WAIT)return rfail(r,line,"computed callee result is unavailable");
             if(node->phase==0) {
                 /* Original script compiler emits the reversed argument list
@@ -399,6 +404,7 @@ static int results_eval_checked(GscRuntime *r,Task *task,Frame *f,int expression
             if(e->kind==E_THREAD_CALL){
 enter_thread_expression:
                 if(!results_guard(r,task,line))return 0;
+                memset(&value,0,sizeof(value));
                 if(!r243_spawn_initial(r,target,node->args,e->argc,e->b>=0?&node->receiver:&f->self,line,&value))return 0;
                 if(task->status==TASK_DEAD || !results_guard(r,task,line))return 0;
                 done=1;break;
@@ -412,7 +418,7 @@ script_call:
             script=e->kind==E_SCOPED_CALL||e->call_binding==GSC_EXPR_TARGET_LOCAL_SCRIPT||
                 (e->kind==E_METHOD_CALL&&(e->receiver_binding_kind==GSC_RECEIVER_TARGET_LOCAL_SCRIPT||
                  e->receiver_binding_kind==GSC_RECEIVER_TARGET_QUALIFIED_SCRIPT));
-            if(node->phase==RESULTS_CALL_READY) {value=node->a;done=1;break;}
+            if(node->phase==RESULTS_CALL_READY) {memset(&value,0,sizeof(value));value=node->a;done=1;break;}
             if(node->phase==RESULTS_CALL_WAIT)return rfail(r,line,"callee result is unavailable");
             /* Native method/vector argument order retains its older bounded
              * policy. R122 changes only selected script call evaluation. */
@@ -447,6 +453,7 @@ script_call:
                     node->receiver_guard=1;
                 }
             }
+            memset(&value,0,sizeof(value));
             if(e->kind==E_VECTOR) {
                 value.kind=V_VECTOR;
                 for(k=0;k<3;k++) {
