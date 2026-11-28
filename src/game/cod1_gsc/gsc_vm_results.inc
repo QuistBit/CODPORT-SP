@@ -731,6 +731,15 @@ script_call:
 static int results_eval(GscRuntime *r,Task *task,Frame *f,int expression,Value *out,int line,int *budget){
  return R55B_CALL(r,R55B_EVAL,results_eval_checked(r,task,f,expression,out,line,budget,0));
 }
+/* A statement's entry proof is consumed by its first expression only.
+ * Never carry it across a result, receiver validation, yield or host call.
+ * The scheduler clears entryRead before boundary GC; all evaluator and
+ * final effect guards retain their original ordering. */
+static int results_eval_first56(GscRuntime *r,Task *task,Frame *f,int expression,Value *out,int line,int *budget,int *entryRead){
+    int checked=*entryRead;
+    *entryRead=0;
+    return R55B_CALL(r,R55B_EVAL,results_eval_checked(r,task,f,expression,out,line,budget,checked));
+}
 static int results_return(GscRuntime *r,Task *task,const Value *value,int line) {
     ResultsTask *state=task->results;int frame=task->depth-1,consumed;Value returned=*value;
     consumed=frame>0&&state->node_count&&
@@ -1000,7 +1009,7 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
                 int evaluated=i->kind==I_WAITER?1:i->argc;
                 while(p->argument<evaluated) {
                     n=p->argument;
-                    status=results_eval(r,task,f,i->args[n],&p->args[n],i->line,budget);
+                    status=results_eval_first56(r,task,f,i->args[n],&p->args[n],i->line,budget,&entryRead);
                     if(status!=1)break;
                     p->argument++;
                 }
@@ -1042,13 +1051,13 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
             if(p->stage==0) {
                 while(p->argument<i->argc) {
                     n=i->argc-1-p->argument;
-                    status=results_eval(r,task,f,i->args[n],&p->args[n],i->line,budget);
+                    status=results_eval_first56(r,task,f,i->args[n],&p->args[n],i->line,budget,&entryRead);
                     if(status!=1)break;
                     p->argument++;
                 }
                 if(status!=1)break;
                 if(i->receiver>=0) {
-                    status=results_eval(r,task,f,i->receiver,&p->receiver,i->line,budget);
+                    status=results_eval_first56(r,task,f,i->receiver,&p->receiver,i->line,budget,&entryRead);
                     if(status!=1)break;
                     if(!state_receiver(r,&p->receiver,i->line))return 0;
                     p->receiver_guard=1;
@@ -1056,7 +1065,7 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
                 p->stage=1;
             }
             if(p->stage==1) {
-                status=results_eval(r,task,f,i->expr,&p->current,i->line,budget);
+                status=results_eval_first56(r,task,f,i->expr,&p->current,i->line,budget,&entryRead);
                 if(status!=1)break;
                 if(!function_value_valid(r,&p->current))return rfail(r,i->line,"computed target requires a current script function reference");
                 p->function_guard=1;p->stage=2;
@@ -1080,7 +1089,7 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
             if(target>=0) {
                 while(p->argument<i->argc) {
                     n=i->argc-1-p->argument;
-                    status=results_eval(r,task,f,i->args[n],&p->args[n],i->line,budget);
+                    status=results_eval_first56(r,task,f,i->args[n],&p->args[n],i->line,budget,&entryRead);
                     if(status!=1)break;
                     p->argument++;
                 }
@@ -1089,7 +1098,7 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
             if(i->kind==I_METHOD||i->kind==I_METHOD_THREAD) {
                 if(p->stage==0) {
                     int defer;
-                    status=results_eval(r,task,f,i->receiver,&p->receiver,i->line,budget);
+                    status=results_eval_first56(r,task,f,i->receiver,&p->receiver,i->line,budget,&entryRead);
                     if(status!=1)break;
                     defer=r->actor_spawners_enabled&&i->kind==I_METHOD&&
                         i->receiver_binding_kind==GSC_RECEIVER_TARGET_ENTITY_NATIVE&&
@@ -1105,7 +1114,7 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
                   i->receiver_binding_kind==GSC_RECEIVER_TARGET_ENTITY_EVENT&&
                   i->receiver_event_target==ENTITY_EVENT_WAITTILL?1:i->argc)) {
                 n=p->argument;
-                status=results_eval(r,task,f,i->args[n],&p->args[n],i->line,budget);
+                status=results_eval_first56(r,task,f,i->args[n],&p->args[n],i->line,budget,&entryRead);
                 if(status!=1)break;
                 p->argument++;
             }
