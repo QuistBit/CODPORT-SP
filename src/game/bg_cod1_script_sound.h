@@ -103,6 +103,7 @@ static const char *Cod1SS_Cell(const char *p,const char *end,char *out,size_t ca
  }
  if(quoted)*bad=1;out[n]=0;return p;
 }
+#include "bg_cod1_sound_skip56.inc"
 static int Cod1SS_Number(const char *p,float fallback,float *out) {
  const char *s=p,*end;char *e;double v;int digits=0;
  while(*s==' '||*s=='\t')++s;if(!*s){*out=fallback;return 1;}
@@ -161,7 +162,15 @@ static Cod1SSResourceStatus Cod1ScriptSoundParseTableMode(const char *data,size_
   bad=0;for(k=0;k<NFIELDS;++k)values[k][0]=0;col=0;
   if(p==le){p=next;continue;}
   /* Empty/# first columns are ignored by the original CSV's own header. */
-  {const char *first=Cod1SS_Cell(p,le,cell,sizeof(cell),&bad);(void)first;if(!bad&&(!cell[0]||cell[0]=='#')){p=next;continue;}}
+  {const char *first=Cod1SS_Cell(p,le,cell,sizeof(cell),&bad);
+   if(!bad&&(!cell[0]||cell[0]=='#')){p=next;continue;}
+   /* Name-first unrelated rows still require identical CSV validation.
+    * Only their unused field materialization is omitted. */
+   if(header&&idx[NAME]==0&&!bad&&!Cod1SS_Equal(cell,alias)){
+    if(!Cod1SS_UnselectedRow56(first,le))return Cod1SS_Fail(diag,COD1_SS_REASON_CSV,line);
+    p=next;continue;
+   }
+  }
   while(p<le){p=Cod1SS_Cell(p,le,cell,sizeof(cell),&bad);if(col>=64)bad=1;
    if(!header){for(k=0;k<NFIELDS;++k)if(Cod1SS_Equal(cell,keys[k])){if(idx[k]>=0)bad=1;idx[k]=col;}}
    else if(col<64 && field[col]>=0)memcpy(values[field[col]],cell,strlen(cell)+1);
