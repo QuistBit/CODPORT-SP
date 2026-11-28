@@ -63,14 +63,32 @@ static int function_admission_runtime_cache(GscRuntime *r,int first,char *error,
  * must instead derive its requirements from the unmasked IR, otherwise an
  * unentered future callback's thread-expression/raw literal poisons every
  * unrelated function. The executable program and its source are untouched. */
-static void function_admission_requirements(GscProgram*v,int only){
-    int n,f;v->requires_game_values=v->requires_receiver_method=0;
+/* Only masked single-function views may use the narrower range. Require
+ * complete, ordered coverage of both IR tables; a gap or overlap may retain
+ * observable operations outside the selected body, so use the full scan. */
+static int admission_bodies_dense51(const GscProgram *g) {
+    int f,code_end=0,expr_end=0;
+    for(f=0;f<g->func_count;f++) {
+        const Func *fn=&g->funcs[f];
+        if(fn->start!=code_end || fn->end<fn->start || fn->end>g->code_count ||
+           fn->expr_start!=expr_end || fn->expr_end<fn->expr_start || fn->expr_end>g->expr_count)return 0;
+        code_end=fn->end;expr_end=fn->expr_end;
+    }
+    return code_end==g->code_count && expr_end==g->expr_count;
+}
+static void function_admission_requirements_range51(GscProgram*v,int only,int masked){
+    int n,f,cb=0,ce=v->code_count,eb=0,ee=v->expr_count;
+    if(masked && only>=0 && only<v->func_count && admission_bodies_dense51(v)) {
+        const Func *fn=&v->funcs[only];
+        cb=fn->start;ce=fn->end;eb=fn->expr_start;ee=fn->expr_end;
+    }
+    v->requires_game_values=v->requires_receiver_method=0;
     v->requires_literal_semantics=v->requires_loop_semantics=v->requires_localized_string=v->requires_flow_semantics=0;
     v->requires_vector_semantics=v->requires_anim_ref_semantics=v->requires_dynamic_call=v->requires_empty_array_semantics=0;
     v->requires_scoped_expr_call=v->requires_mutation_semantics=v->requires_cast_semantics=v->requires_func_ref_semantics=0;
     v->requires_animtree_value_semantics=v->requires_integer_op_semantics=v->requires_switch_semantics=0;
     v->requires_raw_string_semantics=v->requires_thread_expr_semantics=v->requires_do_while_semantics=v->requires_local_expr_call=0;
-    for(n=0;n<v->expr_count;n++){const Expr*e=v->expr+n;
+    for(n=eb;n<ee;n++){const Expr*e=v->expr+n;
         if(e->kind==E_VAR){if(literal_name(e->name))v->requires_literal_semantics=1;if(!strcmp(e->name,"level")||!strcmp(e->name,"self"))v->requires_game_values=1;}
         if(e->kind==E_FIELD||e->kind==E_INDEX)v->requires_game_values=1;
         if(e->kind==E_METHOD_CALL||(e->kind==E_THREAD_CALL&&e->b>=0))v->requires_receiver_method=1;
@@ -88,7 +106,7 @@ static void function_admission_requirements(GscProgram*v,int only){
         if(e->kind==E_THREAD_CALL)v->requires_thread_expr_semantics=1;
         if((e->kind==E_NATIVE_CALL||e->kind==E_ISDEFINED)&&e->call_binding==GSC_EXPR_TARGET_LOCAL_SCRIPT)v->requires_local_expr_call=1;
     }
-    for(n=0;n<v->code_count;n++){const Instr*i=v->code+n;
+    for(n=cb;n<ce;n++){const Instr*i=v->code+n;
         if(i->kind==I_GAME_SET)v->requires_game_values=1;
         if(i->kind==I_METHOD||i->kind==I_METHOD_THREAD)v->requires_receiver_method=1;
         if(i->kind==I_FOR){v->requires_loop_semantics=1;if(i->dest>=0&&i->dest<v->loop_count&&v->loops[i->dest].step_kind>=FOR_INCREMENT)v->requires_mutation_semantics=1;}
@@ -102,12 +120,15 @@ static void function_admission_requirements(GscProgram*v,int only){
     }
     v->requires_dev_block=0;
     if(!v->developer_selected)for(n=0;n<v->dev_count;n++){const DevBlock*b=v->dev_blocks+n;
-        for(f=0;f<v->func_count;f++)if((only>=0?f==only:v->funcs[f].admission)){
+        for(f=only>=0?only:0;f<v->func_count&&(only<0||f==only);f++)if((only>=0?f==only:v->funcs[f].admission)){
             const Func*fn=v->funcs+f;
             if((b->scope==GSC_DEV_FILE&&f>=b->func_start&&f<b->func_end)||
                (b->scope==GSC_DEV_STATEMENT&&fn->module==b->module&&b->code_start>=fn->start&&b->code_end<=fn->end&&b->expr_start>=fn->expr_start&&b->expr_end<=fn->expr_end))v->requires_dev_block=1;
         }
     }
+}
+static void function_admission_requirements(GscProgram*v,int only){
+    function_admission_requirements_range51(v,only,0);
 }
 static void function_admission_hide_body(GscProgram *view, int f) {
     Func *fn = &view->funcs[f];
@@ -130,7 +151,7 @@ static void function_admission_mask(GscProgram *view, int only) {
             function_admission_hide_body(view, f);
     }
     developer_validation_view(view);
-    function_admission_requirements(view,only);
+    function_admission_requirements_range51(view,only,1);
 }
 /* A runtime preflight only reads the temporary IR. With disjoint bodies,
  * moving to the next function changes just two spans. Gaps remain intact.
@@ -169,7 +190,7 @@ static void runtime_admission_view_function(GscProgram *view, const GscProgram *
         memcpy(view->expr + fn->expr_start, original->expr + fn->expr_start,
                (size_t)(fn->expr_end - fn->expr_start) * sizeof(*view->expr));
     developer_validation_view(view);
-    function_admission_requirements(view, selected);
+    function_admission_requirements_range51(view, selected,1);
 }
 static int function_admission_view(const GscProgram *g,GscProgram *view) {
     *view=*g;view->code=NULL;view->expr=NULL;view->funcs=NULL;
