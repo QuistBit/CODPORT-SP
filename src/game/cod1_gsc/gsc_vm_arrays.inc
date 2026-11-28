@@ -273,7 +273,7 @@ static int array_lvalue_commit(GscRuntime *r,Task *task,Frame *f,const ArrayLval
     } else if(global_root) {
         if(!game_array_root_matches(r,&path->base,line))return 0;
     } else {
-        for(n=0;n<f->local_count;n++)if(!strcmp(f->locals[n].name,root->name)){local_index=n;break;}
+        local_index=frame_local_find55(f,root->name,0);
         if(local_index<0&&f->local_count>=MAX_LOCALS)return rfail(r,line,"local limit");
     }
     if(clear)return array_owned_numeric_delete(r,f,path,state_index,local_index,global_root,line);
