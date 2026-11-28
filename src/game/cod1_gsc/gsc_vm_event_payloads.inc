@@ -25,8 +25,8 @@ static int payload_register(GscRuntime *r,Task *task,Frame *frame,
         const char *name=r->program->expr[args[n]].name;
         if(r->anim_data_enabled&&!strcmp(name,"anim"))return rfail(r,line,"selected anim cannot be a waittill output");
         if(game_array_selected(r,name))return rfail(r,line,"selected game cannot be a waittill output");
-        for(k=0;k<base;k++)if(!strcmp(frame->locals[k].name,name))break;
-        if(k==base) {
+        k=frame_local_find55(frame,name,0);
+        if(k<0) {
             for(k=0;k<unique;k++)if(!strcmp(names[k],name))break;
             if(k==unique) {
                 if(base+unique>=MAX_LOCALS)return rfail(r,line,"waittill output local limit");
