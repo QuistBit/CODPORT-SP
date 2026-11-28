@@ -183,7 +183,7 @@ static int results_guard_read(GscRuntime *r,Task *task,int line,int *nativeRead)
     return refresh_state_context(r,task)&&task->status!=TASK_DEAD;
 }
 static int results_guard(GscRuntime *r,Task *task,int line){
-    return results_guard_read(r,task,line,NULL);
+    return R55B_CALL(r,R55B_GUARD,results_guard_read(r,task,line,NULL));
 }
 static int results_node_push(GscRuntime *r,Task *task,int frame,int expression,int destination,int line) {
     ResultsNode *node;ResultsTask *state=task->results;
@@ -306,7 +306,7 @@ static int results_eval_checked(GscRuntime *r,Task *task,Frame *f,int expression
         if(!flow_budget(r,budget,line))return 0;
         if(continuationChecked){
             nativeRead=1;continuationChecked=0;
-        }else if(!results_guard_read(r,task,line,&nativeRead))return 0;
+        }else if(!R55B_CALL(r,R55B_GUARD,results_guard_read(r,task,line,&nativeRead)))return 0;
         memset(&value,0,sizeof(value));
         switch(e->kind) {
           case E_NUMBER:case E_STRING:case E_LOCALIZED_STRING:case E_VAR:case E_EMPTY_ARRAY:case E_FUNC_REF:case E_ANIM_REF:case E_ANIMTREE_VALUE:
@@ -329,7 +329,7 @@ static int results_eval_checked(GscRuntime *r,Task *task,Frame *f,int expression
                 localOnly=node->a.kind==V_ARRAY || string_size_field(&node->a,e->name);
                 if(!(localOnly?array_field_read(r,&node->a,e->name,line,&value):
                     state_field_read(r,&node->a,e->name,line,&value)))return 0;
-            } else if(!invoke_builtin_expression(r,e->target,&node->a,1,line,&value))return 0;
+            } else if(!R55B_CALL(r,R55B_NATIVE_EXPR,invoke_builtin_expression(r,e->target,&node->a,1,line,&value)))return 0;
             done=1;break;
           case E_BINARY:case E_INDEX:
             if(node->phase==0) {
@@ -451,48 +451,48 @@ script_call:
             } else if(e->kind==E_METHOD_CALL&&
                       e->receiver_binding_kind==GSC_RECEIVER_TARGET_ENTITY_NATIVE) {
                 if(R243ActorFloatMask(e->receiver_native_target)){
-                    if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||entity_method_descriptor(r->program,e->name)!=e->receiver_native_target||!r243_actor_float_call(r,&node->receiver,e->receiver_native_target,argc,line,&value))return 0;
+                    if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||entity_method_descriptor(r->program,e->name)!=e->receiver_native_target||!R55B_CALL(r,R55B_NATIVE_EXPR,r243_actor_float_call(r,&node->receiver,e->receiver_native_target,argc,line,&value)))return 0;
                 }else if(e->receiver_native_target==R243_ANIMTIME_METHOD){
-                    if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||entity_method_descriptor(r->program,e->name)!=R243_ANIMTIME_METHOD||!r243_animtime_call(r,&node->receiver,node->args,argc,line,&value))return 0;
+                    if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||entity_method_descriptor(r->program,e->name)!=R243_ANIMTIME_METHOD||!R55B_CALL(r,R55B_NATIVE_EXPR,r243_animtime_call(r,&node->receiver,node->args,argc,line,&value)))return 0;
                 }else if(e->receiver_native_target==R243_STANCE_METHOD){
-                    if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||entity_method_descriptor(r->program,e->name)!=R243_STANCE_METHOD||!r243_stance_call(r,&node->receiver,node->args,argc,line,&value))return 0;                }else if(actor_look_kind(e->receiver_native_target)){
-                    if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||actor_look_descriptor(r->program,e->name)!=e->receiver_native_target||!actor_look_invoke(r,&node->receiver,e->receiver_native_target,node->args,argc,line,&value))return 0;
+                    if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||entity_method_descriptor(r->program,e->name)!=R243_STANCE_METHOD||!R55B_CALL(r,R55B_NATIVE_EXPR,r243_stance_call(r,&node->receiver,node->args,argc,line,&value)))return 0;                }else if(actor_look_kind(e->receiver_native_target)){
+                    if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||actor_look_descriptor(r->program,e->name)!=e->receiver_native_target||!R55B_CALL(r,R55B_NATIVE_EXPR,actor_look_invoke(r,&node->receiver,e->receiver_native_target,node->args,argc,line,&value)))return 0;
                 } else if(turret_method_kind(e->receiver_native_target)) {
                     if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||
                        turret_method_descriptor(r->program,e->name)!=e->receiver_native_target||
-                       !turret_invoke(r,&node->receiver,e->receiver_native_target,node->args,argc,line,&value))return 0;
+                       !R55B_CALL(r,R55B_NATIVE_EXPR,turret_invoke(r,&node->receiver,e->receiver_native_target,node->args,argc,line,&value)))return 0;
                 } else if(attachment_query_kind(e->receiver_native_target)) {
                     if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||
                        attachment_query_descriptor(r->program,e->name)!=e->receiver_native_target||
-                       !attachment_query_invoke(r,&node->receiver,e->receiver_native_target,node->args,argc,line,&value))return 0;
+                       !R55B_CALL(r,R55B_NATIVE_EXPR,attachment_query_invoke(r,&node->receiver,e->receiver_native_target,node->args,argc,line,&value)))return 0;
                 } else if(spatial_method_kind(e->receiver_native_target)) {
                     if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||
                        spatial_method_descriptor(r->program,e->name)!=e->receiver_native_target||
-                       !spatial_native_invoke(r,&node->receiver,e->receiver_native_target,node->args,argc,line,&value))return 0;
+                       !R55B_CALL(r,R55B_NATIVE_EXPR,spatial_native_invoke(r,&node->receiver,e->receiver_native_target,node->args,argc,line,&value)))return 0;
                 } else if(entity_coordinate(e->receiver_native_target)) {
                     if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||
                        entity_coordinate_descriptor(r->program,e->name)!=e->receiver_native_target||
-                       !entity_coordinate_invoke(r,&node->receiver,e->receiver_native_target,node->args,argc,line,&value))return 0;
+                       !R55B_CALL(r,R55B_NATIVE_EXPR,entity_coordinate_invoke(r,&node->receiver,e->receiver_native_target,node->args,argc,line,&value)))return 0;
                 } else if(entity_operation(e->receiver_native_target)) {
                     if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||
                        entity_operation_descriptor(r->program,e->name)!=e->receiver_native_target||
-                       !entity_operation_invoke(r,&node->receiver,e->receiver_native_target,node->args,argc,line,&value))return 0;
+                       !R55B_CALL(r,R55B_NATIVE_EXPR,entity_operation_invoke(r,&node->receiver,e->receiver_native_target,node->args,argc,line,&value)))return 0;
                 } else if(player_method_kind(e->receiver_native_target)) {
                     if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||
                        player_method_descriptor(r->program,e->name)!=e->receiver_native_target||
-                       !player_native_invoke(r,&node->receiver,e->receiver_native_target,node->args,argc,line,&value))return 0;
+                       !R55B_CALL(r,R55B_NATIVE_EXPR,player_native_invoke(r,&node->receiver,e->receiver_native_target,node->args,argc,line,&value)))return 0;
                 } else if(e->receiver_native_target==ENTITY_METHOD_ISCRITICAL) {
                     if(e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||
                        !callable_name_equal(r->program,e->name,"isincriticalsection")||
-                       !actor_critical_invoke(r,&node->receiver,ENTITY_METHOD_ISCRITICAL,node->args,argc,line,&value))return 0;
+                       !R55B_CALL(r,R55B_NATIVE_EXPR,actor_critical_invoke(r,&node->receiver,ENTITY_METHOD_ISCRITICAL,node->args,argc,line,&value)))return 0;
                 } else if(e->receiver_native_target==ENTITY_METHOD_GETNUMBER) {
                     if(!r->native_queries_enabled||e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||
                        (!callable_name_equal(r->program,e->name,"getentitynumber")&&!callable_name_equal(r->program,e->name,"getentnum"))||
-                       !native_entity_number(r,&node->receiver,argc,line,&value))return 0;
+                       !R55B_CALL(r,R55B_NATIVE_EXPR,native_entity_number(r,&node->receiver,argc,line,&value)))return 0;
                 } else if(!r->actor_spawners_enabled||!actor_spawn_native_descriptor(e->receiver_native_target)||
                    e->receiver_script_target!=-1||e->receiver_event_target!=-1||e->module[0]||
                    !callable_name_equal(r->program,e->name,actor_spawn_native_name(e->receiver_native_target))||
-                   !actor_spawn_expression(r,e->receiver_native_target,&node->receiver,node->args,argc,line,&value))return 0;
+                   !R55B_CALL(r,R55B_NATIVE_EXPR,actor_spawn_expression(r,e->receiver_native_target,&node->receiver,node->args,argc,line,&value)))return 0;
             } else if(e->kind==E_SCOPED_CALL||e->kind==E_METHOD_CALL||
                       e->call_binding==GSC_EXPR_TARGET_LOCAL_SCRIPT) {
                 Value self=e->kind==E_METHOD_CALL?node->receiver:f->self;
@@ -513,21 +513,21 @@ script_call:
             } else if(e->call_binding==GSC_EXPR_TARGET_HUDELEM_NATIVE) {
                 if(!r->hud_elements_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->argc||e->target!=GSC_HUDELEM_CREATE||find_func(r->program,e->owner_module,e->name)>=0||!hud_elem_global(r->program,e->name))return rfail(r,line,"invalid HUD expression binding");
                 if(!hud_create(r,e->argc,line,&value))return 0;
-            } else if(e->call_binding==R243_EXPR_TARGET_MOVE_DELTA){if(!r->move_delta_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||find_func(r->program,e->owner_module,e->name)>=0||!move_delta_descriptor(r->program,e->name)||move_delta_static_issues(r->program,e->args,e->argc)||!move_delta_call(r,node->args,e->argc,line,&value))return 0;
+            } else if(e->call_binding==R243_EXPR_TARGET_MOVE_DELTA){if(!r->move_delta_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||find_func(r->program,e->owner_module,e->name)>=0||!move_delta_descriptor(r->program,e->name)||move_delta_static_issues(r->program,e->args,e->argc)||!R55B_CALL(r,R55B_NATIVE_EXPR,move_delta_call(r,node->args,e->argc,line,&value)))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_START_ORIGIN_NATIVE) {
                 if((!r->start_origin_enabled&&!r->namespace_start_origin_enabled)||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=start_origin_descriptor(r->program,e->name)||
                    find_func(r->program,e->owner_module,e->name)>=0||!start_origin_descriptor(r->program,e->name)||
-                   start_origin_static_issues(r->program,e->args,e->argc)||!start_origin_selected_call(r,node->args,e->argc,line,e->target,&value))return 0;
+                   start_origin_static_issues(r->program,e->args,e->argc)||!R55B_CALL(r,R55B_NATIVE_EXPR,start_origin_selected_call(r,node->args,e->argc,line,e->target,&value)))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_AI_ARRAY_NATIVE) {
                 if(!r->ai_arrays_enabled||e->module[0]||e->kind!=E_NATIVE_CALL||e->target!=1||
                    find_func(r->program,e->owner_module,e->name)>=0||!ai_array_descriptor(r->program,e->name)||
-                   ai_array_static_issues(r->program,e->args,e->argc)||!ai_array_call(r,node->args,e->argc,line,&value))return 0;
+                   ai_array_static_issues(r->program,e->args,e->argc)||!R55B_CALL(r,R55B_NATIVE_EXPR,ai_array_call(r,node->args,e->argc,line,&value)))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_NODE_QUERY_NATIVE) {
                 if(!node_query_capability(r,e->target)||e->module[0]||e->kind!=E_NATIVE_CALL||
                    find_func(r->program,e->owner_module,e->name)>=0||
                    node_query_descriptor(r->program,e->name)!=e->target||
                    node_query_static_issues(r->program,e->target,e->args,e->argc)||
-                   !node_query_call(r,e->target,node->args,e->argc,line,&value))return 0;
+                   !R55B_CALL(r,R55B_NATIVE_EXPR,node_query_call(r,e->target,node->args,e->argc,line,&value)))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_VECTOR_MATH_NATIVE) {
                 if(e->kind!=E_NATIVE_CALL||!r->vector_math_enabled||e->module[0]||
                    vector_math_descriptor(r->program,e->name)!=e->target||
@@ -538,7 +538,7 @@ script_call:
                    entity_query_descriptor(r->program,e->name)!=e->target||
                    entity_query_static_issues(r->program,e->target,e->args,e->argc)||
                    find_func(r->program,e->owner_module,e->name)>=0||
-                   !entity_query_call(r,e->target,node->args,e->argc,line,&value))return 0;
+                   !R55B_CALL(r,R55B_NATIVE_EXPR,entity_query_call(r,e->target,node->args,e->argc,line,&value)))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_STRUCT_NATIVE) {
                 if(e->kind!=E_NATIVE_CALL||!r->structs_enabled||e->module[0]||
                    struct_descriptor(r->program,e->name)!=e->target||
@@ -568,7 +568,7 @@ script_call:
                    !spawner_array_call(r,e->target,node->args,e->argc,line,&value))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_ANIMATION_LENGTH_NATIVE) {
                 if(e->kind!=E_NATIVE_CALL||e->module[0]||!animation_length_descriptor(r->program,e->name)||
-                   find_func(r->program,e->owner_module,e->name)>=0||!animation_length_call(r,node->args,e->argc,e->float_arithmetic,line,&value))return 0;
+                   find_func(r->program,e->owner_module,e->name)>=0||!R55B_CALL(r,R55B_NATIVE_EXPR,animation_length_call(r,node->args,e->argc,e->float_arithmetic,line,&value)))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_MODEL_PART_NATIVE){
                 if(e->kind!=E_NATIVE_CALL||e->module[0]||!model_part_descriptor(r->program,e->name)||find_func(r->program,e->owner_module,e->name)>=0||!model_part_call(r,node->args,e->argc,line,&value))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_WEAPON_CLASSNAME_NATIVE){
@@ -580,7 +580,7 @@ script_call:
                 if(e->kind!=E_NATIVE_CALL||!r->native_queries_enabled||e->module[0]||
                    native_query_descriptor(r->program,e->name)!=e->target||
                    find_func(r->program,e->owner_module,e->name)>=0||
-                   !native_query_call(r,e->target,node->args,e->argc,line,&value))return 0;
+                   !R55B_CALL(r,R55B_NATIVE_EXPR,native_query_call(r,e->target,node->args,e->argc,line,&value)))return 0;
             } else if(e->call_binding==GSC_EXPR_TARGET_TAG_FX_NATIVE) {
                 if(e->kind!=E_NATIVE_CALL||!r->tag_fx_enabled||e->module[0]||
                    tag_fx_descriptor(r->program,e->name)!=e->target||
@@ -671,15 +671,15 @@ script_call:
             } else if(e->call_binding==GSC_EXPR_TARGET_ENTITY_NATIVE) {
                 if(!entity_global_expression_binding(r,e))
                     return rfail(r,line,"invalid entity expression binding");
-                if(!(e->target==ENTITY_GLOBAL_SPAWN?bridge_spawn(r,node->args,e->argc,
-                         e->argc==3?e->args[2]:-1,line,&value):
-                     e->target==ENTITY_GLOBAL_GETENTARRAY?array_getentarray(r,node->args,e->argc,line,&value):
-                     e->target==ENTITY_GLOBAL_ISAI?actor_presence_expression(r,node->args,e->argc,line,&value):
+                if(!(e->target==ENTITY_GLOBAL_SPAWN?R55B_CALL(r,R55B_NATIVE_EXPR,bridge_spawn(r,node->args,e->argc,
+                         e->argc==3?e->args[2]:-1,line,&value)):
+                     e->target==ENTITY_GLOBAL_GETENTARRAY?R55B_CALL(r,R55B_NATIVE_EXPR,array_getentarray(r,node->args,e->argc,line,&value)):
+                     e->target==ENTITY_GLOBAL_ISAI?R55B_CALL(r,R55B_NATIVE_EXPR,actor_presence_expression(r,node->args,e->argc,line,&value)):
                      e->target==ENTITY_GLOBAL_ISALIVE||e->target==ENTITY_GLOBAL_ISSENTIENT?
-                         predicate_expression(r,e->target,node->args,e->argc,line,&value):
-                     bridge_getent(r,node->args,e->argc,line,&value)))return 0;
+                         R55B_CALL(r,R55B_NATIVE_EXPR,predicate_expression(r,e->target,node->args,e->argc,line,&value)):
+                     R55B_CALL(r,R55B_NATIVE_EXPR,bridge_getent(r,node->args,e->argc,line,&value))))return 0;
             } else if(e->call_binding!=GSC_EXPR_TARGET_BUILTIN||
-                      !invoke_builtin_expression(r,e->target,node->args,e->argc,line,&value))return 0;
+                      !R55B_CALL(r,R55B_NATIVE_EXPR,invoke_builtin_expression(r,e->target,node->args,e->argc,line,&value)))return 0;
             done=1;break;
           default:return rfail(r,line,"unsupported resumable expression kind");
         }
@@ -689,7 +689,7 @@ script_call:
             state->node_count--;
             /* Dropping a node after a VM-local operation only removes guards. Recheck after
              * all other operations, including host-backed variable reads. */
-            if(!parentChecked && !results_guard_read(r,task,line,&parentChecked))return 0;
+            if(!parentChecked && !R55B_CALL(r,R55B_GUARD,results_guard_read(r,task,line,&parentChecked)))return 0;
             if(!state->node_count||state->nodes[state->node_count-1].frame!=frame) {
                 *out=value;pending->expression_active=0;return 1;
             }
@@ -711,7 +711,7 @@ script_call:
  * any host call or guard-changing VM mutation. It consumes that proof on
  * its first iteration; all existing post-host and result fences remain. */
 static int results_eval(GscRuntime *r,Task *task,Frame *f,int expression,Value *out,int line,int *budget){
- return results_eval_checked(r,task,f,expression,out,line,budget,0);
+ return R55B_CALL(r,R55B_EVAL,results_eval_checked(r,task,f,expression,out,line,budget,0));
 }
 static int results_return(GscRuntime *r,Task *task,const Value *value,int line) {
     ResultsTask *state=task->results;int frame=task->depth-1,consumed;Value returned=*value;
@@ -795,10 +795,10 @@ static int results_assign(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int 
     while(p->assign_phase<6) {
         int entryRead=0;
         const Expr *root=e->kind==E_INDEX?&r->program->expr[p->path.root]:e;
-        if(!flow_budget(r,budget,line)||!results_guard_read(r,task,line,&entryRead))return 0;
+        if(!flow_budget(r,budget,line)||!R55B_CALL(r,R55B_GUARD,results_guard_read(r,task,line,&entryRead)))return 0;
         if(p->assign_phase==0) {
             if(root->kind==E_FIELD) {
-                status=results_eval_checked(r,task,f,root->a,&p->owner,line,budget,entryRead);
+                status=R55B_CALL(r,R55B_EVAL,results_eval_checked(r,task,f,root->a,&p->owner,line,budget,entryRead));
                 if(status!=1)return status;
                 if(p->owner.kind==V_ARRAY)return rfail(r,line,"array size field is read-only");
                 if(!state_receiver(r,&p->owner,line))return 0;
@@ -809,7 +809,7 @@ static int results_assign(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int 
                     p->current=p->path.base;
                 } else if(op&&!state_field_read(r,&p->owner,root->name,line,&p->current))return 0;
             } else if(e->kind==E_INDEX||op) {
-                status=results_eval_checked(r,task,f,e->kind==E_INDEX?p->path.root:lhs,&p->current,line,budget,entryRead);
+                status=R55B_CALL(r,R55B_EVAL,results_eval_checked(r,task,f,e->kind==E_INDEX?p->path.root:lhs,&p->current,line,budget,entryRead));
                 if(status!=1)return status;
                 if(e->kind==E_INDEX)p->path.base=p->current;
             }
@@ -820,7 +820,7 @@ static int results_assign(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int 
             if(p->current.kind!=V_UNDEFINED&&p->current.kind!=V_ARRAY)
                 return rfail(r,line,"indexed write requires array containers");
             n=p->key_index;
-            status=results_eval_checked(r,task,f,r->program->expr[p->chain[p->path.count-1-n]].b,&key,line,budget,entryRead);
+            status=R55B_CALL(r,R55B_EVAL,results_eval_checked(r,task,f,r->program->expr[p->chain[p->path.count-1-n]].b,&key,line,budget,entryRead));
             if(status!=1)return status;
             if(!results_guard(r,task,line)||!array_key(r,&key,line,&p->path.keys[n]))return 0;
             memset(&next,0,sizeof(next));
@@ -838,7 +838,7 @@ static int results_assign(GscRuntime *r,Task *task,Frame *f,int lhs,int rhs,int 
         } else if(p->assign_phase==3) {
             memset(&p->value,0,sizeof(p->value));p->value.kind=V_NUMBER;p->value.integer=1;p->value.number=1;
             if(rhs>=0) {
-                status=results_eval_checked(r,task,f,rhs,&p->value,line,budget,entryRead);
+                status=R55B_CALL(r,R55B_EVAL,results_eval_checked(r,task,f,rhs,&p->value,line,budget,entryRead));
                 if(status!=1)return status;
             }
             p->assign_phase=4;
@@ -918,7 +918,7 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
     state=task->results;
     while(task->status==TASK_READY&&task->depth) {
         int entryRead=0;
-        if(!flow_budget(r,budget,0)||!results_guard_read(r,task,0,&entryRead))return 0;
+        if(!flow_budget(r,budget,0)||!R55B_CALL(r,R55B_GUARD,results_guard_read(r,task,0,&entryRead)))return 0;
         f=&task->frames[task->depth-1];fun=&g->funcs[f->fn];p=&state->pending[task->depth-1];
         if(!p->active) {
             /* A top-level scheduler invocation owns this fresh statement.
@@ -951,20 +951,20 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
         else switch(i->kind) {
           case I_EMPTY:break;
           case I_SET:
-            status=results_eval_checked(r,task,f,i->expr,&p->value,i->line,budget,entryRead);
+            status=R55B_CALL(r,R55B_EVAL,results_eval_checked(r,task,f,i->expr,&p->value,i->line,budget,entryRead));
             if(status==1&&!assignment(r,f,i->name,p->value,i->line))return 0;
             break;
           case I_GAME_SET:case I_MUTATE:
             status=results_assign(r,task,f,i->dest,i->expr,i->kind==I_MUTATE?i->op:0,i->line,budget);break;
           case I_SWITCH:
             if(!r->scalar_switch_enabled)return rfail(r,i->line,"unsupported switch runtime semantics");
-            status=results_eval_checked(r,task,f,i->expr,&p->value,i->line,budget,entryRead);
+            status=R55B_CALL(r,R55B_EVAL,results_eval_checked(r,task,f,i->expr,&p->value,i->line,budget,entryRead));
             if(status==1&&!flow_switch_select(r,f,p->instruction,&p->value,i->line))return 0;
             break;
           case I_FOR:case I_WHILE:case I_DO_WHILE:
             status=results_loop(r,task,f,p,i->line,budget);break;
           case I_RETURN:
-            if(i->expr>=0)status=results_eval_checked(r,task,f,i->expr,&p->value,i->line,budget,entryRead);
+            if(i->expr>=0)status=R55B_CALL(r,R55B_EVAL,results_eval_checked(r,task,f,i->expr,&p->value,i->line,budget,entryRead));
             if(status==1) {
                 if(!results_return(r,task,&p->value,i->line))return 0;
                 continue;
@@ -988,7 +988,7 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
                     NULL,p->args,i->args,i->argc,i->line))return 0;
                 break;
             }
-            status=results_eval_checked(r,task,f,i->expr,&p->value,i->line,budget,entryRead);
+            status=R55B_CALL(r,R55B_EVAL,results_eval_checked(r,task,f,i->expr,&p->value,i->line,budget,entryRead));
             if(status!=1)break;
             if(i->kind==I_JZ) {
                 if(!results_condition(r,&p->value,i->line,&passes))return 0;
@@ -1091,9 +1091,9 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
             if(status!=1)break;
             if(!results_guard(r,task,i->line))return 0;
             if(i->kind==I_CALL&&i->target<0) {
-                if(!invoke_builtin_statement(r,-1-i->target,p->args,i->argc,i->line))return 0;
+                if(!R55B_CALL(r,R55B_NATIVE_STMT,invoke_builtin_statement(r,-1-i->target,p->args,i->argc,i->line)))return 0;
             } else if(i->kind==I_METHOD&&i->receiver_binding_kind==GSC_RECEIVER_TARGET_HUDELEM_NATIVE) {
-                if(!hud_method_invoke(r,&p->receiver,i->receiver_native_target,p->args,i->argc,i->line))return 0;
+                if(!R55B_CALL(r,R55B_NATIVE_STMT,hud_method_invoke(r,&p->receiver,i->receiver_native_target,p->args,i->argc,i->line)))return 0;
             } else if(i->kind==I_METHOD&&i->receiver_binding_kind==GSC_RECEIVER_TARGET_ENTITY_EVENT) {
                 if(r->event_payloads_enabled) {
                     if(!run_payload_event(r,task,f,i->receiver_event_target,&p->receiver,
@@ -1102,27 +1102,27 @@ static int run_task_results(GscRuntime *r,Task *task,int *budget) {
             } else if(i->kind==I_METHOD&&i->receiver_binding_kind==GSC_RECEIVER_TARGET_ENTITY_NATIVE) {
                 int descriptor=i->receiver_native_target;
                 Value ignored;
-                if(!(descriptor==ENTITY_METHOD_SCRIPTED_START?r243_scripted_start_invoke(r,&p->receiver,p->args,i->argc,i->line):descriptor==ENTITY_METHOD_SCRIPT_STATE?r243_script_state_invoke(r,&p->receiver,p->args,i->argc,i->line):descriptor==ENTITY_METHOD_SCRIPTED_PREFIX?r243_scripted_prefix_invoke(r,&p->receiver,p->args,i->argc,i->line):R243ActorFloatMask(descriptor)?r243_actor_float_call(r,&p->receiver,descriptor,i->argc,i->line,&ignored):descriptor==COD1_ALLOWED_STANCES_METHOD?cod1_stance_invoke(r,&p->receiver,p->args,i->argc,i->line,NULL,1):descriptor==R243_STANCE_METHOD?r243_stance_call(r,&p->receiver,p->args,i->argc,i->line,&ignored):descriptor==R243_ANIMTIME_METHOD?r243_animtime_call(r,&p->receiver,p->args,i->argc,i->line,&ignored):descriptor==ENTITY_METHOD_ACTOR_DROP?actor_drop_invoke(r,&p->receiver,p->args,i->argc,i->line):actor_look_kind(descriptor)?actor_look_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored):actor_animation_kind(descriptor)?actor_animation_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line):turret_animation_kind(descriptor)?turret_animation_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line):turret_method_kind(descriptor)?turret_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored):
-                     attachment_query_kind(descriptor)?attachment_query_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored):
-                     descriptor==504?entity_method_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line):
-                 (descriptor==503||descriptor==COD1_SET_GOAL_POS_METHOD||descriptor==COD1_SET_GOAL_ENTITY_METHOD)?actor_goal_invoke(r,descriptor,&p->receiver,p->args,i->argc,i->line):
-                     (descriptor==502 || descriptor==COD1_ROTATE_VELOCITY || descriptor==COD1_MOVE_GRAVITY || descriptor==COD1_LAUNCH || descriptor==COD1_ROTATE_ROLL || descriptor==COD1_ROTATE_TO || descriptor==COD1_MOVE_TO)?yaw_motion_invoke(r,descriptor,&p->receiver,p->args,i->argc,i->line):
-                     (descriptor==501||descriptor==GSC_CONNECTPATHS_METHOD||descriptor==GSC_DISCONNECTPATHS_METHOD||descriptor==GSC_SOLID_METHOD||descriptor==GSC_GRENADE_TOUCH_METHOD||descriptor==GSC_GRENADE_BOUNCE_METHOD)?entity_collision_invoke(r,descriptor,&p->receiver,i->argc,i->line):
-                     spatial_method_kind(descriptor)?spatial_native_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored):
-                     entity_coordinate(descriptor)?entity_coordinate_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored):
-                     entity_link_method(descriptor)?entity_link_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line):
-                     vehicle_method_kind(descriptor)?vehicle_method_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line):
-                     entity_operation(descriptor)?entity_operation_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored):
-                     player_method_kind(descriptor)?player_native_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored):
+                if(!(descriptor==ENTITY_METHOD_SCRIPTED_START?R55B_CALL(r,R55B_NATIVE_STMT,r243_scripted_start_invoke(r,&p->receiver,p->args,i->argc,i->line)):descriptor==ENTITY_METHOD_SCRIPT_STATE?R55B_CALL(r,R55B_NATIVE_STMT,r243_script_state_invoke(r,&p->receiver,p->args,i->argc,i->line)):descriptor==ENTITY_METHOD_SCRIPTED_PREFIX?R55B_CALL(r,R55B_NATIVE_STMT,r243_scripted_prefix_invoke(r,&p->receiver,p->args,i->argc,i->line)):R243ActorFloatMask(descriptor)?R55B_CALL(r,R55B_NATIVE_STMT,r243_actor_float_call(r,&p->receiver,descriptor,i->argc,i->line,&ignored)):descriptor==COD1_ALLOWED_STANCES_METHOD?R55B_CALL(r,R55B_NATIVE_STMT,cod1_stance_invoke(r,&p->receiver,p->args,i->argc,i->line,NULL,1)):descriptor==R243_STANCE_METHOD?R55B_CALL(r,R55B_NATIVE_STMT,r243_stance_call(r,&p->receiver,p->args,i->argc,i->line,&ignored)):descriptor==R243_ANIMTIME_METHOD?R55B_CALL(r,R55B_NATIVE_STMT,r243_animtime_call(r,&p->receiver,p->args,i->argc,i->line,&ignored)):descriptor==ENTITY_METHOD_ACTOR_DROP?R55B_CALL(r,R55B_NATIVE_STMT,actor_drop_invoke(r,&p->receiver,p->args,i->argc,i->line)):actor_look_kind(descriptor)?R55B_CALL(r,R55B_NATIVE_STMT,actor_look_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored)):actor_animation_kind(descriptor)?R55B_CALL(r,R55B_NATIVE_STMT,actor_animation_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line)):turret_animation_kind(descriptor)?R55B_CALL(r,R55B_NATIVE_STMT,turret_animation_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line)):turret_method_kind(descriptor)?R55B_CALL(r,R55B_NATIVE_STMT,turret_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored)):
+                     attachment_query_kind(descriptor)?R55B_CALL(r,R55B_NATIVE_STMT,attachment_query_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored)):
+                     descriptor==504?R55B_CALL(r,R55B_NATIVE_STMT,entity_method_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line)):
+                 (descriptor==503||descriptor==COD1_SET_GOAL_POS_METHOD||descriptor==COD1_SET_GOAL_ENTITY_METHOD)?R55B_CALL(r,R55B_NATIVE_STMT,actor_goal_invoke(r,descriptor,&p->receiver,p->args,i->argc,i->line)):
+                     (descriptor==502 || descriptor==COD1_ROTATE_VELOCITY || descriptor==COD1_MOVE_GRAVITY || descriptor==COD1_LAUNCH || descriptor==COD1_ROTATE_ROLL || descriptor==COD1_ROTATE_TO || descriptor==COD1_MOVE_TO)?R55B_CALL(r,R55B_NATIVE_STMT,yaw_motion_invoke(r,descriptor,&p->receiver,p->args,i->argc,i->line)):
+                     (descriptor==501||descriptor==GSC_CONNECTPATHS_METHOD||descriptor==GSC_DISCONNECTPATHS_METHOD||descriptor==GSC_SOLID_METHOD||descriptor==GSC_GRENADE_TOUCH_METHOD||descriptor==GSC_GRENADE_BOUNCE_METHOD)?R55B_CALL(r,R55B_NATIVE_STMT,entity_collision_invoke(r,descriptor,&p->receiver,i->argc,i->line)):
+                     spatial_method_kind(descriptor)?R55B_CALL(r,R55B_NATIVE_STMT,spatial_native_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored)):
+                     entity_coordinate(descriptor)?R55B_CALL(r,R55B_NATIVE_STMT,entity_coordinate_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored)):
+                     entity_link_method(descriptor)?R55B_CALL(r,R55B_NATIVE_STMT,entity_link_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line)):
+                     vehicle_method_kind(descriptor)?R55B_CALL(r,R55B_NATIVE_STMT,vehicle_method_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line)):
+                     entity_operation(descriptor)?R55B_CALL(r,R55B_NATIVE_STMT,entity_operation_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored)):
+                     player_method_kind(descriptor)?R55B_CALL(r,R55B_NATIVE_STMT,player_native_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line,&ignored)):
                      descriptor>=ENTITY_METHOD_ATTACH&&descriptor<=ENTITY_METHOD_STOPLOOPSOUND?
-                     entity_method_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line):
+                     R55B_CALL(r,R55B_NATIVE_STMT,entity_method_invoke(r,&p->receiver,descriptor,p->args,i->argc,i->line)):
                      actor_spawn_native_descriptor(descriptor)?
-                     actor_spawn_expression(r,descriptor,&p->receiver,p->args,i->argc,i->line,&ignored):
-                     descriptor==ENTITY_METHOD_GETNUMBER?native_entity_number(r,&p->receiver,i->argc,i->line,&ignored):
-                     descriptor==ENTITY_METHOD_SETMODEL?bridge_setmodel(r,&p->receiver,p->args,i->argc,i->line):
+                     R55B_CALL(r,R55B_NATIVE_STMT,actor_spawn_expression(r,descriptor,&p->receiver,p->args,i->argc,i->line,&ignored)):
+                     descriptor==ENTITY_METHOD_GETNUMBER?R55B_CALL(r,R55B_NATIVE_STMT,native_entity_number(r,&p->receiver,i->argc,i->line,&ignored)):
+                     descriptor==ENTITY_METHOD_SETMODEL?R55B_CALL(r,R55B_NATIVE_STMT,bridge_setmodel(r,&p->receiver,p->args,i->argc,i->line)):
                      descriptor==ENTITY_METHOD_HIDE||descriptor==ENTITY_METHOD_SHOW?
-                     bridge_setvisible(r,&p->receiver,descriptor,i->argc,i->line):
-                     bridge_setorigin(r,&p->receiver,p->args,i->argc,i->line)))return 0;
+                     R55B_CALL(r,R55B_NATIVE_STMT,bridge_setvisible(r,&p->receiver,descriptor,i->argc,i->line)):
+                     R55B_CALL(r,R55B_NATIVE_STMT,bridge_setorigin(r,&p->receiver,p->args,i->argc,i->line))))return 0;
             } else {
                 Value self=(i->kind==I_METHOD||i->kind==I_METHOD_THREAD)?p->receiver:f->self;
                 target=(i->kind==I_METHOD||i->kind==I_METHOD_THREAD)?i->receiver_script_target:i->target;
