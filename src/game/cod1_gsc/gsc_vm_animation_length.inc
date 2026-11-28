@@ -3,13 +3,17 @@
  * double-round: a non-midpoint rational is at least 1/(2*120) of a binary32
  * significand unit from its midpoint, far beyond their rounding error. */
 static int animation_length_ratio(uint32_t frames,uint32_t fps,unsigned rounding,uint32_t *out,int *exact) {
-    uint64_t numerator=frames,denominator=fps,remainder,significand;int exponent=0,n;
+    uint64_t numerator=frames,denominator=fps,remainder,significand,scaled;int exponent=0;
     if(!out||!exact||frames>4095||!fps||fps>120||rounding>GSC_FLOAT_ROUND_ZERO)return 0;
     if(!frames){*out=0;*exact=1;return 1;}
     while(numerator<denominator){numerator*=2;--exponent;}
     while(numerator>=denominator*2){denominator*=2;++exponent;}
-    remainder=numerator-denominator;significand=1;
-    for(n=0;n<23;++n){remainder*=2;significand<<=1;if(remainder>=denominator){++significand;remainder-=denominator;}}
+    /* After normalization denominator <= 4095 and numerator < 2*denominator.
+     * The 23 fractional bits are exactly the quotient of the scaled remainder;
+     * its residue is the same one used by the original rounding decisions. */
+    scaled=(numerator-denominator)<<23;
+    significand=UINT64_C(0x800000)+scaled/denominator;
+    remainder=scaled%denominator;
     *exact=remainder==0;
     if((rounding==GSC_FLOAT_ROUND_NEAREST&&(remainder*2>denominator||(remainder*2==denominator&&(significand&1))))||
        (rounding==GSC_FLOAT_ROUND_UP&&remainder))++significand;
