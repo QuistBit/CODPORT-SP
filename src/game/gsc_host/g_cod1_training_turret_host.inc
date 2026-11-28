@@ -443,7 +443,7 @@ int FoleyRunNoteBucket(const GscEntityRef *actor,int now,uint64_t generation,
  }
  C1FP35_End(C1FP35_BUCKET_ADMIT,profile,1);
  profile=C1FP35_Begin(level.time);
- ok=gsc_session_r237_run_current_bucket(gscTestSession,gscTestId,generation,error,sizeof(error));
+ ok=GscProfilePhase53(gscTestSession,gscTestId,generation,0,NULL,error,sizeof(error),GSC53_NOTE);
  C1FP35_End(C1FP35_BUCKET_VM,profile,ok);
  profile=C1FP35_Begin(level.time);
  ok=FoleyBucketPost53(actor,now,generation,retirementLease,retired,ok,error);
