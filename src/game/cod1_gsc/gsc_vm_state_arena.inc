@@ -1,5 +1,6 @@
 /* Private storage policy only. Slots never move relative to their indices,
  * stale owners are never reclaimed, and capacity is not native pool parity. */
+#include "gsc_vm_state_bound55.inc"
 static uint32_t state_fields_limit(const GscRuntime*r){return r->state_field_limit?r->state_field_limit:GSC_STATE_FIELD_CAPACITY;}
 static size_t state_fields_used(const GscRuntime*r){int n;size_t used=0;for(n=0;n<r->state_field_capacity;n++)used+=r->state_fields[n].used!=0;return used;}
 /* Count only the free slots needed by the caller. Search the unused tail
@@ -59,12 +60,15 @@ static int state_fields_reserve_free(GscRuntime*r,size_t empty,int line){
  if(capacity<needed||capacity>limit||capacity>INT_MAX||capacity>SIZE_MAX/sizeof(*candidate))return rfail(r,line,"state arena capacity overflow");
  candidate=state_storage_allocate(r,capacity,sizeof(*candidate),line);if(!candidate)return 0;
  if(r->state_field_capacity)memcpy(candidate,r->state_fields,(size_t)r->state_field_capacity*sizeof(*candidate));
- old=r->state_fields;r->state_fields=candidate;r->state_field_capacity=(int)capacity;
+ old=r->state_fields;
+ if(!r->state_field_capacity)r->state_field_scan_end_plus1=1;
+ else if(r->state_field_scan_end_plus1<0||r->state_field_scan_end_plus1-1>r->state_field_capacity)r->state_field_scan_end_plus1=0;
+ r->state_fields=candidate;r->state_field_capacity=(int)capacity;
  /* Capacity may remain enlarged after a failing free hook. All old records
   * are retained; no new used field/array value has been published. */
  if(!state_storage_free(r,old))return 0;return !r->error[0];
 }
-static void state_fields_release(GscRuntime*r){StateField*old=r->state_fields;r->state_fields=NULL;r->state_field_capacity=0;if(old)(void)state_storage_free(r,old);}
+static void state_fields_release(GscRuntime*r){StateField*old=r->state_fields;r->state_fields=NULL;r->state_field_capacity=0;r->state_field_scan_end_plus1=0;if(old)(void)state_storage_free(r,old);}
 int gsc_runtime_select_owned_state_arena(GscRuntime*r,uint32_t limit){
  if(!r)return 0;if(r->state_arena_busy)return rfail(r,0,"state arena selection reentered");
  if(!r->program||!r->state_enabled||r->started||r->advancing||r->executing_task||r->task_count||r->error[0]||
