@@ -392,6 +392,8 @@ struct GscRuntime { GscDeveloperScriptSelection developer_admission;int develope
                     uint64_t hud_elements_operation,hud_elements_epoch;GscHudElemRef hud_refs[GSC_HUDELEM_CAPACITY];int hud_live[GSC_HUDELEM_CAPACITY];
                     uint64_t map_model_start_stamp; Task *array_dispatch_root; int array_next_scan, array_next_entry_scan;
                     int array_count, array_entry_count;
+                    int array_lookup_entries;
+                    uint16_t array_lookup_head[GSC_ARRAY_CONTAINER_CAPACITY],array_lookup_tail[GSC_ARRAY_CONTAINER_CAPACITY],array_lookup_next[GSC_ARRAY_ENTRY_CAPACITY];
                     ArrayContainer arrays[GSC_ARRAY_CONTAINER_CAPACITY];
                     ArrayEntry array_entries[GSC_ARRAY_ENTRY_CAPACITY]; int bsp_construction_only,bsp_promoted; };
 
