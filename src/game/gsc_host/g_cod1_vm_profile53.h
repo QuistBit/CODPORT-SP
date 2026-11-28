@@ -11,13 +11,14 @@ static int GscProfilePhase53(GscSession *s,uint64_t id,uint64_t generation,int e
  int (*expired)(void),char *error,size_t cap,unsigned lane){
  static uint64_t epoch,hz;
  static int known,frame,enabled,shadow,last[GSC53_LANES];
+ static struct {uint64_t ticks,checks,matches,mismatches,skipped,rows;} queueTotals[GSC53_LANES];
  static const char *names[GSC53_LANES]={"note","current","exclusive"};
  uint64_t e=G_Cod1EntityMapEpoch(),start,end,elapsed;
  int now=level.time,ok;
  GscR237Profile53 p={0};LARGE_INTEGER q;
  if(!known||epoch!=e){
   unsigned i;for(i=0;i<GSC53_LANES;i++)last[i]=-1;
-  epoch=e;known=0;
+  memset(queueTotals,0,sizeof(queueTotals));epoch=e;known=0;
  }
  if(!known||frame!=level.framenum){
   enabled=trap_Cvar_VariableIntegerValue("g_cod1VmProfile")==1;
@@ -31,6 +32,12 @@ static int GscProfilePhase53(GscSession *s,uint64_t id,uint64_t generation,int e
  end=GscProfileClock53();
  if(!start||!end||end<start||e!=G_Cod1EntityMapEpoch()||now!=level.time)return ok;
  elapsed=end-start;
+ if(shadow){
+  queueTotals[lane].ticks+=p.ticks[GSC53_QUEUE_SHADOW];
+  queueTotals[lane].checks+=p.shadow_checks;queueTotals[lane].matches+=p.shadow_matches;
+  queueTotals[lane].mismatches+=p.shadow_mismatches;queueTotals[lane].skipped+=p.shadow_skipped;
+  queueTotals[lane].rows+=p.shadow_rows;
+ }
  /* One line per slow phase (>=8ms), or a periodic sample per lane. Never
   * print per task. Log outside the measured Session call. */
  if(elapsed>=hz/125||!ok||p.clock_failures||p.shadow_mismatches||last[lane]<0||now<last[lane]||(int64_t)now-last[lane]>=1000){
@@ -45,10 +52,10 @@ static int GscProfilePhase53(GscSession *s,uint64_t id,uint64_t generation,int e
    (unsigned long long)p.ticks[GSC53_SESSION_ADMIT],(unsigned long long)p.ticks[GSC53_SESSION_PRE],
    (unsigned long long)p.ticks[GSC53_SESSION_POST],(unsigned long long)p.ticks[GSC53_SESSION_FINISH],
    (unsigned long long)p.ticks[GSC53_TASK_GUARD],(unsigned long long)p.calls[GSC53_TASK_GUARD]);
-  if(shadow)G_Printf("[OPT_QUEUE54] lane=%s epoch=%llu now=%d gen=%llu hz=%llu ticks=%llu checks=%llu matches=%llu mismatches=%llu skipped=%llu rows=%llu\n",
+  if(shadow)G_Printf("[OPT_QUEUE54] scope=epoch lane=%s epoch=%llu now=%d gen=%llu hz=%llu ticks=%llu checks=%llu matches=%llu mismatches=%llu skipped=%llu rows=%llu\n",
    names[lane],(unsigned long long)e,now,(unsigned long long)generation,(unsigned long long)hz,
-   (unsigned long long)p.ticks[GSC53_QUEUE_SHADOW],(unsigned long long)p.shadow_checks,(unsigned long long)p.shadow_matches,
-   (unsigned long long)p.shadow_mismatches,(unsigned long long)p.shadow_skipped,(unsigned long long)p.shadow_rows);
+   (unsigned long long)queueTotals[lane].ticks,(unsigned long long)queueTotals[lane].checks,(unsigned long long)queueTotals[lane].matches,
+   (unsigned long long)queueTotals[lane].mismatches,(unsigned long long)queueTotals[lane].skipped,(unsigned long long)queueTotals[lane].rows);
  }
  return ok;
 }
