@@ -83,9 +83,21 @@ int gsc_session_resume_game_frame(GscSession *s,uint64_t id,int now,uint64_t gen
     s->busy=0;
     return valid;
 }
-static int session_r237_phase53(GscSession *s,uint64_t id,uint64_t generation,
-    int exclusive,int (*expired)(void),char *error,size_t cap,GscR237Profile53 *p) {
-    GscR237FrameView frame;int ok;
+static uint64_t session_profile_begin53D(GscR237Profile53 *p){return p&&p->clock?p->clock():0;}
+static void session_profile_end53D(GscR237Profile53 *p,unsigned stage,uint64_t start){
+    uint64_t end;if(!p)return;
+    ++p->calls[stage];end=p->clock?p->clock():0;
+    if(!start||!end||end<start){++p->clock_failures;return;}
+    p->ticks[stage]+=end-start;
+}
+static int session_r237_resources53D(GscSession *s,GscR237Profile53 *p,unsigned stage){
+    uint64_t t=session_profile_begin53D(p);
+    int ok=session_r237_frame_resources_current(s);
+    session_profile_end53D(p,stage,t);return ok;
+}
+static int session_r237_admit53D(GscSession *s,uint64_t id,uint64_t generation,
+    int exclusive,char *error,size_t cap) {
+    GscR237FrameView frame;
     if((cap&&!error)||session_r237_frame_private(s,error,cap))return 0;
     if(!session_enter(s,error,cap))return 0;
     if(!session_id_matches(s,id)||!s->r237_frame_buckets_enabled||!s->runtime||
@@ -97,7 +109,15 @@ static int session_r237_phase53(GscSession *s,uint64_t id,uint64_t generation,
         return session_failed(s,"R237 frame physical host time differs",error,cap);
     if((exclusive!=0 && exclusive!=1) || (s->r237_suspended_phase && s->r237_suspended_phase!=1+exclusive))
         return session_leave_rejected(s,"R237 unfinished frame phase differs",error,cap);
-    if(!session_r237_frame_resources_current(s))
+    return 1;
+}
+static int session_r237_phase53(GscSession *s,uint64_t id,uint64_t generation,
+    int exclusive,int (*expired)(void),char *error,size_t cap,GscR237Profile53 *p) {
+    uint64_t t=session_profile_begin53D(p);
+    int ok=session_r237_admit53D(s,id,generation,exclusive,error,cap);
+    session_profile_end53D(p,GSC53_SESSION_ADMIT,t);
+    if(!ok)return 0;
+    if(!session_r237_resources53D(s,p,GSC53_SESSION_PRE))
         return session_failed(s,"R237 frame resources retired before phase",error,cap);
     ok=p?gsc_r237_frame_phase_profile53(s->runtime,generation,exclusive,expired,p):
         gsc_r237_frame_phase_slice(s->runtime,generation,exclusive,expired);
@@ -106,9 +126,10 @@ static int session_r237_phase53(GscSession *s,uint64_t id,uint64_t generation,
         return 2;
     }
     s->r237_suspended_phase=0;
-    if(ok&&!s->abort_requested&&!session_r237_frame_resources_current(s))
+    if(ok&&!s->abort_requested&&!session_r237_resources53D(s,p,GSC53_SESSION_POST))
         return session_failed(s,"R237 frame resources retired during phase",error,cap);
-    return session_after_vm(s,ok,error,cap);
+    t=session_profile_begin53D(p);ok=session_after_vm(s,ok,error,cap);
+    session_profile_end53D(p,GSC53_SESSION_FINISH,t);return ok;
 }
 int gsc_session_r237_frame_phase_slice(GscSession *s,uint64_t id,uint64_t generation,
     int exclusive,int (*expired)(void),char *error,size_t cap) {
