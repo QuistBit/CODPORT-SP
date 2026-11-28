@@ -243,11 +243,12 @@ static int Cod1SS_Basename(const char *s) {
  for(i=0;i<n;++i){unsigned c=(unsigned char)s[i];if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-'||c=='.'))return 0;}
  return s[0]!='.'&&strstr(s,"..")==NULL;
 }
+#include "bg_cod1_sound_absence56.inc"
 /* Full table scan, fail-closed on cross-table ambiguity. Original table merge/
  * override order has NOT been recovered. All eligible variants must exist;
  * there is no first-four truncation, direct-file shortcut, or RTCW fallback. */
-static Cod1SSResourceStatus Cod1ScriptSoundResolveMode(const Cod1SSFiles *files,const char *alias,
- const char *map,Cod1SSPlan *out,Cod1SSDiagnostic *diag,int allowVoice,int loopMode) {
+static Cod1SSResourceStatus Cod1ScriptSoundResolveModeCached56(const Cod1SSFiles *files,const char *alias,
+ const char *map,Cod1SSPlan *out,Cod1SSDiagnostic *diag,int allowVoice,int loopMode,Cod1SSAbsentCache56 *cache) {
  char names[COD1_SS_LIST_BYTES],path[COD1_SS_PATH_BYTES],*data;size_t offsets[COD1_SS_TABLES],at=0,n,size;int count,i,j,read_ok,status,found=0,current;
  Cod1SSPlan result,candidate;Cod1SSDiagnostic detail;
  if(diag){diag->reason=COD1_SS_REASON_NONE;diag->line=0;}
@@ -265,7 +266,7 @@ static Cod1SSResourceStatus Cod1ScriptSoundResolveMode(const Cod1SSFiles *files,
   if(files->current(files->user)!=1)return Cod1SS_Fail(diag,COD1_SS_REASON_STALE,0);
   read_ok=files->read(files->user,path,&data,&size);current=files->current(files->user);
   status=COD1_SS_RESOURCE_HELD;detail.reason=COD1_SS_REASON_VFS;detail.line=0;
-  if(current==1&&read_ok==1&&data&&size&&size<=COD1_SS_TABLE_BYTES)status=Cod1ScriptSoundParseTableMode(data,size,alias,map,&candidate,&detail,allowVoice,loopMode);
+  if(current==1&&read_ok==1&&data&&size&&size<=COD1_SS_TABLE_BYTES)status=Cod1SS_ParseCached56(cache,path,data,size,alias,map,&candidate,&detail,allowVoice,loopMode);
   /* A provider-owned buffer is released even when its read failed or lease
    * expired. No subsequent state/output publication occurs after stale release. */
   if(data)files->release(files->user,data);
@@ -280,6 +281,10 @@ static Cod1SSResourceStatus Cod1ScriptSoundResolveMode(const Cod1SSFiles *files,
  }
  if(files->current(files->user)!=1)return Cod1SS_Fail(diag,COD1_SS_REASON_STALE,0);
  *out=result;return COD1_SS_RESOURCE_READY;
+}
+static Cod1SSResourceStatus Cod1ScriptSoundResolveMode(const Cod1SSFiles *files,const char *alias,
+ const char *map,Cod1SSPlan *out,Cod1SSDiagnostic *diag,int allowVoice,int loopMode) {
+ return Cod1ScriptSoundResolveModeCached56(files,alias,map,out,diag,allowVoice,loopMode,NULL);
 }
 static Cod1SSResourceStatus Cod1ScriptSoundResolveSelected(const Cod1SSFiles *files,const char *alias,
  const char *map,Cod1SSPlan *out,Cod1SSDiagnostic *diag,int allowVoice) {
