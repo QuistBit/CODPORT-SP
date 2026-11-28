@@ -365,7 +365,7 @@ static int r238_array_cow_commit(GscRuntime*r,Task*task,Frame*f,const ArrayLvalu
  for(n=0;n<touchedCount;n++)r->array_entries[touched[n]]=s->members[touched[n]];
  if(s->entries>oldEntries)memcpy(r->array_entries+oldEntries,s->members+oldEntries,
      (size_t)(s->entries-oldEntries)*sizeof(*r->array_entries));
- r->array_count=s->arrays;r->array_entry_count=s->entries;
+ r->array_count=s->arrays;r->array_entry_count=s->entries;array_index_appended55(r,oldEntries);
  if(global_root)r->game_array_root=root_value;
  else if(root->kind==E_VAR){if(local_index<0){local_index=f->local_count++;str_copy(f->locals[local_index].name,64,root->name);}f->locals[local_index].value=root_value;}
  else{StateField field;memset(&field,0,sizeof(field));field.used=1;field.owner_kind=path->owner.kind;
