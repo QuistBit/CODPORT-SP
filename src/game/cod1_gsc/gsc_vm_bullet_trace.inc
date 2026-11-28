@@ -32,7 +32,7 @@ static int bullet_trace_call(GscRuntime*r,const Value*args,int argc,int line,Val
   if(n==0){entry.value.kind=V_NUMBER;entry.value.number=result.fraction;}
   else if(n==1||n==3){entry.value.kind=V_VECTOR;for(k=0;k<3;k++)entry.value.vector[k]=n==1?result.position[k]:result.normal[k];}
   else if(n==4){entry.value.kind=V_STRING;strcpy(entry.value.str,surfaces[result.surface]);}
-  r->array_entries[r->array_entry_count++]=entry;
+  array_entry_append55(r,&entry);
  }
  r->arrays[staged.array-1].count=5;r->arrays[staged.array-1].numeric_count=0;*out=staged;return 1;
 }
