@@ -200,7 +200,7 @@ int gsc_runtime_restore_game_array(GscRuntime *r,const GscGameArrayOwner *owner,
     if(g) {
         for(n=0;n<g->array_count;n++){r->arrays[n].count=g->arrays[n].count;r->arrays[n].numeric_count=g->arrays[n].numeric_count;r->arrays[n].keybinding=0;}
         for(n=0;n<g->entry_count;n++){ArrayEntry *e=&r->array_entries[n];e->owner=g->entries[n].owner;e->key=g->entries[n].key;game_portable_restore_value(&g->entries[n].value,r->array_token,&e->value);}
-        r->array_count=g->array_count;r->array_entry_count=g->entry_count;
+        r->array_count=g->array_count;r->array_entry_count=g->entry_count;array_index_rebuild55(r);
     } else {memset(&r->arrays[0],0,sizeof(r->arrays[0]));r->array_count=1;}
     memset(&root,0,sizeof(root));root.kind=V_ARRAY;root.array=1;root.object_token=r->array_token;
     r->game_array_root=root;r->game_array_enabled=1;if(error&&size)error[0]=0;return 1;
