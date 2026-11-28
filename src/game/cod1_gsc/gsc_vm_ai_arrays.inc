@@ -88,7 +88,7 @@ done:
     for(n=0;n<snapshot.count;n++) {
         ArrayEntry entry;memset(&entry,0,sizeof(entry));entry.owner=(int)staged.array;
         entry.key.kind=V_NUMBER;entry.key.number=(int)n;entry.value.kind=V_ENTITY;
-        entry.value.entity=snapshot.members[n].entity;r->array_entries[r->array_entry_count++]=entry;
+        entry.value.entity=snapshot.members[n].entity;array_entry_append55(r,&entry);
     }
     r->arrays[staged.array-1].count=r->arrays[staged.array-1].numeric_count=(int)snapshot.count;
     *out=staged;return 1;
