@@ -104,11 +104,11 @@ static int r237_dispatch_task(GscRuntime *r,Task *chosen,int *budget,uint64_t st
  return 1;
 }
 static int r237_drain_bucket_slice(GscRuntime *r,int *budget,int (*expired)(void),int *next_pending){
- Task *chosen;int n,bucket,next;uint64_t stamp=r237_owner_stamp(r);
+ Task *chosen;int n,bucket,next;uint64_t stamp=r237_owner_stamp(r);R237QueueView39 view;
  while(!r->error[0]){
-  if(!r237_owner_current(r,stamp))return rfail(r,0,"R237 drain time-root retired");
+  if(!r237_queue_view39(r,&view)||view.stamp!=stamp)return rfail(r,0,"R237 drain time-root retired");
   /* No callbacks during this scan: cursor and task directory are stable. */
-  bucket=r237_bucket(r);next=INT32_MAX;chosen=NULL;
+  bucket=view.bucket;next=INT32_MAX;chosen=NULL;
   for(n=0;n<r->task_count;n++){
    Task *t=task_at(r,n);
    if(t->status!=TASK_READY&&t->status!=TASK_SLEEP)continue;
@@ -173,8 +173,9 @@ int gsc_r237_frame_begin(GscRuntime *r,int host_now,uint64_t *out_generation){
  r->r237_frame_budget=MAX_STEPS;r->r237_frame_generation++;*out_generation=r->r237_frame_generation;return 1;
 }
 static int r237_frame_valid(GscRuntime *r,uint64_t generation){
- return gsc_runtime_r237_frame_buckets_selected(r)&&r237_owner_current(r,r->r237_frame_time_root)&&r->started&&r->r237_frame_open&&generation&&
- generation==r->r237_frame_generation&&r237_bucket(r)>=0&&r237_bucket(r)<=r->r237_frame_target_ms&&
+ R237QueueView39 view;
+ return gsc_runtime_r237_frame_buckets_selected(r)&&r237_queue_view39(r,&view)&&view.stamp==r->r237_frame_time_root&&r->started&&r->r237_frame_open&&generation&&
+ generation==r->r237_frame_generation&&view.bucket>=0&&view.bucket<=r->r237_frame_target_ms&&
  r->r237_frame_target_ms==r->now_ms&&r->r237_frame_target_ms<=INT32_C(0xffffff);
 }
 int gsc_r237_frame_phase_slice(GscRuntime *r,uint64_t generation,int exclusive,int (*expired)(void)){
