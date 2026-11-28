@@ -108,7 +108,7 @@ static int delete_transaction_release_main(GscRuntime *r,const GscEntityRef *ent
            !state_ref_equal(&owner->certificate.owner,entity)||
            memcmp(&owner->certificate,&task->certificate,sizeof(owner->certificate)))
             return rfail(r,line,"freed actor MAIN receipt or task identity changed");
-        entity_task_retire(task);
+        r54_dirty_mark_task(r,task);entity_task_retire(task);
         task->retained_owner_refs--;
         memset(owner,0,sizeof(*owner));
     }
@@ -136,7 +136,7 @@ static int delete_transaction_invoke(GscRuntime *r,const Value *receiver,int lin
         rfail(r,line,"delete transaction host mutated borrowed request or services");goto done;
     }
     if(!delete_transaction_current(&lease)) {
-        if(!r->error[0]){entity_task_retire(lease.task);ok=1;}goto done;
+        if(!r->error[0]){r54_dirty_mark_task(r,lease.task);entity_task_retire(lease.task);ok=1;}goto done;
     }
     if(accepted!=1){rfail(r,line,"delete transaction refused: %s",why[0]?why:"host callback failed");goto done;}
     if(!lease.notified){rfail(r,line,"delete transaction omitted death notification");goto done;}
