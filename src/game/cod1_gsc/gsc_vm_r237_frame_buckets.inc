@@ -27,6 +27,14 @@ int gsc_runtime_r237_frame_view(const GscRuntime *r,GscR237FrameView *out){
  v.frame_open=r->r237_frame_open;v.frame_generation=r->r237_frame_generation;*out=v;return 1;
 }
 #include "gsc_vm_r237_queue_admission.inc"
+#include "gsc_r237_profile53.h"
+static uint64_t r237_profile_begin53(GscR237Profile53 *p){return p&&p->clock?p->clock():0;}
+static void r237_profile_end53(GscR237Profile53 *p,unsigned stage,uint64_t start){
+ uint64_t end;if(!p)return;
+ ++p->calls[stage];end=p->clock?p->clock():0;
+ if(!start||!end||end<start){++p->clock_failures;return;}
+ p->ticks[stage]+=end-start;
+}
 /* Original wait_value4645F3: nonnegative float seconds must be strictly
  * below FLOAT16777 at55B8C8. FMUL1000 stores FLOAT32, then PC53 adds2^-30
  * before nearest-even FISTP. Animation cadence's <=1-second domain is not a
@@ -80,8 +88,8 @@ static int r237_timed_wait(GscRuntime *r,Task *t,const Value *value,int line){
  if(bootstrap)r->training_tower_bootstrap_waited=1;
  return 1;
 }
-static int r237_dispatch_task(GscRuntime *r,Task *chosen,int *budget,uint64_t stamp){
- int ok;
+static int r237_dispatch_task53(GscRuntime *r,Task *chosen,int *budget,uint64_t stamp,GscR237Profile53 *p){
+ int ok;uint64_t t;
   chosen->r237_enqueued=0;chosen->r237_insertion=0;chosen->r243_time_root_incarnation=0;
   if(!refresh_state_context(r,chosen)||!refresh_wait_owner(r,chosen))return 0;
   if(!r237_owner_current(r,stamp))return rfail(r,0,"R237 time-root changed during queued certificate callbacks");
@@ -91,7 +99,9 @@ static int r237_dispatch_task(GscRuntime *r,Task *chosen,int *budget,uint64_t st
    r->executing_task=chosen;
    configured_precache_dispatch_begin(r,chosen);
    if(r->r238_array_value_cow_enabled)r->array_dispatch_root=chosen;
+   t=r237_profile_begin53(p);
    ok=r->results_enabled?run_task_results(r,chosen,budget):run_task(r,chosen,budget);
+   r237_profile_end53(p,GSC53_SOURCE,t);
    r->array_dispatch_root=NULL;r->array_next_scan=0;r->array_next_entry_scan=0;
    configured_precache_dispatch_end(r,chosen);
    r->executing_task=NULL;
@@ -103,39 +113,51 @@ static int r237_dispatch_task(GscRuntime *r,Task *chosen,int *budget,uint64_t st
   if(chosen->status==TASK_DEAD&&chosen->results){GSC_RUNTIME_FREE(chosen->results);chosen->results=NULL;}
  return 1;
 }
-static int r237_drain_bucket_slice(GscRuntime *r,int *budget,int (*expired)(void),int *next_pending){
- Task *chosen;int n,bucket,next;uint64_t stamp=r237_owner_stamp(r);R237QueueView39 view;
+static int r237_dispatch_task(GscRuntime *r,Task *chosen,int *budget,uint64_t stamp){return r237_dispatch_task53(r,chosen,budget,stamp,NULL);}
+static int r237_drain_bucket_slice53(GscRuntime *r,int *budget,int (*expired)(void),int *next_pending,GscR237Profile53 *p){
+ Task *chosen;int n,bucket,next,ok,before;uint64_t stamp=r237_owner_stamp(r),timer53;R237QueueView39 view;
  while(!r->error[0]){
   if(!r237_queue_view39(r,&view)||view.stamp!=stamp)return rfail(r,0,"R237 drain time-root retired");
   /* No callbacks during this scan: cursor and task directory are stable. */
   bucket=view.bucket;next=INT32_MAX;chosen=NULL;
+  timer53=r237_profile_begin53(p);
+  if(p){++p->scans;if((unsigned)r->task_count>p->max_tasks)p->max_tasks=(unsigned)r->task_count;}
   for(n=0;n<r->task_count;n++){
    Task *t=task_at(r,n);
    if(t->status!=TASK_READY&&t->status!=TASK_SLEEP)continue;
    if(t->r243_time_root_incarnation!=stamp||!t->r237_enqueued||!t->r237_insertion||t->wake_ms<bucket||t->wake_ms>INT32_C(0xffffff))
-    return rfail(r,0,"R237 pending task has invalid queue ownership");
+    {if(p)p->examined+=(uint64_t)n+1;r237_profile_end53(p,GSC53_SCAN,timer53);return rfail(r,0,"R237 pending task has invalid queue ownership");}
    if(t->wake_ms==bucket){
-    if(chosen&&t->r237_insertion==chosen->r237_insertion)return rfail(r,0,"R237 duplicate queue insertion identity");
+    if(chosen&&t->r237_insertion==chosen->r237_insertion){if(p)p->examined+=(uint64_t)n+1;r237_profile_end53(p,GSC53_SCAN,timer53);return rfail(r,0,"R237 duplicate queue insertion identity");}
     if(!chosen||t->r237_insertion>chosen->r237_insertion)chosen=t;
    }else if(t->wake_ms<next)next=t->wake_ms;
   }
+  if(p)p->examined+=(uint64_t)n;
+  r237_profile_end53(p,GSC53_SCAN,timer53);
   if(!chosen){if(next_pending)*next_pending=next;return 1;}
-  if(!r237_dispatch_task(r,chosen,budget,stamp))return 0;
+  before=p?*budget:0;timer53=r237_profile_begin53(p);
+  ok=r237_dispatch_task53(r,chosen,budget,stamp,p);
+  if(p){++p->dispatches;if(before>*budget)p->budget_spent+=(uint64_t)((int64_t)before-*budget);}
+  r237_profile_end53(p,GSC53_DISPATCH,timer53);
+  if(!ok)return 0;
   if(expired && expired())return 2;
  }
  return 0;
 }
 static int r237_drain_bucket(GscRuntime *r,int *budget){
- return r237_drain_bucket_slice(r,budget,NULL,NULL);
+ return r237_drain_bucket_slice53(r,budget,NULL,NULL,NULL);
 }
-static int r237_finish_operation(GscRuntime *r,int ok){
+static int r237_finish_operation53(GscRuntime *r,int ok,GscR237Profile53 *p){
+ uint64_t t;
  /* A genuine bootstrap operation may finish before the configured root is
   * born. UNBORN grants nothing and remains armable only by the actual root. */
  if(r->configured_precache_phase!=CONFIGURED_PRECACHE_UNBORN)configured_precache_close(r);
  r->execution_budget=NULL;r->executing_task=NULL;r->advancing=0;
  if(!ok||r->error[0])return 0;
- endon_collect_retired(r);return array_collect_safe_point(r);
+ t=r237_profile_begin53(p);endon_collect_retired(r);r237_profile_end53(p,GSC53_ENDON,t);
+ t=r237_profile_begin53(p);ok=array_collect_safe_point(r);r237_profile_end53(p,GSC53_ARRAY,t);return ok;
 }
+static int r237_finish_operation(GscRuntime *r,int ok){return r237_finish_operation53(r,ok,NULL);}
 /* GAME 1ED87 enters the cached map function synchronously. The ordinary
  * export7 frame runner later owns the other due/retained continuations. */
 static int r237_run_start_root(GscRuntime *r,uint64_t serial){
@@ -178,13 +200,13 @@ static int r237_frame_valid(GscRuntime *r,uint64_t generation){
  generation==r->r237_frame_generation&&view.bucket>=0&&view.bucket<=r->r237_frame_target_ms&&
  r->r237_frame_target_ms==r->now_ms&&r->r237_frame_target_ms<=INT32_C(0xffffff);
 }
-int gsc_r237_frame_phase_slice(GscRuntime *r,uint64_t generation,int exclusive,int (*expired)(void)){
+static int r237_frame_phase_slice53(GscRuntime *r,uint64_t generation,int exclusive,int (*expired)(void),GscR237Profile53 *p){
  int ok=1,next;
  if(r&&r237_busy(r))return rfail(r,0,"reentrant R237 frame scheduler call");
  if((exclusive!=0 && exclusive!=1) || !r237_frame_valid(r,generation))return 0;
  r->advancing=1;r->execution_budget=&r->r237_frame_budget;
  while(!exclusive || r237_bucket(r)<r->r237_frame_target_ms){
-  ok=r237_drain_bucket_slice(r,&r->r237_frame_budget,expired,&next);
+  ok=r237_drain_bucket_slice53(r,&r->r237_frame_budget,expired,&next,p);
   if(ok==2){
    /* The selected Task has already suspended or retired. There is no active
     * stack, borrowed receiver, or array root to retain across the host call.
@@ -199,7 +221,14 @@ int gsc_r237_frame_phase_slice(GscRuntime *r,uint64_t generation,int exclusive,i
   if(!r237_bucket_set(r,next,r->r237_frame_time_root)){ok=0;break;}
  }
  if(ok && exclusive)r->r237_frame_open=0;
- return r237_finish_operation(r,ok);
+ return r237_finish_operation53(r,ok,p);
+}
+int gsc_r237_frame_phase_slice(GscRuntime *r,uint64_t generation,int exclusive,int (*expired)(void)){
+ return r237_frame_phase_slice53(r,generation,exclusive,expired,NULL);
+}
+int gsc_r237_frame_phase_profile53(GscRuntime *r,uint64_t generation,int exclusive,int (*expired)(void),GscR237Profile53 *p){
+ if(!p||!gsc_runtime_storage_separate(r,p,sizeof(*p))||!p->clock||!p->hz)return 0;
+ return r237_frame_phase_slice53(r,generation,exclusive,expired,p);
 }
 int gsc_r237_run_current_bucket(GscRuntime *r,uint64_t generation){
  return gsc_r237_frame_phase_slice(r,generation,0,NULL);
