@@ -21,6 +21,7 @@ typedef struct {
  int queue_shadow,queue_dirty;
  uint64_t shadow_checks,shadow_rows,shadow_matches,shadow_mismatches,shadow_skipped;
  uint64_t dirty_checks,dirty_matches,dirty_mismatches,dirty_skipped,dirty_feeds,dirty_audit_rows,dirty_reseeds;
+ uint64_t dirty_mark_lookups,dirty_mark_probes,dirty_map_rows,dirty_mark_misses;
 } GscR237Profile53;
 int gsc_r237_frame_phase_profile53(struct GscRuntime *,uint64_t,int,int (*)(void),GscR237Profile53 *);
 int gsc_session_r237_frame_phase_profile53(struct GscSession *,uint64_t,uint64_t,int,int (*)(void),char *,size_t,GscR237Profile53 *);
