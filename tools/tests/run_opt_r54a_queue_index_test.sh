@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+read -r -a flags <<< "${CFLAGS:--std=c11 -O2 -Wall -Wextra -Werror}"
+"${CC:-cc}" "${flags[@]}" -Isrc/game/cod1_gsc tools/tests/opt_r54a_queue_index_test.c -o "$tmp/test"
+"$tmp/test"
