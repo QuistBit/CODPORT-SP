@@ -4,7 +4,9 @@
 #include <stddef.h>
 struct GscRuntime;
 struct GscSession;
-enum { GSC53_SCAN, GSC53_DISPATCH, GSC53_SOURCE, GSC53_ENDON, GSC53_ARRAY, GSC53_STAGES };
+enum { GSC53_SCAN, GSC53_DISPATCH, GSC53_SOURCE, GSC53_ENDON, GSC53_ARRAY,
+ GSC53_SESSION_ADMIT, GSC53_SESSION_PRE, GSC53_SESSION_POST, GSC53_SESSION_FINISH,
+ GSC53_TASK_GUARD, GSC53_STAGES };
 /* Opt-in, synchronous, same owner thread. Caller zero-initializes this record
  * and supplies a pure monotonic clock (0 on failure), with no VM or GAME
  * calls, allocations or reentry. Never retained beyond the call.
