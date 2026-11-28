@@ -88,7 +88,7 @@ static int anim_data_current(GscRuntime *r,Task *task){
     if(task&&!r237_owner_current(r,time_root))return rfail(r,0,"time-root changed during animation namespace revalidation");
     if(namespace_identity&&(!r->animation_namespace_enabled||r->animation_namespace.identity!=namespace_identity||r->array_token!=runtime_identity))return rfail(r,0,"animation namespace identity changed during callback");
     if(current!=0&&current!=1)return rfail(r,0,"invalid anim owner certificate result");
-    if(!current&&task)entity_task_retire(task);
+    if(!current&&task){r54_dirty_mark_task(r,task);entity_task_retire(task);}
     return current;
 }
 static int anim_data_read(GscRuntime *r,int line,Value *out){
