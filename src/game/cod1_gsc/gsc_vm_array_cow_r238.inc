@@ -227,6 +227,50 @@ static int r238_stage_reaches(GscRuntime*r,const R238ArrayStage*s,uint32_t start
  }
  return 0;
 }
+/* One callback-free walk for the ordered ancestor checks. A malformed
+ * reachable edge wins over any later target, unless the first target was
+ * already popped: the original first search would then stop successfully.
+ * Without malformed edges, reachability of any target suffices. Preserve
+ * LIFO discovery order and the original diagnostic for invalid start. */
+static int r238_stage_reaches_any(GscRuntime*r,const R238ArrayStage*s,uint32_t start,
+ const uint32_t*targets,int count,int line){
+ uint32_t stack[GSC_ARRAY_CONTAINER_CAPACITY];
+ unsigned char seen[GSC_ARRAY_CONTAINER_CAPACITY]={0},wanted[GSC_ARRAY_CONTAINER_CAPACITY]={0};
+ int head[GSC_ARRAY_CONTAINER_CAPACITY],links[GSC_ARRAY_ENTRY_CAPACITY];
+ int top=0,n,hit=0,indexed=0,walked=0;
+ if(count<1)return 0;
+ if(!start||s->arrays<1||s->arrays>GSC_ARRAY_CONTAINER_CAPACITY||start>(uint32_t)s->arrays||
+    s->entries<0||s->entries>GSC_ARRAY_ENTRY_CAPACITY){
+  for(n=0;n<count;n++){int result=r238_stage_reaches(r,s,start,targets[n],line);if(result)return result;}
+  return 0;
+ }
+ for(n=0;n<count;n++)if(targets[n]&&targets[n]<=(uint32_t)s->arrays)wanted[targets[n]-1]=1;
+ stack[top++]=start;seen[start-1]=1;
+ while(top){
+  uint32_t id=stack[--top];
+  if(id==targets[0])return 1;
+  if(wanted[id-1])hit=1;
+  /* Flat graphs keep the original first scan. Build the edge directory
+   * only when another container needs expansion, preserving source order. */
+  if(!indexed&&walked){
+   for(n=0;n<s->arrays;n++)head[n]=-1;
+   for(n=s->entries-1;n>=0;n--){
+    int owner=s->members[n].owner;
+    if(owner<1||owner>s->arrays||s->members[n].value.kind!=V_ARRAY)continue;
+    links[n]=head[owner-1];head[owner-1]=n;
+   }
+   indexed=1;
+  }
+  walked=1;
+  for(n=indexed?head[id-1]:0;indexed?n>=0:n<s->entries;n=indexed?links[n]:n+1)
+   if(s->members[n].owner==(int)id&&s->members[n].value.kind==V_ARRAY){
+    uint32_t child=s->members[n].value.array;
+    if(!child||child>(uint32_t)s->arrays){rfail(r,line,"R238 array COW nested RHS handle invalid");return -1;}
+    if(!seen[child-1]){seen[child-1]=1;stack[top++]=child;}
+   }
+ }
+ return hit;
+}
 static int r238_array_cow_commit(GscRuntime*r,Task*task,Frame*f,const ArrayLvalue*path,
  const Value*value,int state_index,int local_index,int global_root,int line){
  Value stored_value=*value;value=&stored_value;
@@ -302,7 +346,7 @@ static int r238_array_cow_commit(GscRuntime*r,Task*task,Frame*f,const ArrayLvalu
    s->containers[owner-1].count++;if(key.kind==V_NUMBER)s->containers[owner-1].numeric_count++;
   }
   if(n==path->count-1){
-   if(value->kind==V_ARRAY){int k;for(k=0;k<=n;k++){int cyclic=r238_stage_reaches(r,s,value->array,ancestors[k],line);if(cyclic<0)goto done;if(cyclic){rfail(r,line,"array cycles are unsupported");goto done;}}}
+   if(value->kind==V_ARRAY){int cyclic=r238_stage_reaches_any(r,s,value->array,ancestors,n+1,line);if(cyclic<0)goto done;if(cyclic){rfail(r,line,"array cycles are unsupported");goto done;}}
    s->members[index].value=*value;if(index<oldEntries)touched[touchedCount++]=index;
   }else{
    parent=index;current=s->members[index].value;
