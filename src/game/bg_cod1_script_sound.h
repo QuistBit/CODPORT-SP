@@ -148,17 +148,28 @@ static int Cod1SS_Loadspec(const char *spec,const char *map) {
  }
  return !excluded&&(!positive||match);
 }
-static Cod1SSResourceStatus Cod1ScriptSoundParseTableMode(const char *data,size_t size,
- const char *alias,const char *map,Cod1SSPlan *out,Cod1SSDiagnostic *diag,int allowVoice,int loopMode) {
+#include "bg_cod1_sound_rows56.inc"
+static Cod1SSResourceStatus Cod1ScriptSoundParseTableIndexed56(const char *data,size_t size,
+ const char *alias,const char *map,Cod1SSPlan *out,Cod1SSDiagnostic *diag,int allowVoice,int loopMode,const Cod1SSRows56 *index) {
  enum {NAME,SEQUENCE,FILEPATH,VMIN,VMAX,PMIN,PMAX,DMIN,DMAX,CHANNEL,TYPE,PROB,LOOP,MASTER,LOADSPEC,SUBTITLE,NFIELDS};
  const char *keys[NFIELDS]={"name","sequence","file","vol_min","vol_max","pitch_min","pitch_max","dist_min","dist_max","channel","type","probability","loop","masterslave","loadspec","subtitle"};
  const char *p,*end,*le,*next;int idx[NFIELDS],field[64],header=0,col,bad,k,selected;unsigned line=0,j;
  char cell[256],values[NFIELDS][256];Cod1SSPlan plan;Cod1SSVariant v;size_t aliaslen;
+ uint32_t hash=0,slot=0;
+ if(index&&index->ready!=1)index=NULL;
  if(diag){diag->reason=COD1_SS_REASON_NONE;diag->line=0;}
  if(!data||!size||size>COD1_SS_TABLE_BYTES||!out||!Cod1SS_Length(alias,COD1_SS_TEXT_BYTES,&aliaslen)||!aliaslen||!Cod1SS_Token(alias,COD1_SS_TEXT_BYTES)||Cod1SS_Loadspec("",map)<0||memchr(data,0,size))return Cod1SS_Fail(diag,COD1_SS_REASON_INPUT,0);
  memset(&plan,0,sizeof(plan));memcpy(plan.alias,alias,aliaslen+1);for(k=0;k<NFIELDS;++k)idx[k]=-1;
  p=data;end=p+size;if(size>=3&&(unsigned char)p[0]==239&&(unsigned char)p[1]==187&&(unsigned char)p[2]==191)p+=3;
- while(p<end){++line;le=Cod1SS_Delimiter(p,end,'\r','\n');next=le;if(next<end&&*next=='\r')++next;if(next<end&&*next=='\n')++next;
+ if(index){hash=Cod1SS_RowHash56(alias);slot=index->head[hash%COD1_SS56_BUCKETS];}
+ while(p<end){
+  if(header&&index){
+   const Cod1SSRow56 *row;
+   while(slot&&index->rows[slot-1].hash!=hash)slot=index->rows[slot-1].next;
+   if(!slot)break;
+   row=&index->rows[slot-1];slot=row->next;p=data+row->offset;line=row->line-1;
+  }
+  ++line;le=Cod1SS_Delimiter(p,end,'\r','\n');next=le;if(next<end&&*next=='\r')++next;if(next<end&&*next=='\n')++next;
   bad=0;for(k=0;k<NFIELDS;++k)values[k][0]=0;col=0;
   if(p==le){p=next;continue;}
   /* Empty/# first columns are ignored by the original CSV's own header. */
@@ -218,6 +229,10 @@ static Cod1SSResourceStatus Cod1ScriptSoundParseTableMode(const char *data,size_
  if(!header)return Cod1SS_Fail(diag,COD1_SS_REASON_HEADER,line);
  if(!plan.count)return COD1_SS_RESOURCE_NONE;
  *out=plan;return COD1_SS_RESOURCE_READY;
+}
+static Cod1SSResourceStatus Cod1ScriptSoundParseTableMode(const char *data,size_t size,
+ const char *alias,const char *map,Cod1SSPlan *out,Cod1SSDiagnostic *diag,int allowVoice,int loopMode) {
+ return Cod1ScriptSoundParseTableIndexed56(data,size,alias,map,out,diag,allowVoice,loopMode,NULL);
 }
 static Cod1SSResourceStatus Cod1ScriptSoundParseTableSelected(const char *data,size_t size,
  const char *alias,const char *map,Cod1SSPlan *out,Cod1SSDiagnostic *diag,int allowVoice) {
