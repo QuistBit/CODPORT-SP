@@ -65,31 +65,34 @@ static int results_readonly_receiver(GscRuntime *r,const Value *v,int *read) {
  * the ordered guard below. A mismatch falls back there for its original
  * error/retirement order. No failed speculative read may set r->error. */
 static int results_readonly_path(GscRuntime *r,Task *task,int frame,const ResultsPending *p){
-    Value root,current,next;const Expr *e;int k,index;
+    const Value *root=NULL,*current,*next;const Expr *e;int k,index;
     if(p->path.root<0||p->path.root>=r->program->expr_count)return 0;
-    e=&r->program->expr[p->path.root];memset(&root,0,sizeof(root));
+    e=&r->program->expr[p->path.root];
+    /* This speculative path contains only VM-owned reads, no host callbacks.
+     * NULL denotes the original zero-initialized V_UNDEFINED value. Borrow
+     * only inside this check; never retain an address across evaluator calls. */
     if(e->kind==E_VAR){
-        Frame *f=&task->frames[frame];
+        const Frame *f=&task->frames[frame];
         if(game_array_selected(r,e->name)){
             if(!game_array_value_valid(r,&r->game_array_root))return 0;
-            root=r->game_array_root;
+            root=&r->game_array_root;
         }else for(k=f->local_count-1;k>=0;k--)if(!strcmp(f->locals[k].name,e->name)){
-            root=f->locals[k].value;break;
+            root=&f->locals[k].value;break;
         }
     }else{
         index=state_field_index(r,&p->path.owner,e->name);
-        if(index>=0)root=r->state_fields[index].value;
+        if(index>=0)root=&r->state_fields[index].value;
     }
-    if(!results_same_value(&root,&p->path.base))return 0;
-    current=p->path.base;
+    if(root?!results_same_value(root,&p->path.base):p->path.base.kind!=V_UNDEFINED)return 0;
+    current=&p->path.base;
     for(k=0;k<p->key_index&&k<p->path.count-1;k++){
-        memset(&next,0,sizeof(next));
-        if(current.kind==V_ARRAY){
-            if(!array_value_valid(r,current.array))return 0;
-            index=array_entry_find(r,current.array,&p->path.keys[k]);
-            if(index>=0)next=r->array_entries[index].value;
+        next=NULL;
+        if(current&&current->kind==V_ARRAY){
+            if(!array_value_valid(r,current->array))return 0;
+            index=array_entry_find(r,current->array,&p->path.keys[k]);
+            if(index>=0)next=&r->array_entries[index].value;
         }
-        if(!results_same_ancestor(&next,&p->ancestors[k]))return 0;
+        if(next?!results_same_ancestor(next,&p->ancestors[k]):p->ancestors[k].kind!=V_UNDEFINED)return 0;
         current=next;
     }
     return 1;
