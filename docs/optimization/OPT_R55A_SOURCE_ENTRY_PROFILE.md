@@ -1,0 +1,14 @@
+# OPT R55A — worst continuation entry attribution
+Base R54D3B e629424383efd0a6b929d709094ea4723781b207. Integration 4bad5d62745aebc5b54a566d8497ae12fb66b91e. Master unchanged.
+
+## Why
+Steam Deck R54D3A log SHA256 4fcb88d260c57b52a7493f9e240efef4f73a12b7e564ba81752a73160908685a: 909 published VM phase samples, source=70832003/72564975 QPC ticks (97.61%), scan=169996 (0.234%). Largest individual sampled phase source=33.9195 ms. Source covers interpreter and synchronous host/nested execution; neither actual opcodes nor individual native calls are attributed yet.
+
+## Implemented
++set g_cod1VmProfile 1 +set g_cod1VmSource 1. Independent of both queue observers. Default off. On each timed source continuation, snapshot the top frame identity before source execution can pop frames, retire the task, or enter nested scripts; bounded copy of module and function, serial, depth, fn, pc and source line when PC is in range. Preserve existing source timer, count and execution budget semantics; retain the maximum positive-duration sample per phase. On clock failure retain previous sample. No new timer per instruction, native call or task beyond the existing source pair, no new runtime state or allocations. Existing ordinary unprofiled path remains, except flag test. Emit one OPT_SOURCE55 record on existing sampled OPT_VM53 phase when a valid positive-duration sample exists. Entry PC/line is a cursor label, may not be the pending or most expensive instruction. Duration inclusive of nested work; not self time, not exact culprit attribution. Copying names adds some overhead outside source timer but inside dispatch/total. The sample is per phase, not cumulative. No performance gain claimed.
+
+## Verification
+Actual local GCC C11 O2 strict, Clang C11 O2 strict and Clang ASan/UBSan O1 all executed successfully. Per compiler 16384 mocked source calls, 13344 accepted max samples (5089 known identity, 8255 unknown), 3040 preserved prior sample due to clock failure or non-maximum duration. Compare original direct source call against new helper return, task/Runtime state, budget, source timer/counter/failure totals. Mock source pops all frames and changes serial to ensure capture is pre-call. 49152 repeated scenarios across compilers. Blob identities checked against local files: header dfad6538a2f75b6b92724177e1e2eb4c4a6ac213, helper ccc2420f29bdb5c3bc77aa722e51d3cb7eb90899, test 932ea6df8a37ee863ed0254d521451f1b4117d23. Runner bash tools/tests/run_opt_r55a_source_test.sh. Full native MSVC build, GAME logging and live call attribution not yet tested. Container GitHub DNS unavailable; actual direct compile commands used locally, not full checkout.
+
+## Next
+R55B break down interpreter guard, evaluation and host-call boundaries with opt-in aggregate instrumentation, preserving nested timing semantics. Native run with queue diagnostic off after next integration point. Do not equate entry function with expensive nested function.
