@@ -169,18 +169,20 @@ static int r238_stage_new(GscRuntime*r,R238ArrayStage*s,int line,uint32_t*out){
  * CopyArray duplicates a shared nested DAG once for each copied parent entry. */
 static int r238_stage_clone(GscRuntime*r,R238ArrayStage*s,uint32_t source,int line,uint32_t*out){
  struct{uint32_t old_id,new_id;int next;}stack[GSC_ARRAY_CONTAINER_CAPACITY];int top=0,n,k,index;
+ int heads[GSC_ARRAY_CONTAINER_CAPACITY],links[GSC_ARRAY_ENTRY_CAPACITY],indexed=0;
  if(!array_value_valid(r,source)||!r238_stage_new(r,s,line,out))return 0;
  s->containers[*out-1].keybinding=r->arrays[source-1].keybinding;
  stack[0].old_id=source;stack[0].new_id=*out;stack[0].next=0;top=1;
  while(top){
   int frame=top-1;uint32_t old=stack[frame].old_id,fresh=stack[frame].new_id;
-  for(n=stack[frame].next;n<r->array_entry_count;n++)if(r->array_entries[n].owner==(int)old)break;
-  if(n==r->array_entry_count){
+  if(indexed)n=stack[frame].next;
+  else for(n=stack[frame].next;n<r->array_entry_count;n++)if(r->array_entries[n].owner==(int)old)break;
+  if(indexed?n<0:n==r->array_entry_count){
    if(s->containers[fresh-1].count!=r->arrays[old-1].count||
       s->containers[fresh-1].numeric_count!=r->arrays[old-1].numeric_count)return rfail(r,line,"R238 array COW source counts invalid");
    top--;continue;
   }
-  stack[frame].next=n+1;
+  stack[frame].next=indexed?links[n]:n+1;
   if(s->entries>=GSC_ARRAY_ENTRY_CAPACITY)return rfail(r,line,"R238 array COW entry capacity");
   index=s->entries++;s->members[index]=r->array_entries[n];s->members[index].owner=(int)fresh;
   s->containers[fresh-1].count++;if(s->members[index].key.kind==V_NUMBER)s->containers[fresh-1].numeric_count++;
@@ -190,7 +192,24 @@ static int r238_stage_clone(GscRuntime*r,R238ArrayStage*s,uint32_t source,int li
    for(k=0;k<top;k++)if(stack[k].old_id==child)return rfail(r,line,"R238 array COW cycle refused");
    if(top>=GSC_ARRAY_CONTAINER_CAPACITY||!r238_stage_new(r,s,line,&copy))return 0;
    s->containers[copy-1].keybinding=r->arrays[child-1].keybinding;
-   s->members[index].value.array=copy;stack[top].old_id=child;stack[top].new_id=copy;stack[top].next=0;top++;
+   /* Flat clones keep their original one-pass scan. At the first nested
+    * child, index the immutable source arena in source-entry order. The
+    * parent is still the only stack frame. Repeated DAG occurrences retain
+    * separate copies and the same depth-first insertion order. Invalid
+    * unrelated owners are ignored here, as in the original clone scan. */
+   if(!indexed&&top==1&&r->array_count>0&&r->array_count<=GSC_ARRAY_CONTAINER_CAPACITY&&
+      r->array_entry_count>=0&&r->array_entry_count<=GSC_ARRAY_ENTRY_CAPACITY){
+    int i,owner;
+    for(i=0;i<r->array_count;i++)heads[i]=-1;
+    for(i=r->array_entry_count-1;i>=0;i--){
+     owner=r->array_entries[i].owner;
+     if(owner<1||owner>r->array_count)continue;
+     links[i]=heads[owner-1];heads[owner-1]=i;
+    }
+    stack[frame].next=links[n];indexed=1;
+   }
+   s->members[index].value.array=copy;stack[top].old_id=child;stack[top].new_id=copy;
+   stack[top].next=indexed?heads[child-1]:0;top++;
   }
  }
  return 1;
