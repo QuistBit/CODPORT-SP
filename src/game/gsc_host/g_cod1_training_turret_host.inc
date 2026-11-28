@@ -416,15 +416,9 @@ int FoleySameBucketRetirement(const GscEntityRef *actor,const cod1ActorLease_t *
  }
  return 0;
 }
-int FoleyRunNoteBucket(const GscEntityRef *actor,int now,uint64_t generation,
-                       const cod1ActorLease_t *retirementLease,int *retired){
- GscR237FrameView view;char error[GSC_SESSION_ERROR_CAP]={0};int ok;
- if(!retired)return 0;
- *retired=0;
- if(!actor||now!=level.time||!GscTestTurretCurrent(NULL)||
-    !TrainingNoteOwner(actor)||!G_Cod1EntitySameAllocation(actor)||
-    !gsc_session_r237_frame_view(gscTestSession,gscTestId,&view)||!view.frame_open||view.frame_generation!=generation)return 0;
- ok=gsc_session_r237_run_current_bucket(gscTestSession,gscTestId,generation,error,sizeof(error));
+static int FoleyBucketPost53(const GscEntityRef *actor,int now,uint64_t generation,
+                             const cod1ActorLease_t *retirementLease,int *retired,int ok,const char *error){
+ GscR237FrameView view;
  if(!ok||error[0]||g_debugMove.integer)G_Printf("[Foley note bucket] owner=%u/%u tick=%d result=%d error=%s\n",actor->slot,actor->generation,now,ok,error);
  if(!ok||now!=level.time||!GscTestTurretCurrent(NULL)||
     !gsc_session_r237_frame_view(gscTestSession,gscTestId,&view)||!view.frame_open||
@@ -435,6 +429,26 @@ int FoleyRunNoteBucket(const GscEntityRef *actor,int now,uint64_t generation,
  G_Printf("[Foley note bucket] committed script retirement owner=%u/%u tick=%d frame=%llu\n",
     actor->slot,actor->generation,now,(unsigned long long)generation);
  return 1;
+}
+int FoleyRunNoteBucket(const GscEntityRef *actor,int now,uint64_t generation,
+                       const cod1ActorLease_t *retirementLease,int *retired){
+ GscR237FrameView view;char error[GSC_SESSION_ERROR_CAP]={0};int ok;c1fp35Token profile;
+ if(!retired)return 0;
+ *retired=0;
+ profile=C1FP35_Begin(level.time);
+ if(!actor||now!=level.time||!GscTestTurretCurrent(NULL)||
+    !TrainingNoteOwner(actor)||!G_Cod1EntitySameAllocation(actor)||
+    !gsc_session_r237_frame_view(gscTestSession,gscTestId,&view)||!view.frame_open||view.frame_generation!=generation){
+    C1FP35_End(C1FP35_BUCKET_ADMIT,profile,0);return 0;
+ }
+ C1FP35_End(C1FP35_BUCKET_ADMIT,profile,1);
+ profile=C1FP35_Begin(level.time);
+ ok=gsc_session_r237_run_current_bucket(gscTestSession,gscTestId,generation,error,sizeof(error));
+ C1FP35_End(C1FP35_BUCKET_VM,profile,ok);
+ profile=C1FP35_Begin(level.time);
+ ok=FoleyBucketPost53(actor,now,generation,retirementLease,retired,ok,error);
+ C1FP35_End(C1FP35_BUCKET_POST,profile,ok);
+ return ok;
 }
 int FoleyPrivateQueuedController(const GscEntityRef*,int,uint64_t,uint64_t*);
 #include "../state9_result.h"
