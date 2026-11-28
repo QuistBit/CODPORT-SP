@@ -217,6 +217,7 @@ typedef struct { char name[64]; Value value; } Local;
 typedef struct { int owner, kind, index, start, end, cond; } FlowLoop;
 typedef struct { int fn, pc, local_count; Value self; Local locals[MAX_LOCALS];
                  int loop_count; FlowLoop loops[MAX_CONTROL_DEPTH]; } Frame;
+#include "gsc_vm_local_lookup55.inc"
 enum { TASK_READY, TASK_SLEEP, TASK_EVENT, TASK_DEAD };
 enum { EVENT_LEVEL=0, EVENT_ENTITY, EVENT_STRUCT };
 typedef struct ResultsTask ResultsTask;
@@ -5101,7 +5102,8 @@ static int eval_inner(GscRuntime *r,Frame *f,int index,int depth,Value *out,int 
         if(r->state_enabled&&!strcmp(e->name,"level")){out->kind=V_LEVEL;if(localOnly)*localOnly=1;return 1;}
         if(r->anim_data_enabled&&!strcmp(e->name,"anim"))return anim_data_read(r,line,out);
         if(game_array_selected(r,e->name))return game_array_read(r,line,out);
-        for(k=f->local_count-1;k>=0;k--)if(!strcmp(f->locals[k].name,e->name)){
+        k=frame_local_find55(f,e->name,1);
+        if(k>=0){
             *out=f->locals[k].value;if(localOnly)*localOnly=1;return 1;
         }
         /* Missing local lookup creates an undefined (type 0) value in the
@@ -5229,7 +5231,8 @@ static int assignment(GscRuntime *r,Frame *f,const char *name,Value v,int line) 
     if(r->flow_enabled&&(literal_name(name)||!strcmp(name,"self")||!strcmp(name,"level")))
         return rfail(r,line,"reserved local binding");
     if(strlen(name)>=sizeof(f->locals[0].name))return rfail(r,line,"local name too long");
-    for(k=0;k<f->local_count;k++)if(!strcmp(f->locals[k].name,name)) {
+    k=frame_local_find55(f,name,0);
+    if(k>=0) {
         f->locals[k].value=v;return 1;
     }
     if(f->local_count>=MAX_LOCALS)return rfail(r,line,"local limit");
