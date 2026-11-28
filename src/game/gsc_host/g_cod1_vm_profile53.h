@@ -10,7 +10,7 @@ static uint64_t GscProfileClock53(void){
 static int GscProfilePhase53(GscSession *s,uint64_t id,uint64_t generation,int exclusive,
  int (*expired)(void),char *error,size_t cap,unsigned lane){
  static uint64_t epoch,hz;
- static int known,frame,enabled,last[GSC53_LANES];
+ static int known,frame,enabled,shadow,last[GSC53_LANES];
  static const char *names[GSC53_LANES]={"note","current","exclusive"};
  uint64_t e=G_Cod1EntityMapEpoch(),start,end,elapsed;
  int now=level.time,ok;
@@ -20,18 +20,20 @@ static int GscProfilePhase53(GscSession *s,uint64_t id,uint64_t generation,int e
   epoch=e;known=0;
  }
  if(!known||frame!=level.framenum){
-  enabled=trap_Cvar_VariableIntegerValue("g_cod1VmProfile")==1;frame=level.framenum;known=1;
+  enabled=trap_Cvar_VariableIntegerValue("g_cod1VmProfile")==1;
+  shadow=enabled&&trap_Cvar_VariableIntegerValue("g_cod1QueueShadow")==1;
+  frame=level.framenum;known=1;
  }
  if(enabled&&!hz&&QueryPerformanceFrequency(&q)&&q.QuadPart>0)hz=(uint64_t)q.QuadPart;
  if(!enabled||!hz||lane>=GSC53_LANES)return gsc_session_r237_frame_phase_slice(s,id,generation,exclusive,expired,error,cap);
- p.clock=GscProfileClock53;p.hz=hz;start=GscProfileClock53();
+ p.clock=GscProfileClock53;p.hz=hz;p.queue_shadow=shadow;start=GscProfileClock53();
  ok=gsc_session_r237_frame_phase_profile53(s,id,generation,exclusive,expired,error,cap,&p);
  end=GscProfileClock53();
  if(!start||!end||end<start||e!=G_Cod1EntityMapEpoch()||now!=level.time)return ok;
  elapsed=end-start;
  /* One line per slow phase (>=8ms), or a periodic sample per lane. Never
   * print per task. Log outside the measured Session call. */
- if(elapsed>=hz/125||!ok||p.clock_failures||last[lane]<0||now<last[lane]||(int64_t)now-last[lane]>=1000){
+ if(elapsed>=hz/125||!ok||p.clock_failures||p.shadow_mismatches||last[lane]<0||now<last[lane]||(int64_t)now-last[lane]>=1000){
   last[lane]=now;
   G_Printf("[OPT_VM53] lane=%s epoch=%llu now=%d gen=%llu hz=%llu result=%d total=%llu scan=%llu dispatch=%llu source=%llu endon=%llu array=%llu scans=%llu examined=%llu tasks=%u dispatched=%llu budget_spent=%llu source_calls=%llu endon_calls=%llu array_calls=%llu clock_failures=%llu session_admit=%llu session_pre=%llu session_post=%llu session_finish=%llu task_guard=%llu task_guard_calls=%llu\n",
    names[lane],(unsigned long long)e,now,(unsigned long long)generation,(unsigned long long)hz,ok,
@@ -43,6 +45,10 @@ static int GscProfilePhase53(GscSession *s,uint64_t id,uint64_t generation,int e
    (unsigned long long)p.ticks[GSC53_SESSION_ADMIT],(unsigned long long)p.ticks[GSC53_SESSION_PRE],
    (unsigned long long)p.ticks[GSC53_SESSION_POST],(unsigned long long)p.ticks[GSC53_SESSION_FINISH],
    (unsigned long long)p.ticks[GSC53_TASK_GUARD],(unsigned long long)p.calls[GSC53_TASK_GUARD]);
+  if(shadow)G_Printf("[OPT_QUEUE54] lane=%s epoch=%llu now=%d gen=%llu hz=%llu ticks=%llu checks=%llu matches=%llu mismatches=%llu skipped=%llu rows=%llu\n",
+   names[lane],(unsigned long long)e,now,(unsigned long long)generation,(unsigned long long)hz,
+   (unsigned long long)p.ticks[GSC53_QUEUE_SHADOW],(unsigned long long)p.shadow_checks,(unsigned long long)p.shadow_matches,
+   (unsigned long long)p.shadow_mismatches,(unsigned long long)p.shadow_skipped,(unsigned long long)p.shadow_rows);
  }
  return ok;
 }
