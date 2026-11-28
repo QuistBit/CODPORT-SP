@@ -1,0 +1,15 @@
+# OPT R55C2A — avoid complete field-arena counts when reserving free space
+
+Base R55C1 13ea4741e9e47ea11c2402f3a8ae88333fcc9aaa. Production commit 76cd4e732943eea52b4f701899dd97c909485273.
+
+## Rationale and scope
+state_fields_reserve_free previously counts every occupied record even for a request of zero or one free slot. state_fields_can_fit similarly counts the whole arena. Reviewed the ordinary field write, array root publication, COW root publication and inheritance publication routes. Instead of introducing a persistent count/index with unproven mutation coverage, change only free-space admission. No changes to state_field_index, first-free slot selection, field publication, inheritance ordering, certificate checks, allocator hooks, or memory layout.
+
+## Algorithm
+For a valid allocated capacity C <= limit L, a request E <= L fits the current arena exactly when at least E free slots exist. Count backwards until E free slots are found; if not found, traversal is complete and used=C-unused gives the original exact count for growth. For can_fit (which allows growth), E <= L-C is sufficient without any record reads; otherwise require E-(L-C) free slots, again stop early. Preserve original full count for capacity outside the normal domain; reserve retains its original ownership/reentry/error guards and allocation/free sequence. No reliance on dense prefix or no-hole invariant. Worst-case O(C), best case O(1) or zero records. Example 128 records with 32 free at tail: reserve(1) examines 1 vs 128 used flags; this is a source-level operation count, not a timing or FPS result. Selection of physical free slot still uses original ascending scan.
+
+## Actual verification
+Local container GCC and Clang C11 O2, -Wall -Wextra -Werror -Wno-misleading-indentation (existing source style), plus Clang O1 ASan/UBSan with leak detection all compiled and executed successfully. Per compiler 100000 deterministic cases: 49861 accepted, 50139 refused, 15395 grew, 852 allocation/free failure cases with error. Compared fit and reserve outcomes, capacity, allocation/free call counts, errors and record contents with old/new extracted functions and mocked allocator. Tested sparse occupancy, full/partly filled/empty arenas, zero and single-slot requests, size_t max, limit below capacity, guarded reentry and injected allocator errors. Same workload repeated across three compiler runs, 300000 cases total; focused free-tail checks also passed. Original excerpt lengths/FNV1a 454/0c1c0048 and 1455/7209aeae; candidate 1119/311ea065 and 1723/3c9a8d8d verified against connector. Test blob 9426a9ad9a914fbd5dbf861cc83d03313dc7d615 matches locally compiled fixture. Runner bash tools/tests/run_opt_r55c2a_state_reserve_test.sh; direct equivalent local commands executed. Native MSVC build, actual host integration and performance not measured. No master change.
+
+## Next
+R55C2B: improve state_field_index itself without invalidating first-match ordering or case/owner equivalence. If introducing metadata, audit all writers and lifecycle first. Then proceed to array-entry search and local-variable access.
