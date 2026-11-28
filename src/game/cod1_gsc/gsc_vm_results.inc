@@ -138,7 +138,7 @@ static int results_guard_read(GscRuntime *r,Task *task,int line,int *nativeRead)
          * Failed/unsupported scans and generic hosts retain the exit call. */
         if(read && !(r->native_readonly_scan && alive && eligible) &&
            !entity_certificate_current(r,task))return 0;
-        if(!alive){entity_task_retire(task);return 0;}
+        if(!alive){r54_dirty_mark_task(r,task);entity_task_retire(task);return 0;}
         if(eligible){
             if(nativeRead)*nativeRead=eligible==1;
             return 1;
