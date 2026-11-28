@@ -340,7 +340,7 @@ struct GscRuntime { GscDeveloperScriptSelection developer_admission;int develope
                     GscEntityControlHost controls; int controls_enabled, flow_enabled;
                     int native_hide_import, native_show_import;
                     Task *executing_task;
-                    StateField *state_fields;int state_field_capacity;uint32_t state_field_limit;int state_arena_busy;void *state_scratch;size_t state_scratch_bytes;
+                    StateField *state_fields;int state_field_capacity,state_field_scan_end_plus1;uint32_t state_field_limit;int state_arena_busy;void *state_scratch;size_t state_scratch_bytes;
                     void *r329_cow_scratch;size_t r329_cow_scratch_bytes;
                     GscEntityCollectionHost collections; int arrays_enabled, results_enabled, event_payloads_enabled;
                     int sparse_numeric_arrays_enabled,owned_numeric_delete_enabled,r238_array_value_cow_enabled,r239_mixed_scalar_equality_enabled;int r243_thread_start_enabled,r243_same_bucket_wait_enabled;unsigned r243_thread_start_depth;int r243_scripted_prefix_enabled,r243_scripted_init_fn;GscActorScriptedPrefixHost r243_scripted_prefix;GscActorScriptedStartHost r243_scripted_start;int r243_scripted_start_enabled;GscActorScriptedControllerHost r243_controller;GscControllerSelectWithCleanup r243_select_with_cleanup;int r243_controller_enabled,r243_controller_busy,r243_controller_callback_busy;uint64_t r243_next_main_receipt;R243ControllerMainOwner r243_controller_main[32];GscThreadEntityAuthorityHost r243_thread_entities;int r243_thread_entities_enabled;
