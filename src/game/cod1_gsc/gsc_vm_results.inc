@@ -76,8 +76,9 @@ static int results_readonly_path(GscRuntime *r,Task *task,int frame,const Result
         if(game_array_selected(r,e->name)){
             if(!game_array_value_valid(r,&r->game_array_root))return 0;
             root=&r->game_array_root;
-        }else for(k=f->local_count-1;k>=0;k--)if(!strcmp(f->locals[k].name,e->name)){
-            root=&f->locals[k].value;break;
+        }else{
+            k=frame_local_find55(f,e->name,1);
+            if(k>=0)root=&f->locals[k].value;
         }
     }else{
         index=state_field_index(r,&p->path.owner,e->name);
@@ -161,8 +162,9 @@ static int results_guard_read(GscRuntime *r,Task *task,int line,int *nativeRead)
                 Frame *f=&task->frames[n];
                 if(game_array_selected(r,e->name)) {
                     if(!game_array_read(r,line,&root))return 0;
-                } else for(k=f->local_count-1;k>=0;k--)if(!strcmp(f->locals[k].name,e->name)) {
-                    root=f->locals[k].value;break;
+                } else {
+                    k=frame_local_find55(f,e->name,1);
+                    if(k>=0)root=f->locals[k].value;
                 }
             } else {
                 int field=state_field_index(r,&p->path.owner,e->name);
