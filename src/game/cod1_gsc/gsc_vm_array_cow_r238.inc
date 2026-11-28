@@ -25,7 +25,10 @@ typedef struct {
  int arrays,entries;
  ArrayContainer containers[GSC_ARRAY_CONTAINER_CAPACITY];
  ArrayEntry members[GSC_ARRAY_ENTRY_CAPACITY];
+ int lookup_entries;
+ uint16_t lookup_head[GSC_ARRAY_CONTAINER_CAPACITY],lookup_tail[GSC_ARRAY_CONTAINER_CAPACITY],lookup_next[GSC_ARRAY_ENTRY_CAPACITY];
 } R238ArrayStage;
+_Static_assert(GSC_ARRAY_ENTRY_CAPACITY<=UINT16_MAX,"COW owner directory uses one-based uint16 slots");
 static int r238_array_value_valid(const GscRuntime*r,const Value*v){
  return r&&v&&v->kind==V_ARRAY&&r238_array_reference_valid(r,v->array,v->object_token);
 }
@@ -157,10 +160,7 @@ static int r238_cow_references(GscRuntime*r,const ArrayLvalue*path,int*refs,int 
 original:
  return r238_cow_references_reference(r,path,refs,line);
 }
-static int r238_stage_find(const R238ArrayStage*s,uint32_t owner,const ArrayKey*key){
- int n;for(n=0;n<s->entries;n++)if(s->members[n].owner==(int)owner&&array_key_equal(&s->members[n].key,key))return n;
- return -1;
-}
+#include "gsc_vm_cow_lookup55.inc"
 static int r238_stage_new(GscRuntime*r,R238ArrayStage*s,int line,uint32_t*out){
  if(s->arrays>=GSC_ARRAY_CONTAINER_CAPACITY)return rfail(r,line,"R238 array COW container capacity");
  *out=(uint32_t)++s->arrays;memset(s->containers+*out-1,0,sizeof(s->containers[0]));return 1;
@@ -321,7 +321,7 @@ static int r238_array_cow_commit(GscRuntime*r,Task*task,Frame*f,const ArrayLvalu
   r->r329_cow_scratch=s;r->r329_cow_scratch_bytes=sizeof(*s);
  }
  r->state_scratch=s;r->state_scratch_bytes=sizeof(*s);
- s->arrays=r->array_count;s->entries=r->array_entry_count;oldEntries=s->entries;
+ s->arrays=r->array_count;s->entries=r->array_entry_count;oldEntries=s->entries;s->lookup_entries=-1;
  memcpy(s->containers,r->arrays,(size_t)s->arrays*sizeof(*s->containers));
  memcpy(s->members,r->array_entries,(size_t)s->entries*sizeof(*s->members));current=root_value;
  for(n=0;n<path->count;n++){
