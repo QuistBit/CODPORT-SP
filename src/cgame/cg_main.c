@@ -35,6 +35,7 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include "cg_local.h"
+#include "cg_cod1_load_profile51.h"
 #include "cg_r241_frame_trace.h"
 #include "../game/bg_cod1_ambient.h"
 #include "../game/bg_cod1_script_hud.h"
@@ -1158,6 +1159,7 @@ void CG_Cod1RegisterScriptShaders(void) {
 }
 
 static void CG_RegisterGraphics( void ) {
+	cod1LoadProfile_t loadProfile;
 	char name[1024];
 
 	int i;
@@ -1178,12 +1180,14 @@ static void CG_RegisterGraphics( void ) {
 
 
 	// clear any references to old media
+	Cod1LoadProfileBegin( &loadProfile );
 	memset( &cg.refdef, 0, sizeof( cg.refdef ) );
 	trap_R_ClearScene();
 
 	CG_LoadingString( cgs.mapname );
 
 	trap_R_LoadWorldMap( cgs.mapname );
+	Cod1LoadProfileMark( &loadProfile, "world_map" );
 
 	// precache status bar pics
 	CG_LoadingString( "game media" );
@@ -1335,6 +1339,7 @@ static void CG_RegisterGraphics( void ) {
 //		cgs.media.teamStatusBar = trap_R_RegisterShader( "gfx/2d/colorbar.tga" );
 //	}
 
+	Cod1LoadProfileMark( &loadProfile, "textures" );
 	CG_LoadingString( " - models" );
 
 	cgs.media.machinegunBrassModel = trap_R_RegisterModel( "models/weapons2/shells/m_shell.md3" );
@@ -1495,6 +1500,7 @@ static void CG_RegisterGraphics( void ) {
 	// only register the items that the server says we need
 	strcpy( items, CG_ConfigString( CS_ITEMS ) );
 
+	Cod1LoadProfileMark( &loadProfile, "models" );
 	CG_LoadingString( " - items" );
 
 	for ( i = 1 ; i < bg_numItems ; i++ ) {
@@ -1506,6 +1512,7 @@ static void CG_RegisterGraphics( void ) {
 		}
 	}
 
+	Cod1LoadProfileMark( &loadProfile, "items" );
 	// wall marks
 	cgs.media.bulletMarkShader = trap_R_RegisterShader( "gfx/damage/bullet_mrk" );
 	cgs.media.burnMarkShader = trap_R_RegisterShader( "gfx/damage/burn_med_mrk" );
@@ -1529,6 +1536,7 @@ static void CG_RegisterGraphics( void ) {
 		cgs.media.bloodDotShaders[i] = trap_R_RegisterShader( name );
 	}
 
+	Cod1LoadProfileMark( &loadProfile, "marks" );
 	CG_LoadingString( " - inline models" );
 
 	// register the inline models
@@ -1551,6 +1559,7 @@ static void CG_RegisterGraphics( void ) {
 		}
 	}
 
+	Cod1LoadProfileMark( &loadProfile, "inline_models" );
 	CG_LoadingString( " - server models" );
 
 	// register all the server specified models
@@ -1564,6 +1573,7 @@ static void CG_RegisterGraphics( void ) {
 		cgs.gameModels[i] = trap_R_RegisterModel( modelName );
 	}
 
+	Cod1LoadProfileMark( &loadProfile, "server_models" );
 	CG_LoadingString( " - particles" );
 	CG_ClearParticles();
 
@@ -1583,6 +1593,8 @@ static void CG_RegisterGraphics( void ) {
 	cgs.media.sizeCursor = trap_R_RegisterShaderNoMip( "ui/assets/sizecursor.tga" );
 	cgs.media.selectCursor = trap_R_RegisterShaderNoMip( "ui/assets/selectcursor.tga" );
 	CG_LoadingString( " - game media done" );
+	Cod1LoadProfileMark( &loadProfile, "particles_and_finish" );
+	Cod1LoadProfileReport( &loadProfile, "cg_graphics", cgs.mapname );
 
 }
 
@@ -2364,6 +2376,8 @@ static qboolean CG_Cod1MapHasV59Header(const char *mapname) {
 }
 
 void CG_Init( int serverMessageNum, int serverCommandSequence ) {
+	cod1LoadProfile_t loadProfile;
+	Cod1LoadProfileBegin( &loadProfile );
     CG_R241TraceReset();
     CG_Cod1SubtitleReset();
     CG_Cod1TurretActorReset();
@@ -2456,6 +2470,7 @@ void CG_Init( int serverMessageNum, int serverCommandSequence ) {
 	CG_Cod1DirectFogMapInit();
 #endif
 	CW_InitEngineWeapons();
+	Cod1LoadProfileMark( &loadProfile, "reset_metadata_weapondefs" );
 
 	// load the new map
 	CG_LoadingString( "collision map" );
@@ -2463,6 +2478,7 @@ void CG_Init( int serverMessageNum, int serverCommandSequence ) {
 	trap_CM_LoadMap( cgs.mapname );
 
 	String_Init();
+	Cod1LoadProfileMark( &loadProfile, "collision_and_strings" );
 
 	cg.loading = qtrue;     // force players to load instead of defer
 
@@ -2470,24 +2486,30 @@ void CG_Init( int serverMessageNum, int serverCommandSequence ) {
 
 	CG_Cod1PickupSoundsInit();
 	CG_RegisterSounds();
+	Cod1LoadProfileMark( &loadProfile, "sounds" );
 
 	CG_LoadingString( "graphics" );
 
 	CG_RegisterGraphics();
+	Cod1LoadProfileMark( &loadProfile, "graphics" );
 	CG_Cod1RegisterScriptShaders();
+	Cod1LoadProfileMark( &loadProfile, "script_shaders" );
     /* The graphics bootstrap clears legacy weapon handles. Consume the
      * independent native item state only after that lifetime boundary. */
     CG_Cod1ItemPrecacheInit();
     CG_Cod1PrecacheConsumableMedia();
     CG_Cod1TurretShotInit();
+	Cod1LoadProfileMark( &loadProfile, "native_item_media" );
 
 	CG_LoadingString( "flamechunks" );
 
 	CG_InitFlameChunks();       // RF, register and clear all flamethrower resources
+	Cod1LoadProfileMark( &loadProfile, "flamechunks" );
 
 	CG_LoadingString( "clients" );
 
 	CG_RegisterClients();       // if low on memory, some clients will be deferred
+	Cod1LoadProfileMark( &loadProfile, "clients" );
 
 	CG_AssetCache();
 	CG_LoadHudMenu();      // load new hud stuff
@@ -2496,6 +2518,7 @@ void CG_Init( int serverMessageNum, int serverCommandSequence ) {
 	if ( cgs.cod1MapEntities && cgs.gametype == GT_SINGLE_PLAYER ) {
 		CG_Cod1HudEnabled();
 	}
+	Cod1LoadProfileMark( &loadProfile, "hud_and_asset_cache" );
 
 	cg.loading = qfalse;    // future players will be deferred
 
@@ -2538,6 +2561,8 @@ void CG_Init( int serverMessageNum, int serverCommandSequence ) {
 	}
 	// jpw
 	// -NERVE - SMF
+	Cod1LoadProfileMark( &loadProfile, "finish" );
+	Cod1LoadProfileReport( &loadProfile, "cg_init_detail", cgs.mapname );
 }
 
 /*

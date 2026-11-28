@@ -266,14 +266,13 @@ static int Cod1ST_CheckStage(const cod1MaterialProbe_t *ir,const cod1MpStage_t *
  * implemented; they are rejected, never quietly stripped. */
 static int Cod1ST_PrepareAuth(const char *body,const char *name,const cod1MpCaps_t *caps,
                          char *out,size_t cap,int strictAuth,cod1StResult_t *result) {
-    cod1MaterialProbe_t *ir,*checked;
+    cod1MaterialProbe_t *ir;
     int units;
     cod1MpLexer_t lx;cod1MpToken_t cmd,arg;
     char line[512],reason[80];
     size_t used=0;int i,j,count=0,deforms=0,ok=0;
-    ir=(cod1MaterialProbe_t*)calloc(1,sizeof(*ir));
-    checked=(cod1MaterialProbe_t*)calloc(1,sizeof(*checked));
-    if (!ir || !checked) { Cod1ST_Why(result,0,"allocation failed");goto done; }
+    ir=(cod1MaterialProbe_t*)malloc(sizeof(*ir));
+    if (!ir) { Cod1ST_Why(result,0,"allocation failed");goto done; }
     if (!body || !name || !out || !cap || strlen(body)>=COD1_ST_BODY) {
         Cod1ST_Why(result,0,"source too large/invalid");goto done;
     }
@@ -347,17 +346,19 @@ static int Cod1ST_PrepareAuth(const char *body,const char *name,const cod1MpCaps
     }
     if (!count) { Cod1ST_Why(result,0,"no selected stages");goto done; }
     if (!Cod1ST_Append(out,cap,&used,"}\n",2)) goto full;
-    if (!Cod1MP_Parse(out,caps,checked)) { Cod1ST_Why(result,0,checked->error);goto done; }
+    /* The expanded source is complete. Parse initializes every IR byte;
+     * no source-IR field is used after this point. Reuse its allocation. */
+    if (!Cod1MP_Parse(out,caps,ir)) { Cod1ST_Why(result,0,ir->error);goto done; }
     units=caps?caps->units:1;
-    for(i=0;i<checked->numStages;++i) {
+    for(i=0;i<ir->numStages;++i) {
         reason[0]=0;
-        if(!Cod1ST_CheckStageAuth(checked,&checked->stage[i],units,result->bundleAuth[i],strictAuth,reason)) {
-            Cod1ST_Why(result,checked->stage[i].line,reason);goto done;
+        if(!Cod1ST_CheckStageAuth(ir,&ir->stage[i],units,result->bundleAuth[i],strictAuth,reason)) {
+            Cod1ST_Why(result,ir->stage[i].line,reason);goto done;
         }
     }
     result->stages=count;result->reason[0]=0;result->line=0;ok=1;goto done;
 full: Cod1ST_Why(result,0,"expanded source exceeds limit");
-done: free(ir);free(checked);return ok;
+done: free(ir);return ok;
 }
 static int Cod1ST_Prepare(const char *body,const char *name,const cod1MpCaps_t *caps,
                          char *out,size_t cap,cod1StResult_t *result) {
