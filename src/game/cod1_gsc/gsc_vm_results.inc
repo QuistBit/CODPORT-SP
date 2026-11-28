@@ -280,6 +280,7 @@ static int results_operator(GscRuntime *r,const Expr *e,Value a,Value b,int line
     }
     return isfinite(out->number)?1:rfail(r,line,"nonfinite expression");
 }
+#include "gsc_vm_results_binary56.inc"
 /* 1: result delivered, 2: callee pushed; 0: refusal/cancellation. No expression
  * is restarted on resume. Parent destination and already computed values live
  * in the task-owned nodes. All node transitions share the scheduler budget. */
@@ -353,7 +354,7 @@ static int results_eval_checked(GscRuntime *r,Task *task,Frame *f,int expression
                 node->phase=2;if(!results_node_push(r,task,frame,e->b,-2,line))return 0;continuationChecked=nativeRead;continue;
             }
             if(!(e->kind==E_INDEX?array_index_read(r,&node->a,&node->b,line,&value):
-                results_operator(r,e,node->a,node->b,line,&value)))return 0;
+                results_binary56(r,e,&node->a,&node->b,line,&value)))return 0;
             /* Index lookup reads the VM's own values. Both int32 operands
              * select the in-process integer lane of the scalar evaluator. */
             localOnly=e->kind==E_INDEX || (node->a.kind==V_NUMBER && node->a.integer &&
