@@ -10,7 +10,7 @@ static uint64_t GscProfileClock53(void){
 static int GscProfilePhase53(GscSession *s,uint64_t id,uint64_t generation,int exclusive,
  int (*expired)(void),char *error,size_t cap,unsigned lane){
  static uint64_t epoch,hz;
- static int known,frame,enabled,shadow,dirty,indexed,source_detail,last[GSC53_LANES];
+ static int known,frame,enabled,shadow,dirty,indexed,source_detail,source_breakdown,last[GSC53_LANES];
  static struct {uint64_t ticks,checks,matches,mismatches,skipped,rows;} queueTotals[GSC53_LANES];
  static struct {uint64_t ticks,checks,matches,mismatches,skipped,feeds,rows,reseeds,lookups,probes,map_rows,misses,indexed_choices,indexed_fallbacks;} dirtyTotals[GSC53_LANES];
  static const char *names[GSC53_LANES]={"note","current","exclusive"};
@@ -26,12 +26,13 @@ static int GscProfilePhase53(GscSession *s,uint64_t id,uint64_t generation,int e
   shadow=enabled&&trap_Cvar_VariableIntegerValue("g_cod1QueueShadow")==1;
   dirty=enabled&&trap_Cvar_VariableIntegerValue("g_cod1QueueDirty")==1;
   indexed=dirty&&trap_Cvar_VariableIntegerValue("g_cod1QueueVerified")==1;
-  source_detail=enabled&&trap_Cvar_VariableIntegerValue("g_cod1VmSource")==1;
+  source_breakdown=enabled&&trap_Cvar_VariableIntegerValue("g_cod1VmBreakdown")==1;
+  source_detail=enabled&&(source_breakdown||trap_Cvar_VariableIntegerValue("g_cod1VmSource")==1);
   frame=level.framenum;known=1;
  }
  if(enabled&&!hz&&QueryPerformanceFrequency(&q)&&q.QuadPart>0)hz=(uint64_t)q.QuadPart;
  if(!enabled||!hz||lane>=GSC53_LANES)return gsc_session_r237_frame_phase_slice(s,id,generation,exclusive,expired,error,cap);
- p.clock=GscProfileClock53;p.hz=hz;p.queue_shadow=shadow;p.queue_dirty=dirty;p.queue_indexed=indexed;p.source_detail=source_detail;start=GscProfileClock53();
+ p.clock=GscProfileClock53;p.hz=hz;p.queue_shadow=shadow;p.queue_dirty=dirty;p.queue_indexed=indexed;p.source_detail=source_detail;p.source_breakdown=source_breakdown;start=GscProfileClock53();
  ok=gsc_session_r237_frame_phase_profile53(s,id,generation,exclusive,expired,error,cap,&p);
  end=GscProfileClock53();
  if(!start||!end||end<start||e!=G_Cod1EntityMapEpoch()||now!=level.time)return ok;
@@ -70,6 +71,16 @@ static int GscProfilePhase53(GscSession *s,uint64_t id,uint64_t generation,int e
    G_Printf("[OPT_SOURCE55] lane=%s epoch=%llu now=%d gen=%llu hz=%llu ticks=%llu serial=%llu depth=%d known=%d module=%s function=%s fn=%d pc=%d line=%d budget_spent=%llu\n",
     names[lane],(unsigned long long)e,now,(unsigned long long)generation,(unsigned long long)hz,
     (unsigned long long)w->ticks,(unsigned long long)w->serial,w->depth,w->known,w->known?w->module:"?",w->known?w->function:"?",w->fn,w->pc,w->line,(unsigned long long)w->budget_spent);
+  }
+  if(source_breakdown&& (p.breakdown.sources||p.breakdown.legacy_sources)){
+   const GscBreakdown55 *b=&p.breakdown;
+   G_Printf("[OPT_BREAK55] lane=%s epoch=%llu now=%d gen=%llu hz=%llu sources=%llu legacy=%llu failures=%llu guard=%llu guard_calls=%llu guard_outer=%llu eval=%llu eval_calls=%llu eval_outer=%llu native_expr=%llu native_expr_calls=%llu native_expr_outer=%llu native_stmt=%llu native_stmt_calls=%llu native_stmt_outer=%llu\n",
+    names[lane],(unsigned long long)e,now,(unsigned long long)generation,(unsigned long long)hz,
+    (unsigned long long)b->sources,(unsigned long long)b->legacy_sources,(unsigned long long)b->failures,
+    (unsigned long long)b->ticks[R55B_GUARD],(unsigned long long)b->calls[R55B_GUARD],(unsigned long long)b->outer[R55B_GUARD],
+    (unsigned long long)b->ticks[R55B_EVAL],(unsigned long long)b->calls[R55B_EVAL],(unsigned long long)b->outer[R55B_EVAL],
+    (unsigned long long)b->ticks[R55B_NATIVE_EXPR],(unsigned long long)b->calls[R55B_NATIVE_EXPR],(unsigned long long)b->outer[R55B_NATIVE_EXPR],
+    (unsigned long long)b->ticks[R55B_NATIVE_STMT],(unsigned long long)b->calls[R55B_NATIVE_STMT],(unsigned long long)b->outer[R55B_NATIVE_STMT]);
   }
   if(shadow)G_Printf("[OPT_QUEUE54] scope=epoch lane=%s epoch=%llu now=%d gen=%llu hz=%llu ticks=%llu checks=%llu matches=%llu mismatches=%llu skipped=%llu rows=%llu\n",
    names[lane],(unsigned long long)e,now,(unsigned long long)generation,(unsigned long long)hz,
