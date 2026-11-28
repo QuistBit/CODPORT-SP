@@ -76,7 +76,7 @@ static int inherit_entity_fields(GscRuntime*r,const GscEntityFieldInheritance*in
  if(r->error[0]||memcmp(&guard_request,&request,sizeof(request)))goto done;
  /* Pure final rechecks, then one infallible shallow-value publication. */
  for(n=0;n<count;n++)if(r->state_fields[stage[n].destination_slot].used||memcmp(r->state_fields+stage[n].source_slot,&stage[n].field,sizeof(StateField)))goto done;
- for(n=0;n<count;n++){stage[n].field.owner=request.destination;r->state_fields[stage[n].destination_slot]=stage[n].field;}
+ for(n=0;n<count;n++){stage[n].field.owner=request.destination;state_field_publish(r,stage[n].destination_slot,&stage[n].field);}
  *copied=(size_t)count;ok=1;
 done:
  if(stage){if(!state_storage_free(r,stage))ok=0;r->state_scratch=NULL;r->state_scratch_bytes=0;}
