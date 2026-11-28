@@ -37,3 +37,11 @@ MOCK
 read -r -a flags <<< "${CFLAGS:--std=c11 -O2 -Wall -Wextra -Werror}"
 "${CC:-cc}" "${flags[@]}" -I"$tmp" tools/tests/opt_r53c_vm_profile_test.c -o "$tmp/test"
 "$tmp/test"
+{
+ grep "^static uint64_t r237_profile_begin53(" "$tmp/profile"
+ extract "static void r237_profile_end53(" "$tmp/profile"
+ extract "static int r237_finish_operation(" "$tmp/new"
+ extract "static int r237_finish_operation53(" "$tmp/profile"
+} > "$tmp/finish_extracted.h"
+"${CC:-cc}" "${flags[@]}" -I"$tmp" tools/tests/opt_r53c_vm_cleanup_test.c -o "$tmp/cleanup"
+"$tmp/cleanup"
