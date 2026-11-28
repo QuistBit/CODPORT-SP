@@ -2,7 +2,24 @@
  * stale owners are never reclaimed, and capacity is not native pool parity. */
 static uint32_t state_fields_limit(const GscRuntime*r){return r->state_field_limit?r->state_field_limit:GSC_STATE_FIELD_CAPACITY;}
 static size_t state_fields_used(const GscRuntime*r){int n;size_t used=0;for(n=0;n<r->state_field_capacity;n++)used+=r->state_fields[n].used!=0;return used;}
-static int state_fields_can_fit(const GscRuntime*r,size_t empty){size_t used=state_fields_used(r),limit=state_fields_limit(r);return used<=limit&&empty<=limit-used;}
+/* Count only the free slots needed by the caller. Search the unused tail
+ * first; no dense-prefix assumption, persistent count or allocation. */
+static size_t state_fields_unused_up_to(const GscRuntime*r,size_t wanted){
+ int n;size_t unused=0;
+ for(n=r->state_field_capacity;n>0&&unused<wanted;){--n;unused+=r->state_fields[n].used==0;}
+ return unused;
+}
+static int state_fields_can_fit(const GscRuntime*r,size_t empty){
+ size_t used,limit=state_fields_limit(r),spare;
+ if(r->state_field_capacity>=0&&(size_t)r->state_field_capacity<=limit&&
+    (!r->state_field_capacity||r->state_fields)){
+  if(empty>limit)return 0;
+  spare=limit-(size_t)r->state_field_capacity;
+  if(empty<=spare)return 1;
+  return state_fields_unused_up_to(r,empty-spare)==empty-spare;
+ }
+ used=state_fields_used(r);return used<=limit&&empty<=limit-used;
+}
 /* Allocator hooks receive no VM loan. Guard reentry/destruction just like
  * foreign certificate boundaries, including callbacks in failure/free hooks. */
 static void*state_storage_allocate(GscRuntime*r,size_t count,size_t width,int line){
@@ -23,12 +40,18 @@ static int state_storage_free(GscRuntime*r,void*p){int ok;if(!p)return 1;
  ok=r->state_arena_busy==1&&r->entity_certificate_busy==1&&!r->error[0];r->entity_certificate_busy=0;r->state_arena_busy=0;return ok;
 }
 static int state_fields_reserve_free(GscRuntime*r,size_t empty,int line){
- StateField*candidate,*old;size_t used,needed,capacity,limit;
+ StateField*candidate,*old;size_t used,needed,capacity,limit,unused;
  if(!r||r->error[0])return 0;
  if(r->state_arena_busy)return rfail(r,line,"state arena reserve reentered");
  if(r->state_field_capacity<0||r->state_field_capacity>GSC_STATE_FIELD_OWNED_LIMIT||
   (r->state_field_capacity&&!r->state_fields))return rfail(r,line,"state arena ownership invalid");
- used=state_fields_used(r);limit=state_fields_limit(r);
+ limit=state_fields_limit(r);
+ if((size_t)r->state_field_capacity<=limit&&empty<=limit){
+  unused=state_fields_unused_up_to(r,empty);
+  if(unused==empty)return 1;
+  /* The search exhausted the arena, so this is the exact used count. */
+  used=(size_t)r->state_field_capacity-unused;
+ }else used=state_fields_used(r);
  if(used>limit||empty>limit-used)return rfail(r,line,"state field limit");
  needed=used+empty;if(needed<=(size_t)r->state_field_capacity)return 1;
  capacity=r->state_field_capacity?(size_t)r->state_field_capacity:GSC_STATE_FIELD_CAPACITY;
