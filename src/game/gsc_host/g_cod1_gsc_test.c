@@ -63,6 +63,7 @@
 #include "../g_cod1_player_lifetime.h"
 #include "../bg_cod1_direct_fog.h"
 #include "../cod1_gsc/gsc_session.h"
+#include "g_cod1_vm_profile53.h"
 #include "../g_cod1_node_host.h"
 #include "../g_cod1_vehicle_nodes.h"
 #include "../g_cod1_spawner_pose.h"
