@@ -8,8 +8,8 @@ static int C1AKR14_Inner(const c1agt14Definition_t*d,c1atl14Node_t*n,unsigned co
  if(!target||target>=count||root>=count||target==root||!C1AGT14_Valid(d,n,count))return 0;
  p=d[target].parent;while(p!=root){if(!p)return 0;p=d[p].parent;}
  stage=(c1atl14Node_t*)malloc(count*sizeof(*stage));if(!stage)return 0;memcpy(stage,n,count*sizeof(*stage));
- if(!C1AKA14_Select(d,stage,count,target,d[target].parent,weight,time,rate,force))goto done;
- for(p=d[target].parent;p!=root;p=d[p].parent)if(!C1AKA14_Select(d,stage,count,p,d[p].parent,1,time,1,force))goto done;
+ if(!C1AKA49_SelectDisposable(d,stage,count,target,d[target].parent,weight,time,rate,force))goto done;
+ for(p=d[target].parent;p!=root;p=d[p].parent)if(!C1AKA49_SelectDisposable(d,stage,count,p,d[p].parent,1,time,1,force))goto done;
  memcpy(n,stage,count*sizeof(*n));ok=1;
  done:free(stage);return ok;
 }

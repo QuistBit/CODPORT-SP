@@ -50,7 +50,7 @@ static int C1AGFL14_Inner(const c1agt14Definition_t*d,c1atl14Node_t*n,c1afl14Sta
  for(p=target;;p=d[p].parent){
   for(i=1;i<count;i++)if(i!=p&&d[i].parent==d[p].parent){flags[i].token=0;flags[i].cursor=-1;}
   flags[p].token=(uint16_t)(p==target?token:0);flags[p].cursor=-1;flags[p].descendant=0;
-  if(!C1AKA14_Select(d,stage,count,p,d[p].parent,p==target?weight:1,time,p==target?rate:1,force))goto done;
+  if(!C1AKA49_SelectDisposable(d,stage,count,p,d[p].parent,p==target?weight:1,time,p==target?rate:1,force))goto done;
   if(p==target&&token&&d[p].children){
    flags[p].descendant=(uint16_t)C1AGFL14_Descendant(t,stage,p);
    if(!flags[p].descendant)goto done;
